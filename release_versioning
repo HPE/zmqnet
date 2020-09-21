@@ -1,0 +1,13 @@
+#==============================================================================
+# Copyright 2011-2019,2020 Hewlett Packard Enterprise Development LP.
+
+# Jenkins will override this
+revision="9999"
+
+major="0"
+# Set this back to release number once release branch is created
+minor="9999"
+
+# libtool versioning
+current="0"
+age="0"
