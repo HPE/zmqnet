@@ -29,6 +29,26 @@ AX_CHECK_COMPILE_FLAG([-std=c++17], [
 
 LT_INIT
 
+#
+### Check for pkgconfig files. ###
+#
+PKG_CHECK_MODULES([LIBZMQ], [libzmq])
+
+#
+### Check for headers. ###
+#
+save_CXXFLAGS="$CXXFLAGS"
+CPPZMQ_CFLAGS="-I$prefix/include"
+CXXFLAGS="$CXXFLAGS $CPPZMQ_CFLAGS $LIBZMQ_CFLAGS"
+AC_CHECK_HEADER([zmq.hpp],
+        [],
+        [AC_MSG_FAILURE([zmq.hpp not found.])],
+        []
+        )
+dnl restore flags
+CXXFLAGS="$save_CXXFLAGS"
+AC_SUBST([CPPZMQ_CFLAGS], ["$CPPZMQ_CFLAGS"])
+
 AC_CONFIG_FILES([
 	libzmqnet.pc
 	Makefile
