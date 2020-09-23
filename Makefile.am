@@ -2,10 +2,10 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = src
+SUBDIRS = src tests
 
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libzmqnet.pc
 
-include_HEADERS = include/zmqnet.hpp
+include_HEADERS = include/zmqnet.hpp include/zmqnet.h
 

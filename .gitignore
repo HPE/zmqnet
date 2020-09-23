@@ -1,5 +1,6 @@
 Makefile.in
 .deps/
+.libs/
 
 autom4te.cache
 /aclocal.m4
@@ -21,6 +22,7 @@ autom4te.cache
 /stamp-h1
 /libtool
 /ltmain.sh
+/test-driver
 
 m4/libtool.m4
 m4/ltoptions.m4
@@ -30,3 +32,10 @@ m4/lt~obsolete.m4
 
 Makefile
 libzmqnet.pc
+
+*.o
+*.lo
+*.la
+
+*.log
+*.trs

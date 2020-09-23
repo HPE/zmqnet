@@ -8,5 +8,6 @@ includedir=@includedir@
 Name: libzmqnet
 Description: libzmqnet
 Version: @PACKAGE_VERSION@
-Libs: -L${libdir} -lzmqnet -Wl,-rpath,${libdir}
+Libs: -L${libdir} -lzmq -lzmqnet -Wl,-rpath,${libdir} -pthread
 Libs.private: -lsupc++
+Cflags: -I${includedir}

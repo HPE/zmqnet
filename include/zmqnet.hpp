@@ -3,3 +3,8 @@
  */
 
 #pragma once
+
+#include <memory>
+#include <string>
+
+#include <zmq.hpp>

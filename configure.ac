@@ -53,6 +53,7 @@ AC_CONFIG_FILES([
 	libzmqnet.pc
 	Makefile
 	src/Makefile
+	tests/Makefile
 ])
 
 AC_OUTPUT
