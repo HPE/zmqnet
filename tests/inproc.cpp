@@ -12,158 +12,101 @@
 
 auto ctx = zmq::context_t{};
 
-int run_commnode(std::string const& parentEndpoint, std::string const& endpoint, size_t const num_children)
+template <typename CommnodeImpl>
+int run_commnode(CommnodeImpl&& commnode, size_t const num_children)
 {
-		int rc = -1;
+	int rc = -1;
 
-		auto parent_control_socket = zmq::socket_t{ctx, zmq::socket_type::sub};
-		parent_control_socket.connect("inproc://" + parentEndpoint + "-control");
-		parent_control_socket.set(zmq::sockopt::subscribe, "");
+	commnode.children_ready_loop(num_children);
+	commnode.send_ready();
 
-		auto parent_data_socket = zmq::socket_t{ctx, zmq::socket_type::push};
-		parent_data_socket.connect("inproc://" + parentEndpoint + "-data");
-
-		auto children_control_socket = zmq::socket_t{ctx, zmq::socket_type::pub};
+	while (true) {
+		auto command = commnode.recv_command();
 		if (num_children > 0) {
-				children_control_socket.bind("inproc://" + endpoint + "-control");
+			commnode.send_command(command);
 		}
 
-		auto children_data_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-		if (num_children > 0) {
-				children_data_socket.bind("inproc://" + endpoint + "-data");
+		if (command == "exit") {
+			rc = 0;
+			goto cleanup_run_commnode;
 		}
 
-		for (size_t connected_children = 0; connected_children < num_children;) {
-				auto received_result = zmq::message_t{};
-				auto maybe_bytes = children_data_socket.recv(received_result, zmq::recv_flags::none);
-				if (!maybe_bytes) {
-						continue;
-				}
+		auto const children_results = commnode.recv_results(num_children);
 
-				assert(received_result.to_string_view() == "ready");
-				connected_children++;
+		auto result = std::string{"{ "};
+		for (auto&& child_result : children_results) {
+			assert(child_result != "ready");
+			result += child_result + " ";
 		}
-		parent_data_socket.send(zmq::str_buffer("ready"), zmq::send_flags::none);
+		result += "}";
 
-		while (true) {
-				auto recieved_command = zmq::message_t{};
-				auto maybe_bytes = parent_control_socket.recv(recieved_command, zmq::recv_flags::none);
-
-				if (!maybe_bytes) {
-						continue;
-				}
-
-				auto const command = recieved_command.to_string();
-
-				if (num_children > 0) {
-						children_control_socket.send(recieved_command, zmq::send_flags::none);
-				}
-
-				if (command == "exit") {
-						rc = 0;
-						goto cleanup_run_commnode;
-				}
-
-				auto children_results = std::vector<std::string>{};
-
-				while (children_results.size() < num_children) {
-						auto received_result = zmq::message_t{};
-						auto maybe_bytes = children_data_socket.recv(received_result, zmq::recv_flags::none);
-
-						if (!maybe_bytes) {
-								continue;
-						}
-
-						children_results.emplace_back(received_result.to_string_view());
-				}
-
-				auto result = endpoint + ": { ";
-				for (auto&& child_result : children_results) {
-						result += child_result + " ";
-				}
-				result += "}";
-
-				parent_data_socket.send(zmq::message_t{result.c_str(), result.length()}, zmq::send_flags::none);
-		}
+		commnode.send_result(result);
+	}
 
 cleanup_run_commnode:
-		return rc;
+	return rc;
 }
 
-static void gen_futures(std::vector<std::future<int>>& futures, int const depth,
-		int const fanout, std::string const& parentEndpoint)
+static void gen_futures(std::vector<std::future<int>>& futures,
+	int const fanout, int const depth, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
 {
-		if (depth == 0) {
-				return;
-		}
+	if (depth == 0) {
+		return;
+	}
 
-		for (int i = 0; i < fanout; i++) {
-				auto const endpoint = parentEndpoint + std::to_string(i);
-				futures.emplace_back(std::async(std::launch::async,
-						run_commnode, parentEndpoint, endpoint,
-						(depth > 1) ? fanout : 0));
-				gen_futures(futures, depth - 1, fanout, endpoint);
-		}
+	for (int i = 0; i < fanout; i++) {
+		auto commnode = Commnode<InprocDownstreamLink>{ctx, upstreamControlEndpoint, upstreamDataEndpoint};
+		auto const downstreamControlEndpoint = commnode.getControlEndpoint();
+		auto const downstreamDataEndpoint = commnode.getDataEndpoint();
+
+		futures.emplace_back(std::async(std::launch::async,
+			run_commnode<decltype(commnode)>, std::move(commnode),
+			(depth > 1) ? fanout : 0));
+
+		gen_futures(futures, fanout, depth - 1, downstreamControlEndpoint, downstreamDataEndpoint);
+	}
 }
 
 static void test(int const depth, int const fanout)
 {
-		ctx = zmq::context_t{};
+	ctx = zmq::context_t{};
 
-		auto control_socket = zmq::socket_t{ctx, zmq::socket_type::pub};
-		control_socket.bind("inproc://-control");
+	auto rootnode = Rootnode<InprocDownstreamLink>{ctx};
+	auto const downstreamControlEndpoint = rootnode.getControlEndpoint();
+	auto const downstreamDataEndpoint = rootnode.getDataEndpoint();
 
-		auto data_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-		data_socket.bind("inproc://-data");
+	auto futures = std::vector<std::future<int>>{};
+	gen_futures(futures, fanout, depth, downstreamControlEndpoint, downstreamDataEndpoint);
 
-		auto futures = std::vector<std::future<int>>{};
+	auto const num_children = fanout;
+	rootnode.children_ready_loop(num_children);
 
-		gen_futures(futures, depth, fanout, "0");
+	rootnode.send_command("send");
 
-		futures.emplace_back(std::async(std::launch::async,
-				run_commnode, "", "0", fanout));
+	auto const children_results = rootnode.recv_results(fanout);
 
-		while (true) {
-				auto received_result = zmq::message_t{};
-				auto maybe_bytes = data_socket.recv(received_result, zmq::recv_flags::none);
-				if (!maybe_bytes) {
-						continue;
-				}
+	for (auto&& result : children_results) {
+		fprintf(stderr, "result: '%s'\n", result.c_str());
+	}
 
-				assert(received_result.to_string_view() == "ready");
-				break;
+	rootnode.send_command("exit");
+	for (auto&& future : futures) {
+		if (future.get()) {
+			fprintf(stderr, "failure!\n");
 		}
-
-		control_socket.send(zmq::str_buffer("send"), zmq::send_flags::none);
-
-		while (true) {
-				auto received_result = zmq::message_t{};
-				auto maybe_bytes = data_socket.recv(received_result, zmq::recv_flags::none);
-
-				if (!maybe_bytes) {
-						continue;
-				}
-
-				auto const result = received_result.to_string();
-				fprintf(stderr, "result: '%s'\n", result.c_str());
-				break;
-		}
-
-		control_socket.send(zmq::str_buffer("exit"), zmq::send_flags::none);
-		for (auto&& future : futures) {
-				if (future.get()) {
-						fprintf(stderr, "failure!\n");
-				}
-		}
+	}
 }
 
 int main(int argc, char const* const* argv)
 {
-		for (int depth = 1; depth < 4; depth++) {
-				for (int fanout = 1; fanout < 5; fanout++) {
-						test(depth, fanout);
-				}
+	for (int depth = 1; depth < 4; depth++) {
+		for (int fanout = 1; fanout < 5; fanout++) {
+			test(depth, fanout);
 		}
+	}
 
-		return 0;
+	auto downstreamLink = TcpDownstreamLink{ctx};
+	fprintf(stderr, "control: %s data: %s\n", downstreamLink.controlEndpoint.c_str(), downstreamLink.dataEndpoint.c_str());
+
+	return 0;
 }
