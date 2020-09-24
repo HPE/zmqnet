@@ -33,6 +33,8 @@ LT_INIT
 ### Check for pkgconfig files. ###
 #
 PKG_CHECK_MODULES([LIBZMQ], [libzmq])
+PKG_CHECK_MODULES([COMMON_TOOLS_FE], [common_tools_fe])
+PKG_CHECK_MODULES([COMMON_TOOLS_BE], [common_tools_be])
 
 #
 ### Check for headers. ###
