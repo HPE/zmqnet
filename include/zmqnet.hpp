@@ -23,15 +23,41 @@ static inline std::string generate_uuid()
 	return std::string{uuid_str};
 }
 
+template <typename SockOpt>
+static inline void send_string(zmq::socket_t& socket, std::string const& message, SockOpt&& sockopt)
+{
+	socket.send(zmq::message_t{message.c_str(), message.length()}, std::forward<SockOpt>(sockopt));
+}
+
+template <typename SockOpt>
+static inline std::string recv_string(zmq::socket_t& socket, SockOpt&& sockopt)
+{
+	while (true) {
+		auto received_result = zmq::message_t{};
+		auto maybe_bytes = socket.recv(received_result, std::forward<SockOpt>(sockopt));
+		if (!maybe_bytes) {
+			continue;
+		}
+
+		return received_result.to_string();
+	}
+}
+
+static inline std::string replace_endpoint_host(std::string&& endpoint, std::string const& hostname)
+{
+	// Extract port from generated endpoint
+	endpoint = endpoint.substr(endpoint.find("://") + 3);
+	endpoint = endpoint.substr(endpoint.find(":") + 1);
+
+	return "tcp://" + hostname + ":" + std::move(endpoint);
+};
+
 class UpstreamLink
 {
 public:
 	zmq::socket_t control_socket, data_socket;
 
-	UpstreamLink(zmq::context_t& ctx,
-		std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
-		: control_socket{ctx, zmq::socket_type::sub}
-		, data_socket{ctx, zmq::socket_type::push}
+	void connect(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
 	{
 		// Connect to upstream sockets
 		control_socket.connect(upstreamControlEndpoint);
@@ -39,6 +65,18 @@ public:
 
 		// Subscribe to all topics
 		control_socket.set(zmq::sockopt::subscribe, "");
+	}
+
+	UpstreamLink(zmq::context_t& ctx)
+		: control_socket{ctx, zmq::socket_type::sub}
+		, data_socket{ctx, zmq::socket_type::push}
+	{}
+
+	UpstreamLink(zmq::context_t& ctx,
+		std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
+		: UpstreamLink{ctx}
+	{
+		connect(upstreamControlEndpoint, upstreamDataEndpoint);
 	}
 };
 
@@ -65,6 +103,47 @@ public:
 	}
 };
 
+template <typename DownstreamLinkImpl>
+class ConsumerNode
+{
+public:
+	DownstreamLinkImpl downstreamLink;
+
+	ConsumerNode(zmq::context_t& ctx)
+		: downstreamLink{ctx}
+	{}
+
+	auto getEndpoints() const
+	{
+		return std::make_pair(downstreamLink.controlEndpoint, downstreamLink.dataEndpoint);
+	}
+
+	void children_ready_loop(size_t num_children)
+	{
+		for (size_t connected_children = 0; connected_children < num_children;) {
+			auto const ready_result = recv_string(downstreamLink.data_socket, zmq::recv_flags::none);
+			assert(ready_result == "ready");
+			connected_children++;
+		}
+	}
+
+	auto send_command(std::string const& command)
+	{
+		send_string(downstreamLink.control_socket, command, zmq::send_flags::none);
+	}
+
+	auto recv_results(size_t num_children)
+	{
+		auto children_results = std::vector<std::string>{};
+
+		while (children_results.size() < num_children) {
+			children_results.emplace_back(recv_string(downstreamLink.data_socket, zmq::recv_flags::none));
+		}
+
+		return children_results;
+	}
+};
+
 class InprocDownstreamLink : public DownstreamLink
 {
 public:
@@ -73,6 +152,18 @@ public:
 			{ ctx
 			, "inproc://" + generate_uuid() // control endpoint
 			, "inproc://" + generate_uuid() // data endpoint
+		}
+	{}
+};
+
+class IpcDownstreamLink : public DownstreamLink
+{
+public:
+	IpcDownstreamLink(zmq::context_t& ctx)
+		: DownstreamLink
+			{ ctx
+			, "ipc://ipc-" + generate_uuid() // control endpoint
+			, "ipc://ipc-" + generate_uuid() // data endpoint
 		}
 	{}
 };
@@ -87,92 +178,73 @@ public:
 			, "tcp://*:*" // data endpoint
 		}
 	{}
-};
 
-template <typename DownstreamLinkImpl>
-class Rootnode
-{
-public:
-	DownstreamLinkImpl downstreamLink;
-
-	Rootnode(zmq::context_t& ctx)
-		: downstreamLink{ctx}
-	{}
-
-	auto getControlEndpoint() const { return downstreamLink.controlEndpoint; }
-	auto getDataEndpoint()    const { return downstreamLink.dataEndpoint; }
-
-	void children_ready_loop(size_t num_children)
+	// Replace the sockets' endpoints with e.g. known-accessible hostname from CTI
+	static auto formatEndpoints(ConsumerNode<TcpDownstreamLink> const& node, std::string const& hostname)
 	{
-		for (size_t connected_children = 0; connected_children < num_children;) {
-			auto received_result = zmq::message_t{};
-			auto maybe_bytes = downstreamLink.data_socket.recv(received_result, zmq::recv_flags::none);
-			if (!maybe_bytes) {
-				continue;
-			}
+		auto [controlEndpoint, dataEndpoint] = node.getEndpoints();
 
-			assert(received_result.to_string_view() == "ready");
-			connected_children++;
-		}
-	}
-
-	auto send_command(std::string const& command)
-	{
-		downstreamLink.control_socket.send(zmq::message_t{command.c_str(), command.length()}, zmq::send_flags::none);
-	}
-
-	auto recv_results(size_t num_children)
-	{
-		auto children_results = std::vector<std::string>{};
-
-		while (children_results.size() < num_children) {
-			auto received_result = zmq::message_t{};
-			auto maybe_bytes = downstreamLink.data_socket.recv(received_result, zmq::recv_flags::none);
-
-			if (!maybe_bytes) {
-				continue;
-			}
-
-			children_results.emplace_back(received_result.to_string_view());
-		}
-
-		return children_results;
+		return std::make_pair(
+			replace_endpoint_host(std::move(controlEndpoint), hostname),
+			replace_endpoint_host(std::move(dataEndpoint),    hostname)
+		);
 	}
 };
 
 template <typename DownstreamLinkImpl>
-class Commnode : public Rootnode<DownstreamLinkImpl>
+using RootNode = ConsumerNode<DownstreamLinkImpl>;
+
+class ProducerNode
 {
 public:
 	UpstreamLink upstreamLink;
 
-	Commnode(zmq::context_t& ctx,
-		std::string const& controlEndpoint_, std::string const& dataEndpoint_)
-		: Rootnode<DownstreamLinkImpl>{ctx}
-		, upstreamLink{ctx, controlEndpoint_, dataEndpoint_}
+	void connect(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
+	{
+		upstreamLink.connect(upstreamControlEndpoint, upstreamDataEndpoint);
+	}
+
+	ProducerNode(zmq::context_t& ctx)
+		: upstreamLink{ctx}
 	{}
+
+	ProducerNode(zmq::context_t& ctx,
+		std::string const& controlEndpoint, std::string const& dataEndpoint)
+		: ProducerNode{ctx}
+	{
+		connect(controlEndpoint, dataEndpoint);
+	}
 
 	void send_ready()
 	{
-		upstreamLink.data_socket.send(zmq::str_buffer("ready"), zmq::send_flags::none);
+		send_string(upstreamLink.data_socket, "ready", zmq::send_flags::none);
 	}
 
 	auto recv_command()
 	{
-		while (true) {
-			auto recieved_command = zmq::message_t{};
-			auto maybe_bytes = upstreamLink.control_socket.recv(recieved_command, zmq::recv_flags::none);
-
-			if (!maybe_bytes) {
-				continue;
-			}
-
-			return recieved_command.to_string();
-		}
+		return recv_string(upstreamLink.control_socket, zmq::recv_flags::none);
 	}
 
 	auto send_result(std::string const& result)
 	{
-		upstreamLink.data_socket.send(zmq::message_t{result.c_str(), result.length()}, zmq::send_flags::none);
+		send_string(upstreamLink.data_socket, result, zmq::send_flags::none);
 	}
+};
+
+using LeafNode = ProducerNode;
+
+template <typename DownstreamLinkImpl>
+class CommNode : public ConsumerNode<DownstreamLinkImpl>, public ProducerNode
+{
+public:
+	CommNode(zmq::context_t& ctx)
+		: ConsumerNode<DownstreamLinkImpl>{ctx}
+		, ProducerNode{ctx}
+	{}
+
+	CommNode(zmq::context_t& ctx,
+		std::string const& controlEndpoint, std::string const& dataEndpoint)
+		: ConsumerNode<DownstreamLinkImpl>{ctx}
+		, ProducerNode{ctx, controlEndpoint, dataEndpoint}
+	{}
 };
