@@ -190,9 +190,6 @@ public:
 	}
 };
 
-template <typename DownstreamLinkImpl>
-using RootNode = ConsumerNode<DownstreamLinkImpl>;
-
 class ProducerNode
 {
 public:
@@ -231,6 +228,17 @@ public:
 };
 
 using LeafNode = ProducerNode;
+
+class Frontend
+{
+public:
+	ConsumerNode<TcpDownstreamLink> m_downstream;
+
+	Frontend(zmq::context_t& ctx, int const app_id, int const fanout);
+
+	std::string runCommand(std::string const& command);
+	void runExit();
+};
 
 class Commnode
 {
