@@ -22,10 +22,8 @@
 
 extern char **environ;
 
-int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
+void run_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
 {
-	int rc = -1;
-
 	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
 	auto ctx = zmq::context_t{};
@@ -39,17 +37,11 @@ int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& 
 		auto const command = leafnode.recv_command();
 		fprintf(stderr, "%d got command %s\n", rank, command.c_str());
 		if (command == "exit") {
-			rc = 0;
-			goto cleanup_run_leafnode;
+			return;
 		}
 
 		leafnode.send_result(std::to_string(rank));
 	}
-
-	rc = 0;
-
-cleanup_run_leafnode:
-	return rc;
 }
 
 int run_commnode(std::string const& dealer_endpoint)
@@ -58,55 +50,15 @@ int run_commnode(std::string const& dealer_endpoint)
 
 	auto ctx = zmq::context_t{};
 
-	auto request_socket = zmq::socket_t{ctx, zmq::socket_type::req};
-	request_socket.connect(dealer_endpoint);
-	fprintf(stderr, "connected to topology server %s\n", dealer_endpoint.c_str());
-
-	auto commnode = CommNode<TcpDownstreamLink>{ctx};
-	auto const [controlEndpoint, dataEndpoint] = TcpDownstreamLink::formatEndpoints(commnode, cti_be_getNodeHostname());
-	fprintf(stderr, "listening on %s / %s\n", controlEndpoint.c_str(), dataEndpoint.c_str());
-
-	auto const downstreamEndpointsMessage = controlEndpoint + " " + dataEndpoint;
-	send_string(request_socket, downstreamEndpointsMessage, zmq::send_flags::none);
-	fprintf(stderr, "registered endpoints with topology server\n");
-
-	auto const [parentControlEndpoint, parentDataEndpoint, rawNumChildren] =
-		cti::split::string<3>(recv_string(request_socket, zmq::recv_flags::none));
-	auto numChildren = std::stoi(rawNumChildren);
-	fprintf(stderr, "topology server reported parent %s / %s, %d children\n",
-		parentControlEndpoint.c_str(), parentDataEndpoint.c_str(), numChildren);
-
-	commnode.connect(parentControlEndpoint, parentDataEndpoint);
-	fprintf(stderr, "connected to parent %s / %s\n", parentControlEndpoint.c_str(), parentDataEndpoint.c_str());
-
-	auto localChildPids = std::vector<pid_t>{};
-	auto const firstPE = cti_be_getNodeFirstPE();
-	auto const localPEs = cti_be_getNodePEs();
-	numChildren += localPEs;
-	fprintf(stderr, "forking %d local leaf processes\n", localPEs);
-	for (int i = firstPE; i < firstPE + localPEs; i++) {
-		if (auto const forkedPid = fork()) {
-		localChildPids.emplace_back(forkedPid);
-		} else {
-			return run_leafnode(controlEndpoint, dataEndpoint, i);
-		}
-	}
-
-	fprintf(stderr, "waiting for %d children\n", numChildren);
-	commnode.children_ready_loop(numChildren);
-	fprintf(stderr, "send ready\n");
-	commnode.send_ready();
+	auto commnode = Commnode{ctx, dealer_endpoint, run_leafnode};
 
 	while (true) {
-		auto const command = commnode.recv_command();
-		fprintf(stderr, "relay command %s\n", command.c_str());
-		commnode.send_command(command);
-
+		auto const command = commnode.nextCommand();
 		if (command == "exit") {
 			return 0;
 		}
 
-		auto const children_results = commnode.recv_results(numChildren);
+		auto const children_results = commnode.collectResults();
 
 		auto result = std::string{"{ "};
 		for (auto&& child_result : children_results) {
@@ -115,15 +67,7 @@ int run_commnode(std::string const& dealer_endpoint)
 		}
 		result += "}";
 
-		commnode.send_result(result);
-	}
-
-cleanup_run_client:
-	for (auto&& pid : localChildPids) {
-		int status;
-		if (waitpid(pid, &status, 0) || (WIFEXITED(status) && WEXITSTATUS(status))) {
-			fprintf(stderr, "pid %d failed!\n", pid);
-		}
+		commnode.sendResult(result);
 	}
 
 	return rc;

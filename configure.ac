@@ -55,6 +55,7 @@ AC_CONFIG_FILES([
 	libzmqnet.pc
 	Makefile
 	src/Makefile
+	src/libzmqnet/Makefile
 	tests/Makefile
 ])
 

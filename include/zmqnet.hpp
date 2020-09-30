@@ -6,9 +6,8 @@
 
 #include <uuid/uuid.h>
 
-#include <memory>
+#include <vector>
 #include <string>
-#include <optional>
 
 #include <zmq.hpp>
 
@@ -22,6 +21,15 @@ static inline std::string generate_uuid()
 
 	return std::string{uuid_str};
 }
+
+static inline std::string replace_endpoint_host(std::string&& endpoint, std::string const& hostname)
+{
+	// Extract port from generated endpoint
+	endpoint = endpoint.substr(endpoint.find("://") + 3);
+	endpoint = endpoint.substr(endpoint.find(":") + 1);
+
+	return "tcp://" + hostname + ":" + std::move(endpoint);
+};
 
 template <typename SockOpt>
 static inline void send_string(zmq::socket_t& socket, std::string const& message, SockOpt&& sockopt)
@@ -42,15 +50,6 @@ static inline std::string recv_string(zmq::socket_t& socket, SockOpt&& sockopt)
 		return received_result.to_string();
 	}
 }
-
-static inline std::string replace_endpoint_host(std::string&& endpoint, std::string const& hostname)
-{
-	// Extract port from generated endpoint
-	endpoint = endpoint.substr(endpoint.find("://") + 3);
-	endpoint = endpoint.substr(endpoint.find(":") + 1);
-
-	return "tcp://" + hostname + ":" + std::move(endpoint);
-};
 
 class UpstreamLink
 {
@@ -233,18 +232,21 @@ public:
 
 using LeafNode = ProducerNode;
 
-template <typename DownstreamLinkImpl>
-class CommNode : public ConsumerNode<DownstreamLinkImpl>, public ProducerNode
+class Commnode
 {
 public:
-	CommNode(zmq::context_t& ctx)
-		: ConsumerNode<DownstreamLinkImpl>{ctx}
-		, ProducerNode{ctx}
-	{}
+	ProducerNode m_upstream;
+	ConsumerNode<TcpDownstreamLink> m_downstream;
 
-	CommNode(zmq::context_t& ctx,
-		std::string const& controlEndpoint, std::string const& dataEndpoint)
-		: ConsumerNode<DownstreamLinkImpl>{ctx}
-		, ProducerNode{ctx, controlEndpoint, dataEndpoint}
-	{}
+	int m_numChildren;
+	std::vector<pid_t> m_localChildPids;
+
+	Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, void(*leafFunc)(std::string const&, std::string const&, int));
+
+	~Commnode();
+
+	std::string nextCommand();
+
+	std::vector<std::string> collectResults();
+	void sendResult(std::string const& result);
 };
