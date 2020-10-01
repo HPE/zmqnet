@@ -12,11 +12,14 @@
 #include <cassert>
 #include <cmath>
 
+#include <filesystem>
+
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
 
 #include "argv_defs.hpp"
 #include "../tests/cti_split.hpp"
+#include "cti_dlopen.hpp"
 
 #include "zmqnet.hpp"
 
@@ -97,7 +100,7 @@ static void connectFanoutTopology(zmq::socket_t&& dealer_socket,
 }
 
 Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id, int const fanout,
-	char const* const* leaf_argv)
+	std::string const& filterName, char const* const* leaf_argv)
 	: m_downstream{ctx}
 {
 	// Fetch node layout from CTI for network topology
@@ -118,6 +121,7 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
 	// Set up commnode daemon arguments with topology connection info and leaf process arguments
 	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
 		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
+		commnodeArgv.add(CommnodeArgv::FilterName, filterName);
 
 		// Add provided leaf arguments
 		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
@@ -163,11 +167,33 @@ void Frontend::runExit()
 	m_downstream.send_command("exit");
 }
 
-Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, char const* const* leaf_argv)
+
+class Filter
+{
+	using RunType = std::string(std::vector<std::string> const&);
+
+	cti::Dlopen::Handle m_handle;
+	std::function<RunType> m_run;
+
+public:
+	Filter(std::string const& filterPath)
+		: m_handle{filterPath}
+		, m_run{m_handle.load<RunType>("run")}
+	{}
+
+	std::string run(std::vector<std::string> const& inputs) const
+	{
+		return m_run(inputs);
+	}
+};
+
+Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint,
+	std::string const& filterName, char const* const* leaf_argv)
 	: m_upstream{ctx}
 	, m_downstream{ctx}
 	, m_numChildren{0}
 	, m_localChildPids{}
+	, m_filter{std::make_unique<Filter>(std::string{cti_be_getLibDir()} + "/" + filterName)}
 {
 	// Format externally-accessible endpoints
 	auto const [controlEndpoint, dataEndpoint] = formatEndpoints(m_downstream, cti_be_getNodeHostname());
@@ -248,6 +274,11 @@ std::string Commnode::nextCommand()
 	m_downstream.send_command(command);
 
 	return command;
+}
+
+std::string Commnode::filterResults(std::vector<std::string> const& results)
+{
+	return m_filter->run(results);
 }
 
 std::vector<std::string> Commnode::collectResults()

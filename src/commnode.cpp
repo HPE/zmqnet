@@ -18,6 +18,7 @@ auto ctx = zmq::context_t{};
 static auto parse_argv(int argc, char* const argv[])
 {
 	auto dealerEndpoint = std::string{};
+	auto filterName = std::string{};
 	auto leaf_argv = argv + argc;
 
 	using CA = CommnodeArgv;
@@ -32,6 +33,10 @@ static auto parse_argv(int argc, char* const argv[])
 
 		case CA::DealerEndpoint.val:
 			dealerEndpoint = value;
+			break;
+
+		case CA::FilterName.val:
+			filterName = value;
 			break;
 
 		case '?':
@@ -49,16 +54,19 @@ static auto parse_argv(int argc, char* const argv[])
 	if (dealerEndpoint.empty()) {
 		throw std::runtime_error("topology server endpoint not provided");
 	}
-	return std::make_tuple(dealerEndpoint, leaf_argv);
+	if (filterName.empty()) {
+		throw std::runtime_error("filter name not provided");
+	}
+	return std::make_tuple(dealerEndpoint, filterName, leaf_argv);
 }
 
 int main(int argc, char* const argv[])
 {
 	// Read arguments from frontend
-	auto const [dealerEndpoint, leaf_argv] = parse_argv(argc, argv);
+	auto const [dealerEndpoint, filterName, leaf_argv] = parse_argv(argc, argv);
 
 	// Start commnode
-	auto commnode = Commnode{ctx, dealerEndpoint, leaf_argv};
+	auto commnode = Commnode{ctx, dealerEndpoint, filterName, leaf_argv};
 
 	// Command relay loop
 	while (true) {
@@ -74,12 +82,7 @@ int main(int argc, char* const argv[])
 		}
 
 		// Run aggregation
-		auto result = std::string{"{ "};
-		for (auto&& child_result : childrenResults) {
-			assert(child_result != "ready");
-			result += child_result + " ";
-		}
-		result += "}";
+		auto const result = commnode.filterResults(childrenResults);
 
 		// Send aggregated result
 		commnode.sendResult(result);

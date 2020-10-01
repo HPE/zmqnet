@@ -235,11 +235,13 @@ public:
 	ConsumerNode<TcpDownstreamLink> m_downstream;
 
 	Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
-		int const fanout, char const* const* leaf_argv);
+		int const fanout, std::string const& filterName, char const* const* leaf_argv);
 
 	std::string runCommand(std::string const& command);
 	void runExit();
 };
+
+class Filter;
 
 class Commnode
 {
@@ -250,12 +252,15 @@ public:
 	int m_numChildren;
 	std::vector<pid_t> m_localChildPids;
 
-	Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, char const* const* leaf_argv);
+	std::unique_ptr<Filter> m_filter;
+
+	Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, std::string const& filterName, char const* const* leaf_argv);
 
 	~Commnode();
 
 	std::string nextCommand();
 
 	std::vector<std::string> collectResults();
+	std::string filterResults(std::vector<std::string> const& results);
 	void sendResult(std::string const& result);
 };

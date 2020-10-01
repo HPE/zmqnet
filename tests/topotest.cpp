@@ -74,10 +74,11 @@ int main(int argc, char** argv)
 		auto const session_id = cti_createSession(app_id);
 		auto const manifest_id = cti_createManifest(session_id);
 		cti_addManifestBinary(manifest_id, "./topotest");
+		cti_addManifestLibrary(manifest_id, "./libfilter.so");
 
 		char const* leaf_argv[] = { "topotest", "leaf", nullptr };
 
-		auto rootnode = Frontend{ctx, app_id, manifest_id, 5, leaf_argv};
+		auto rootnode = Frontend{ctx, app_id, manifest_id, 5, "libfilter.so", leaf_argv};
 
 		auto const result = rootnode.runCommand("send");
 		fprintf(stderr, "result: '%s'\n", result.c_str());
