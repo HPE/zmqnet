@@ -45,39 +45,6 @@ int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& 
 	}
 }
 
-int run_commnode(std::string const& dealer_endpoint)
-{
-	int rc = -1;
-
-	auto ctx = zmq::context_t{};
-
-	auto const leafPath = std::string{cti_be_getBinDir()} + "/topotest";
-	char const* leaf_argv[] = { "./topotest", "leaf", nullptr };
-	auto commnode = Commnode{ctx, dealer_endpoint, leafPath, leaf_argv};
-
-	while (true) {
-		auto const command = commnode.nextCommand();
-
-		auto const children_results = commnode.collectResults();
-
-		if (command == "exit") {
-			return 0;
-
-		} else {
-			auto result = std::string{"{ "};
-			for (auto&& child_result : children_results) {
-				assert(child_result != "ready");
-				result += child_result + " ";
-			}
-			result += "}";
-
-			commnode.sendResult(result);
-		}
-	}
-
-	return rc;
-}
-
 int main(int argc, char** argv)
 {
 	int rc = -1;
@@ -104,7 +71,13 @@ int main(int argc, char** argv)
 			throw std::runtime_error(cti_error_str());
 		}
 
-		auto rootnode = Frontend{ctx, app_id, 5};
+		auto const session_id = cti_createSession(app_id);
+		auto const manifest_id = cti_createManifest(session_id);
+		cti_addManifestBinary(manifest_id, "./topotest");
+
+		char const* leaf_argv[] = { "topotest", "leaf", nullptr };
+
+		auto rootnode = Frontend{ctx, app_id, manifest_id, 5, leaf_argv};
 
 		auto const result = rootnode.runCommand("send");
 		fprintf(stderr, "result: '%s'\n", result.c_str());
@@ -112,11 +85,6 @@ int main(int argc, char** argv)
 		rootnode.runExit();
 
 		cti_deregisterApp(app_id);
-
-	} else if (!strcmp("client", argv[1])) {
-		auto const dealer_endpoint = argv[2];
-
-		rc = run_commnode(dealer_endpoint);
 
 	} else if (!strcmp("leaf", argv[4])) {
 		auto const upstreamControlEndpoint = argv[1];

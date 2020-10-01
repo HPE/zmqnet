@@ -2,6 +2,10 @@
  * Copyright 2011-2020 Hewlett Packard Enterprise Development LP.
  */
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
+
 #include <unistd.h>
 #include <wait.h>
 
@@ -11,6 +15,7 @@
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
 
+#include "argv_defs.hpp"
 #include "../tests/cti_split.hpp"
 
 #include "zmqnet.hpp"
@@ -91,7 +96,8 @@ static void connectFanoutTopology(zmq::socket_t&& dealer_socket,
 	}
 }
 
-Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const fanout)
+Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id, int const fanout,
+	char const* const* leaf_argv)
 	: m_downstream{ctx}
 {
 	// Fetch node layout from CTI for network topology
@@ -103,21 +109,25 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const fanout)
 	// Start topology socket to send its connection info to commnode daemon
 	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
 	dealer_socket.bind("tcp://*:*");
-	auto const dealer_endpoint = replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
-	printf("topology dealer listening on %s\n", dealer_endpoint.c_str());
+	auto const dealerEndpoint = replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
+	printf("topology dealer listening on %s\n", dealerEndpoint.c_str());
 
-	// Set up commnode daemon arguments with topology connection info
-	char const* daemon_args[3] =
-		{ "client"
-		, dealer_endpoint.c_str()
-		, nullptr
-	};
+	// Find commnode path
+	auto const commnodePath = std::string{LIBZMQNET_PREFIX} + "/libexec/commnode";
 
-	// Launch commnode daemon
-	auto const session_id = cti_createSession(app_id);
-	auto const manifest_id = cti_createManifest(session_id);
-	if (cti_execToolDaemon(manifest_id, "./topotest", daemon_args, nullptr)) {
-		throw std::runtime_error(cti_error_str());
+	// Set up commnode daemon arguments with topology connection info and leaf process arguments
+	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
+		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
+
+		// Add provided leaf arguments
+		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
+			commnodeArgv.add(cti::Argv::Argument{*argptr});
+		}
+
+		// Launch commnode daemon
+		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, nullptr)) {
+			throw std::runtime_error(cti_error_str());
+		}
 	}
 
 	// Set up fanout topology and wait for all children to connect
@@ -153,7 +163,7 @@ void Frontend::runExit()
 	m_downstream.send_command("exit");
 }
 
-Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, std::string const& leafPath, char const* const* leaf_argv)
+Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, char const* const* leaf_argv)
 	: m_upstream{ctx}
 	, m_downstream{ctx}
 	, m_numChildren{0}
@@ -178,6 +188,7 @@ Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, std::
 	m_numChildren += localPEs;
 
 	// Launch local children with provided leaf binary
+	auto const leafPath = std::string{cti_be_getBinDir()} + "/" + leaf_argv[0];
 	fprintf(stderr, "forking %d local leaf processes\n", localPEs);
 	for (int rank = firstPE; rank < firstPE + localPEs; rank++) {
 
@@ -187,32 +198,20 @@ Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, std::
 
 		} else {
 			// Prepend endpoints and rank number to provided leaf arguments
-			int leaf_argc = 4; // Three arguments and nullptr
-
-			// Count provided arguments
-			if (leaf_argv != nullptr) {
-				for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
-					leaf_argc++;
-				}
-			}
-
-			// Prepend endpoints, rank, and copy provided arguments
-			auto const rankString = std::to_string(rank);
-			char const* complete_leaf_argv[leaf_argc] =
-				{ leaf_argv ? leaf_argv[0] : leafPath.c_str()
-				, controlEndpoint.c_str()
-				, dataEndpoint.c_str()
-				, rankString.c_str()
+			auto completeLeafArgv = cti::ManagedArgv
+				{ leaf_argv[0]
+				, controlEndpoint
+				, dataEndpoint
+				, std::to_string(rank)
 			};
-			if (leaf_argv != nullptr) {
-				for (int i = 1; i < leaf_argc - 4; i++) {
-					complete_leaf_argv[i + 3] = leaf_argv[i];
-				}
+
+			// Copy provided arguments
+			for (auto argptr = leaf_argv + 1; *argptr != nullptr; argptr++) {
+				completeLeafArgv.add(*argptr);
 			}
-			complete_leaf_argv[leaf_argc] = nullptr;
 
 			// Exec leaf binary
-			execvp(leafPath.c_str(), (char* const*)complete_leaf_argv);
+			execvp(leafPath.c_str(), completeLeafArgv.get());
 			perror("execvp");
 			_exit(-1);
 		}

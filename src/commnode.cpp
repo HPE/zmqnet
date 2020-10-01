@@ -17,9 +17,8 @@ auto ctx = zmq::context_t{};
 // Parse user-provided arguments
 static auto parse_argv(int argc, char* const argv[])
 {
-	auto controlEndpoint = std::string{};
-	auto dataEndpoint = std::string{};
-	auto numChildren = int{-1};
+	auto dealerEndpoint = std::string{};
+	auto leaf_argv = argv + argc;
 
 	using CA = CommnodeArgv;
 	auto parsedArgv = cti::IncomingArgv<CA>{argc, argv};
@@ -31,16 +30,8 @@ static auto parse_argv(int argc, char* const argv[])
 
 		switch (c) {
 
-		case CA::ControlEndpoint.val:
-			controlEndpoint = value;
-			break;
-
-		case CA::DataEndpoint.val:
-			dataEndpoint = value;
-			break;
-
-		case CA::NumChildren.val:
-			numChildren = std::stoi(value);
+		case CA::DealerEndpoint.val:
+			dealerEndpoint = value;
 			break;
 
 		case '?':
@@ -49,22 +40,48 @@ static auto parse_argv(int argc, char* const argv[])
 		}
 	}
 
-	if (controlEndpoint.empty() || dataEndpoint.empty()) {
-		throw std::runtime_error("control / data endpoints not provided");
+	// Rest of arguments are leaf arguments
+	leaf_argv = parsedArgv.get_rest();
+	if (leaf_argv[0] == nullptr) {
+		throw std::runtime_error("leaf binary not provided");
 	}
-	if (numChildren < 0) {
-		throw std::runtime_error("topology not provided");
+
+	if (dealerEndpoint.empty()) {
+		throw std::runtime_error("topology server endpoint not provided");
 	}
-	return std::make_tuple(controlEndpoint, dataEndpoint, numChildren);
+	return std::make_tuple(dealerEndpoint, leaf_argv);
 }
 
-int main(int argc, char** argv)
+int main(int argc, char* const argv[])
 {
-	int rc = -1;
+	// Read arguments from frontend
+	auto const [dealerEndpoint, leaf_argv] = parse_argv(argc, argv);
 
-	auto const [controlEndpoint, dataEndpoint, numChildren] = parse_argv(argc, argv);
+	// Start commnode
+	auto commnode = Commnode{ctx, dealerEndpoint, leaf_argv};
 
-cleanup_main:
+	// Command relay loop
+	while (true) {
+		// Receive and relay next command from parent node
+		auto const command = commnode.nextCommand();
 
-	return rc;
+		// Collect results from child nodes
+		auto const childrenResults = commnode.collectResults();
+
+		// Exit if commanded
+		if (command == "exit") {
+			return 0;
+		}
+
+		// Run aggregation
+		auto result = std::string{"{ "};
+		for (auto&& child_result : childrenResults) {
+			assert(child_result != "ready");
+			result += child_result + " ";
+		}
+		result += "}";
+
+		// Send aggregated result
+		commnode.sendResult(result);
+	}
 }

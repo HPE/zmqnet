@@ -1,20 +1,13 @@
-/******************************************************************************\
- * cti_argv.hpp - Support for managed and strongly-typed command line arguments
+/*********************************************************************************\
+ * cti_argv.hpp: Interface for handling argv.
  *
- * Copyright 2019,2020 Hewlett Packard Enterprise Development LP.
- *
- * Unpublished Proprietary Information.
- * This unpublished work is protected to trade secret, copyright and other laws.
- * Except as permitted by contract or express written permission of Hewlett Packard Enterprise Development LP.,
- * no part of this work or its content may be used, reproduced or disclosed
- * in any form.
- *
+ * Copyright 2019-2020 Hewlett Packard Enterprise Development LP.
  ******************************************************************************/
-
 #pragma once
 
 #include <vector>
 #include <string>
+#include <stdexcept>
 
 #include <getopt.h>
 #include <string.h>
@@ -28,20 +21,13 @@ private:
 public:
     /* constructor creates NULL-terminator. */
     ManagedArgv() {
-        argv.push_back(NULL);
+        argv.push_back(nullptr);
     }
 
     ManagedArgv(std::initializer_list<std::string const> str_list) {
         argv.reserve(str_list.size());
         for (auto&& str : str_list) {
             argv.push_back(strdup(str.c_str()));
-        }
-        argv.push_back(NULL);
-    }
-
-    ManagedArgv(char**&& moved) {
-        for (auto str = moved; *str != nullptr; str++) {
-            argv.push_back(*str);
         }
         argv.push_back(nullptr);
     }
@@ -64,12 +50,14 @@ public:
 
     /* member methods */
     size_t size() const { return argv.size(); }
-    size_t argc() const { return size() - 1; }
     char** get() { return argv.data(); }
     void add(std::string const& str) { argv.insert(argv.end() - 1, strdup(str.c_str())); }
-    void add(const char* str) { argv.insert(argv.end() - 1, strdup(str)); }
-    auto begin() { return argv.begin(); }
-    auto end()   { return argv.end(); }
+    void add(const char* str) {
+        if (str == nullptr) {
+            throw std::logic_error("attempted to add nullptr pointer to managed argument array");
+        }
+        argv.insert(argv.end() - 1, strdup(str));
+    }
 };
 
 struct Argv {
@@ -129,43 +117,42 @@ public:
 template <class ArgvDef>
 class IncomingArgv : public ArgvDef {
 private:
-    std::string flagSpec;
-    const int argc;
-    char* const* argv;
+    const int m_argc;
+    char* const* m_argv;
+    std::string m_flagSpec;
+    int m_optind;
 
 public:
-    IncomingArgv(int argc_, char* const* argv_) : argc(argc_), argv(argv_) {
+    IncomingArgv(int argc, char* const* argv)
+        : m_argc(argc)
+        , m_argv(argv)
+        , m_flagSpec{"+"} // Follow POSIX behavior, do not reorder
+        , m_optind{0}
+    {
         for (const Argv::GNUOption* opt_ptr = ArgvDef::long_options;
             opt_ptr->val != 0; opt_ptr++) {
-            flagSpec.push_back((char)(opt_ptr->val));
+            m_flagSpec.push_back((char)(opt_ptr->val));
             if (opt_ptr->has_arg != no_argument) {
-                flagSpec.push_back(':');
+                m_flagSpec.push_back(':');
             }
         }
-
-        // Reset global optind
-        optind = 1;
     }
 
     std::pair<int, std::string> get_next() {
-        int c = getopt_long(argc, argv, flagSpec.c_str(), ArgvDef::long_options, nullptr);
-        if (c < 0) {
-            return std::make_pair(-1, "");
-        } else if (optarg == nullptr) {
+        auto const old_optind = optind;
+        optind = m_optind;
+        int c = getopt_long(m_argc, m_argv, m_flagSpec.c_str(), ArgvDef::long_options, nullptr);
+        m_optind = optind;
+        optind = old_optind;
+        if ((c < 0) || (optarg == nullptr)) {
             return std::make_pair(c, "");
         }
         return std::make_pair(c, optarg);
     }
 
     char* const* get_rest() {
-        return argv + optind;
+        return m_argv + m_optind;
     }
 };
-
-namespace {
-    struct AnyArgv : public cti::Argv {
-        static constexpr GNUOption long_options[] = { long_options_done };
-    };
-}
 
 } /* namespace cti */

@@ -234,7 +234,8 @@ class Frontend
 public:
 	ConsumerNode<TcpDownstreamLink> m_downstream;
 
-	Frontend(zmq::context_t& ctx, int const app_id, int const fanout);
+	Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
+		int const fanout, char const* const* leaf_argv);
 
 	std::string runCommand(std::string const& command);
 	void runExit();
@@ -249,8 +250,7 @@ public:
 	int m_numChildren;
 	std::vector<pid_t> m_localChildPids;
 
-	Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint,
-		std::string const& leafPath, char const* const* leaf_argv);
+	Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, char const* const* leaf_argv);
 
 	~Commnode();
 

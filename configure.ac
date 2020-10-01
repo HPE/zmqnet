@@ -51,6 +51,10 @@ dnl restore flags
 CXXFLAGS="$save_CXXFLAGS"
 AC_SUBST([CPPZMQ_CFLAGS], ["$CPPZMQ_CFLAGS"])
 
+# Config header defines
+AC_SUBST([LIBZMQNET_PREFIX], ["$prefix"])
+AC_DEFINE_UNQUOTED([LIBZMQNET_PREFIX], ["$LIBZMQNET_PREFIX"], [Library installation location])
+
 AC_CONFIG_FILES([
 	libzmqnet.pc
 	Makefile
