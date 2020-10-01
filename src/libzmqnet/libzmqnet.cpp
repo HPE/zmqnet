@@ -153,7 +153,7 @@ void Frontend::runExit()
 	m_downstream.send_command("exit");
 }
 
-Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, void(*leafFunc)(std::string const&, std::string const&, int))
+Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, std::string const& leafPath, char const* const* leaf_argv)
 	: m_upstream{ctx}
 	, m_downstream{ctx}
 	, m_numChildren{0}
@@ -172,16 +172,49 @@ Commnode::Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, void(
 	fprintf(stderr, "connecting to parent %s / %s\n", parentControlEndpoint.c_str(), parentDataEndpoint.c_str());
 	m_upstream.connect(parentControlEndpoint, parentDataEndpoint);
 
-	// Launch local children, one per PE on node
+	// Determine number of local children, one per PE on node
 	auto const firstPE = cti_be_getNodeFirstPE();
 	auto const localPEs = cti_be_getNodePEs();
 	m_numChildren += localPEs;
+
+	// Launch local children with provided leaf binary
 	fprintf(stderr, "forking %d local leaf processes\n", localPEs);
-	for (int i = firstPE; i < firstPE + localPEs; i++) {
+	for (int rank = firstPE; rank < firstPE + localPEs; rank++) {
+
 		if (auto const forkedPid = fork()) {
-		m_localChildPids.emplace_back(forkedPid);
+			// Add launched process to cleanup list
+			m_localChildPids.emplace_back(forkedPid);
+
 		} else {
-			leafFunc(controlEndpoint, dataEndpoint, i);
+			// Prepend endpoints and rank number to provided leaf arguments
+			int leaf_argc = 4; // Three arguments and nullptr
+
+			// Count provided arguments
+			if (leaf_argv != nullptr) {
+				for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
+					leaf_argc++;
+				}
+			}
+
+			// Prepend endpoints, rank, and copy provided arguments
+			auto const rankString = std::to_string(rank);
+			char const* complete_leaf_argv[leaf_argc] =
+				{ leaf_argv ? leaf_argv[0] : leafPath.c_str()
+				, controlEndpoint.c_str()
+				, dataEndpoint.c_str()
+				, rankString.c_str()
+			};
+			if (leaf_argv != nullptr) {
+				for (int i = 1; i < leaf_argc - 4; i++) {
+					complete_leaf_argv[i + 3] = leaf_argv[i];
+				}
+			}
+			complete_leaf_argv[leaf_argc] = nullptr;
+
+			// Exec leaf binary
+			execvp(leafPath.c_str(), (char* const*)complete_leaf_argv);
+			perror("execvp");
+			_exit(-1);
 		}
 	}
 

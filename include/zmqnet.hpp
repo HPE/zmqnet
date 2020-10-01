@@ -249,7 +249,8 @@ public:
 	int m_numChildren;
 	std::vector<pid_t> m_localChildPids;
 
-	Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, void(*leafFunc)(std::string const&, std::string const&, int));
+	Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint,
+		std::string const& leafPath, char const* const* leaf_argv);
 
 	~Commnode();
 

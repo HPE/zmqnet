@@ -21,7 +21,7 @@
 
 extern char **environ;
 
-void run_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
+int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
 {
 	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
@@ -37,7 +37,7 @@ void run_leafnode(std::string const& upstreamControlEndpoint, std::string const&
 		fprintf(stderr, "%d got command %s\n", rank, command.c_str());
 
 		if (command == "exit") {
-			return;
+			return 0;
 
 		} else {
 			leafnode.send_result(std::to_string(rank));
@@ -51,7 +51,9 @@ int run_commnode(std::string const& dealer_endpoint)
 
 	auto ctx = zmq::context_t{};
 
-	auto commnode = Commnode{ctx, dealer_endpoint, run_leafnode};
+	auto const leafPath = std::string{cti_be_getBinDir()} + "/topotest";
+	char const* leaf_argv[] = { "./topotest", "leaf", nullptr };
+	auto commnode = Commnode{ctx, dealer_endpoint, leafPath, leaf_argv};
 
 	while (true) {
 		auto const command = commnode.nextCommand();
@@ -115,6 +117,20 @@ int main(int argc, char** argv)
 		auto const dealer_endpoint = argv[2];
 
 		rc = run_commnode(dealer_endpoint);
+
+	} else if (!strcmp("leaf", argv[4])) {
+		auto const upstreamControlEndpoint = argv[1];
+		auto const upstreamDataEndpoint = argv[2];
+		auto const rankString = argv[3];
+
+		rc = run_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, std::stoi(rankString));
+
+	} else {
+		fprintf(stderr, "bad args: ");
+		for (int i = 0; i < argc; i++) {
+			fprintf(stderr, "%s ", argv[i]);
+		}
+		fprintf(stderr, "\n");
 	}
 
 cleanup_main:
