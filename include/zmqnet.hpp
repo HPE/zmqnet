@@ -227,8 +227,6 @@ public:
 	}
 };
 
-using LeafNode = ProducerNode;
-
 class Frontend
 {
 public:
@@ -239,6 +237,31 @@ public:
 
 	std::string runCommand(std::string const& command);
 	void runExit();
+};
+
+class Backend
+{
+public:
+	static auto getParams(int argc, char const* const* argv)
+	{
+		if (argc < 4) {
+			throw std::runtime_error("expected 3 network param arguments");
+		}
+		return std::make_tuple(
+			std::string{argv[1]}, // upstream control endpoint
+			std::string{argv[2]}, // upstream data endpoint
+			std::stoi(argv[3]),   // rank number
+			argc - 3, // 3 less arguments
+			argv + 3);
+	}
+
+	ProducerNode m_upstream;
+
+	Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint);
+
+	std::string nextCommand();
+
+	void sendResult(std::string const& result);
 };
 
 class Filter;

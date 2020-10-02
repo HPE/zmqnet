@@ -27,20 +27,17 @@ int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& 
 
 	auto ctx = zmq::context_t{};
 
-	auto leafnode = LeafNode{ctx, upstreamControlEndpoint, upstreamDataEndpoint};
-
-	fprintf(stderr, "%d send ready\n", rank);
-	leafnode.send_ready();
+	auto leafnode = Backend{ctx, upstreamControlEndpoint, upstreamDataEndpoint};
 
 	while (true) {
-		auto const command = leafnode.recv_command();
+		auto const command = leafnode.nextCommand();
 		fprintf(stderr, "%d got command %s\n", rank, command.c_str());
 
 		if (command == "exit") {
 			return 0;
 
 		} else {
-			leafnode.send_result(std::to_string(rank));
+			leafnode.sendResult(std::to_string(rank));
 		}
 	}
 }
@@ -88,11 +85,12 @@ int main(int argc, char** argv)
 		cti_deregisterApp(app_id);
 
 	} else if (!strcmp("leaf", argv[4])) {
-		auto const upstreamControlEndpoint = argv[1];
-		auto const upstreamDataEndpoint = argv[2];
-		auto const rankString = argv[3];
+		auto const [upstreamControlEndpoint, upstreamDataEndpoint, rank,
+			rest_argc, rest_argv] = Backend::getParams(argc, argv);
+		assert(rest_argc == argc - 3);
+		assert(!strcmp("leaf", rest_argv[1]));
 
-		rc = run_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, std::stoi(rankString));
+		rc = run_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, rank);
 
 	} else {
 		fprintf(stderr, "bad args: ");

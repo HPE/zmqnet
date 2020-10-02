@@ -167,6 +167,22 @@ void Frontend::runExit()
 	m_downstream.send_command("exit");
 }
 
+Backend::Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
+	: m_upstream{ctx, upstreamControlEndpoint, upstreamDataEndpoint}
+{
+	// Notify parent commnode that setup is completed
+	m_upstream.send_ready();
+}
+
+std::string Backend::nextCommand()
+{
+	return m_upstream.recv_command();
+}
+
+void Backend::sendResult(std::string const& result)
+{
+	m_upstream.send_result(result);
+}
 
 class Filter
 {
