@@ -7,3 +7,6 @@
 [submodule "external/cdst_build_library"]
 	path = external/cdst_build_library
 	url = ssh://git@stash.us.cray.com:7999/pe-cdst/cdst_build_library.git
+[submodule "external/capnproto"]
+	path = external/capnproto
+	url = ssh://git@stash.us.cray.com:7999/pe-cdst/capnproto.git

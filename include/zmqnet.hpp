@@ -8,6 +8,8 @@
 
 #include <vector>
 #include <string>
+#include <unordered_map>
+#include <future>
 
 #include <zmq.hpp>
 
@@ -114,7 +116,7 @@ public:
 
 	auto getEndpoints() const
 	{
-		return std::make_pair(downstreamLink.controlEndpoint, downstreamLink.dataEndpoint);
+		return std::make_tuple(downstreamLink.controlEndpoint, downstreamLink.dataEndpoint);
 	}
 
 	void children_ready_loop(size_t num_children)
@@ -177,17 +179,6 @@ public:
 			, "tcp://*:*" // data endpoint
 		}
 	{}
-
-	// Replace the sockets' endpoints with e.g. known-accessible hostname from CTI
-	static auto formatEndpoints(ConsumerNode<TcpDownstreamLink> const& node, std::string const& hostname)
-	{
-		auto [controlEndpoint, dataEndpoint] = node.getEndpoints();
-
-		return std::make_pair(
-			replace_endpoint_host(std::move(controlEndpoint), hostname),
-			replace_endpoint_host(std::move(dataEndpoint),    hostname)
-		);
-	}
 };
 
 class ProducerNode
@@ -227,15 +218,19 @@ public:
 	}
 };
 
+using StreamId = int;
+
 class Frontend
 {
 public:
 	ConsumerNode<TcpDownstreamLink> m_downstream;
 
 	Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
-		int const fanout, std::string const& filterName, char const* const* leaf_argv);
+		int const fanout, char const* const* leaf_argv);
 
-	std::string runCommand(std::string const& command);
+	void registerStream(StreamId const& streamId, std::string const& filterName);
+
+	std::string runCommand(StreamId const& streamId, std::string const& command);
 	void runExit();
 };
 
@@ -259,31 +254,8 @@ public:
 
 	Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint);
 
-	std::string nextCommand();
+	std::tuple<StreamId, std::string> nextCommand();
 
-	void sendResult(std::string const& result);
+	void sendResult(StreamId const& streamId, std::string const& result);
 };
 
-class Filter;
-
-class Commnode
-{
-public:
-	ProducerNode m_upstream;
-	ConsumerNode<TcpDownstreamLink> m_downstream;
-
-	int m_numChildren;
-	std::vector<pid_t> m_localChildPids;
-
-	std::unique_ptr<Filter> m_filter;
-
-	Commnode(zmq::context_t& ctx, std::string const& dealerEndpoint, std::string const& filterName, char const* const* leaf_argv);
-
-	~Commnode();
-
-	std::string nextCommand();
-
-	std::vector<std::string> collectResults();
-	std::string filterResults(std::vector<std::string> const& results);
-	void sendResult(std::string const& result);
-};

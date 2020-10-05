@@ -23,11 +23,10 @@ struct CommnodeArgv : public cti::Argv {
     static constexpr Option Help  { "help",  'h' };
 
     static constexpr Parameter DealerEndpoint { "dealer-endpoint", 'd' };
-    static constexpr Parameter FilterName     { "filter-name",     'f' };
 
     static constexpr GNUOption long_options[] = {
         Help,
-        DealerEndpoint, FilterName,
+        DealerEndpoint,
         long_options_done
     };
 };

@@ -11,6 +11,7 @@
 #include <vector>
 #include <future>
 #include <unordered_map>
+#include <thread>
 
 #include "zmqnet.hpp"
 
@@ -30,14 +31,15 @@ int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& 
 	auto leafnode = Backend{ctx, upstreamControlEndpoint, upstreamDataEndpoint};
 
 	while (true) {
-		auto const command = leafnode.nextCommand();
-		fprintf(stderr, "%d got command %s\n", rank, command.c_str());
+		auto const [streamId, command] = leafnode.nextCommand();
+		fprintf(stderr, "%d got command %s from stream %d\n", rank, command.c_str(), streamId);
 
-		if (command == "exit") {
+		if (streamId < 0) {
 			return 0;
 
 		} else {
-			leafnode.sendResult(std::to_string(rank));
+			assert(streamId == 0);
+			leafnode.sendResult(streamId, std::to_string(rank));
 		}
 	}
 }
@@ -75,9 +77,10 @@ int main(int argc, char** argv)
 
 		char const* leaf_argv[] = { "topotest", "leaf", nullptr };
 
-		auto rootnode = Frontend{ctx, app_id, manifest_id, 5, "libfilter.so", leaf_argv};
+		auto rootnode = Frontend{ctx, app_id, manifest_id, 5, leaf_argv};
+		rootnode.registerStream(0, "libfilter.so");
 
-		auto const result = rootnode.runCommand("send");
+		auto const result = rootnode.runCommand(0, "send");
 		fprintf(stderr, "result: '%s'\n", result.c_str());
 
 		rootnode.runExit();
