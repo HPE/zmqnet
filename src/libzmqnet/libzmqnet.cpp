@@ -17,44 +17,46 @@
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
 
-#include "cti_split.hpp"
-#include "cti_dlopen.hpp"
-
 #include "argv_defs.hpp"
 
 #include "zmqnet.hpp"
 
-// Replace the sockets' endpoints with e.g. known-accessible hostname from CTI
-static auto formatEndpoints(ConsumerNode<TcpDownstreamLink> const& node, std::string const& hostname)
-{
-	auto [controlEndpoint, dataEndpoint] = node.getEndpoints();
+#include <capnp/message.h>
+#include <capnp/serialize-packed.h>
+#include "NetworkSchema.capnp.h"
 
-	return std::make_tuple(
-		replace_endpoint_host(std::move(controlEndpoint), hostname),
-		replace_endpoint_host(std::move(dataEndpoint),    hostname)
-	);
+static inline void send_MessageBuilder(zmq::socket_t& socket, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
+{
+	auto messageArray = capnp::messageToFlatArray(builder);
+	auto const messageBytes = messageArray.asBytes();
+	socket.send(zmq::message_t{messageBytes.begin(), messageBytes.size()}, sockopt);
 }
 
-static auto exchangeTopologyData(zmq::context_t& ctx, std::string const& dealerEndpoint,
-	std::string const& controlEndpoint, std::string const& dataEndpoint)
+static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
 {
-	// Connect to topology server
-	auto request_socket = zmq::socket_t{ctx, zmq::socket_type::req};
-	request_socket.connect(dealerEndpoint);
-	fprintf(stderr, "connected to topology server %s\n", dealerEndpoint.c_str());
+	while (true) {
+		auto received_result = zmq::message_t{};
+		auto maybe_bytes = socket.recv(received_result, sockopt);
+		if (!maybe_bytes) {
+			continue;
+		}
 
-	// Send this node's endpoints to topology server
-	auto const downstreamEndpointsMessage = controlEndpoint + " " + dataEndpoint;
-	send_string(request_socket, downstreamEndpointsMessage, zmq::send_flags::none);
-	fprintf(stderr, "registered endpoints with topology server\n");
+		auto const messageWords = received_result.data<capnp::word>();
+		assert(received_result.size() % sizeof(capnp::word) == 0);
+		auto const messageWordsLen = received_result.size() / sizeof(capnp::word);
 
-	// Receive this node's parents and number of network children from topology server
-	auto [parentControlEndpoint, parentDataEndpoint, rawNumChildren] =
-		cti::split::string<3>(recv_string(request_socket, zmq::recv_flags::none));
-	fprintf(stderr, "topology server reported parent %s / %s, %s children\n",
-		parentControlEndpoint.c_str(), parentDataEndpoint.c_str(), rawNumChildren.c_str());
+		auto messageReader = capnp::FlatArrayMessageReader(kj::arrayPtr(messageWords, messageWordsLen));
 
-	return std::make_tuple(std::move(parentControlEndpoint), std::move(parentDataEndpoint), std::stoi(rawNumChildren));
+		return std::make_tuple(std::move(received_result), std::move(messageReader));
+	}
+}
+
+template <typename RootType>
+static inline auto recv_MessageRoot(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
+{
+	auto [result, resultReader] = recv_MessageReader(socket, sockopt);
+	auto rootReader = resultReader.getRoot<RootType>();
+	return std::make_tuple(std::move(result), std::move(resultReader), rootReader);
 }
 
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
@@ -74,20 +76,34 @@ static void connectFanoutTopology(zmq::socket_t&& dealer_socket,
 	int levelCap = 1;
 
 	for (int seen = 0; seen < num_nodes; seen++) {
-		auto [controlEndpoint, dataEndpoint] =
-			cti::split::string<2>(recv_string(dealer_socket, zmq::recv_flags::none));
-		endpoints.emplace_back(std::move(controlEndpoint), std::move(dataEndpoint));
+		// Receive topology request from new node
+		{ auto [request, requestReader, topologyRequest] = recv_MessageRoot<TopologyRequest>(dealer_socket, zmq::recv_flags::none);
 
+			// Register topology information
+			endpoints.emplace_back(topologyRequest.getNodeControlEndpoint().cStr(), topologyRequest.getNodeDataEndpoint().cStr());
+		}
+
+		// Determine the number of children of current node
 		auto const remain = num_nodes - (seen + 1);
 		levelFilled++;
 		auto const rightFill = levelCap - levelFilled;
 		auto const leftFill = (levelFilled - 1) * fanout;
 		auto const numChildren = std::min(fanout, std::max(0, remain - (rightFill + leftFill)));
 
-		auto const& [upstreamControlEndpoint, upstreamDataEndpoint] = endpoints[cursor];
-		auto const upstreamEndpointsMessage = upstreamControlEndpoint + " " + upstreamDataEndpoint + " " + std::to_string(numChildren);
-		send_string(dealer_socket, upstreamEndpointsMessage, zmq::send_flags::none);
+		// Create topology response
+		{ auto builder = capnp::MallocMessageBuilder{};
+			auto topologyResponse = builder.initRoot<TopologyResponse>();
 
+			auto const& [parentControlEndpoint, parentDataEndpoint] = endpoints[cursor];
+			topologyResponse.setParentControlEndpoint(parentControlEndpoint);
+			topologyResponse.setParentDataEndpoint(parentDataEndpoint);
+			topologyResponse.setNumChildren(numChildren);
+
+			// Send topology response
+			send_MessageBuilder(dealer_socket, builder);
+		}
+
+		// Advance to next node
 		if (seen % fanout == 0) {
 			cursor++;
 		}
@@ -141,35 +157,45 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
 
 	// Wait for all children to send ready over data socket
 	fprintf(stderr, "waiting for ready report\n");
-	m_downstream.children_ready_loop(1);
+	auto [reader, responseReader, readyResponse] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	assert(readyResponse.isAck());
 }
 
 void Frontend::registerStream(StreamId const& streamId, std::string const& filterName)
 {
-	// Send filter register command to network
-	fprintf(stderr, "registering filter %s\n", filterName.c_str());
-	auto const registerFilterMessage = std::to_string(streamId) + " " + filterName;
-	m_downstream.send_command(registerFilterMessage);
+	// Create filter create command message
+	auto builder = capnp::MallocMessageBuilder{};
+	auto filterCommand = builder.initRoot<NetworkCommand>().initNewStream();
+	filterCommand.setNewStreamId(streamId);
+	filterCommand.setFilterName(filterName);
 
-	auto const children_results = m_downstream.recv_results(1);
-	assert(children_results.size() == 1);
-	assert(children_results[0] == registerFilterMessage);
+	// Send filter create command
+	fprintf(stderr, "registering filter %s with id %d\n", filterName.c_str(), streamId);
+	send_MessageBuilder(m_downstream.control_socket, builder);
+
+	// Wait for acknowledgement
+	auto [reader, responseReader, filterResponse] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	assert(filterResponse.isAck());
 }
 
 std::string Frontend::runCommand(StreamId const& streamId, std::string const& command)
 {
-	// Send command to network
-	fprintf(stderr, "sending command %s\n", command.c_str());
-	m_downstream.send_command(command);
+	// Create user command
+	auto builder = capnp::MallocMessageBuilder{};
+	auto userCommand = builder.initRoot<NetworkCommand>().initUserCommand();
+	userCommand.setStreamId(streamId);
+	userCommand.setContent(command);
+
+	// Send user command
+	fprintf(stderr, "user command %s on stream %d\n", command.c_str(), streamId);
+	send_MessageBuilder(m_downstream.control_socket, builder);
 
 	// Receive aggregated result
 	fprintf(stderr, "receiving results...\n");
-	auto const children_results = m_downstream.recv_results(1);
-	assert(children_results.size() == 1);
+	auto [reader, responseReader, userResponse] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	assert(userResponse.getStreamId() == streamId);
 
-	auto [streamString, result] = cti::split::string<2>(std::move(children_results[0]));
-	assert(std::stoi(streamString) == streamId);
-
+	auto result = std::string{userResponse.getUserData().cStr()};
 	fprintf(stderr, "result: %s\n", result.c_str());
 
 	return result;
@@ -177,25 +203,75 @@ std::string Frontend::runCommand(StreamId const& streamId, std::string const& co
 
 void Frontend::runExit()
 {
-	// Send exit command to network, no response
 	fprintf(stderr, "sending exit command\n");
-	m_downstream.send_command("-1 exit");
+
+	// Create exit command
+	auto builder = capnp::MallocMessageBuilder{};
+	auto command = builder.initRoot<NetworkCommand>();
+	command.setExit();
+
+	// Send exit command
+	send_MessageBuilder(m_downstream.control_socket, builder);
+
+	// No response
 }
 
-Backend::Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
+Backend::Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
 	: m_upstream{ctx, upstreamControlEndpoint, upstreamDataEndpoint}
+	, m_rank{rank}
 {
+	fprintf(stderr, "rank %d: notifying parent ready from leaf node\n", m_rank);
 	// Notify parent commnode that setup is completed
-	m_upstream.send_ready();
+	auto builder = capnp::MallocMessageBuilder{};
+	auto response = builder.initRoot<NetworkResponse>();
+	response.setAck();
+
+	// Send acknowledgement
+	send_MessageBuilder(m_upstream.data_socket, builder);
 }
 
 std::tuple<StreamId, std::string> Backend::nextCommand()
 {
-	auto [streamString, command] = cti::split::string<2>(m_upstream.recv_command());
-	return std::make_tuple(std::stoi(streamString), std::move(command));
+	while (true) {
+		// Receive next network command
+		fprintf(stderr, "rank %d: waiting for next command...\n", m_rank);
+		auto [reader, commandReader, command] = recv_MessageRoot<NetworkCommand>(m_upstream.control_socket);
+
+		// Detect exit case
+		if (command.isExit()) {
+			fprintf(stderr, "rank %d: exit\n", m_rank);
+			return std::make_tuple(-1, std::string{});
+
+		// Acknowledge filter case
+		} else if (command.isNewStream()) {
+			fprintf(stderr, "rank %d: filter response\n", m_rank);
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+			response.setStreamId(command.getNewStream().getNewStreamId());
+			response.setAck();
+
+			send_MessageBuilder(m_upstream.data_socket, builder);
+
+			continue;
+
+		// Extract stream ID and user command
+		} else {
+			fprintf(stderr, "rank %d: user command\n", m_rank);
+			assert(command.isUserCommand());
+			auto userCommand = command.getUserCommand();
+			return std::make_tuple(userCommand.getStreamId(), std::string{userCommand.getContent().cStr()});
+		}
+	}
 }
 
 void Backend::sendResult(StreamId const& streamId, std::string const& result)
 {
-	m_upstream.send_result(std::to_string(streamId) + " " + result);
+	// Notify parent commnode of result
+	auto builder = capnp::MallocMessageBuilder{};
+	auto response = builder.initRoot<NetworkResponse>();
+	response.setStreamId(streamId);
+	response.setUserData(result);
+
+	// Send result
+	send_MessageBuilder(m_upstream.data_socket, builder);
 }

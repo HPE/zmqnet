@@ -1,12 +1,12 @@
 @0xeb238c6db811bf3c;
 
 struct TopologyRequest {
-  nodeCommandEndpoint @0 :Text;
+  nodeControlEndpoint @0 :Text;
   nodeDataEndpoint @1 :Text;
 }
 
 struct TopologyResponse {
-  parentCommandEndpoint @0 :Text;
+  parentControlEndpoint @0 :Text;
   parentDataEndpoint @1 :Text;
 
   numChildren @2 :Int32;

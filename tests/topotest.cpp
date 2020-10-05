@@ -18,17 +18,13 @@
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
 
-#include "cti_split.hpp"
-
-extern char **environ;
-
 int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
 {
 	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
 	auto ctx = zmq::context_t{};
 
-	auto leafnode = Backend{ctx, upstreamControlEndpoint, upstreamDataEndpoint};
+	auto leafnode = Backend{ctx, upstreamControlEndpoint, upstreamDataEndpoint, rank};
 
 	while (true) {
 		auto const [streamId, command] = leafnode.nextCommand();

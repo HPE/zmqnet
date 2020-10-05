@@ -3,6 +3,7 @@ Makefile.in
 .libs/
 
 autom4te.cache
+core*
 /aclocal.m4
 /autoscan.log
 /autoscan-*.log
@@ -32,6 +33,10 @@ m4/lt~obsolete.m4
 
 Makefile
 libzmqnet.pc
+commnode
+
+*.capnp.c++
+*.capnp.h
 
 *.o
 *.lo
