@@ -21,43 +21,7 @@
 
 #include "zmqnet.hpp"
 
-#include <capnp/message.h>
-#include <capnp/serialize-packed.h>
-#include "NetworkSchema.capnp.h"
-
-static inline void send_MessageBuilder(zmq::socket_t& socket, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
-{
-	auto messageArray = capnp::messageToFlatArray(builder);
-	auto const messageBytes = messageArray.asBytes();
-	socket.send(zmq::message_t{messageBytes.begin(), messageBytes.size()}, sockopt);
-}
-
-static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
-{
-	while (true) {
-		auto received_result = zmq::message_t{};
-		auto maybe_bytes = socket.recv(received_result, sockopt);
-		if (!maybe_bytes) {
-			continue;
-		}
-
-		auto const messageWords = received_result.data<capnp::word>();
-		assert(received_result.size() % sizeof(capnp::word) == 0);
-		auto const messageWordsLen = received_result.size() / sizeof(capnp::word);
-
-		auto messageReader = capnp::FlatArrayMessageReader(kj::arrayPtr(messageWords, messageWordsLen));
-
-		return std::make_tuple(std::move(received_result), std::move(messageReader));
-	}
-}
-
-template <typename RootType>
-static inline auto recv_MessageRoot(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
-{
-	auto [result, resultReader] = recv_MessageReader(socket, sockopt);
-	auto rootReader = resultReader.getRoot<RootType>();
-	return std::make_tuple(std::move(result), std::move(resultReader), rootReader);
-}
+#include "libzmqnet.hpp"
 
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
 // tree by the frontend.

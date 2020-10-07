@@ -4,8 +4,8 @@ SRC = $(top_srcdir)/src
 AM_CXXFLAGS = -Wl,-E -Wl,-rpath,$(prefix)/lib
 AM_CPPFLAGS = -I$(top_srcdir)/tests
 
-TESTS = inproc
-check_PROGRAMS = inproc topotest stop
+TESTS =
+check_PROGRAMS = topotest stop
 
 BUILT_SOURCES = libfilter.so
 

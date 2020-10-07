@@ -20,41 +20,7 @@
 
 #include "argv_defs.hpp"
 
-#include <capnp/message.h>
-#include <capnp/serialize-packed.h>
-#include "libzmqnet/NetworkSchema.capnp.h"
-
-static inline void send_MessageBuilder(zmq::socket_t& socket, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
-{
-	auto messageArray = capnp::messageToFlatArray(builder);
-	auto const messageBytes = messageArray.asBytes();
-	socket.send(zmq::message_t{messageBytes.begin(), messageBytes.size()}, sockopt);
-}
-
-static inline auto make_MessageReader(zmq::message_t& message)
-{
-	assert(message.size() % sizeof(capnp::word) == 0);
-	auto const messageWords = message.data<capnp::word>();
-	auto const messageWordsLen = message.size() / sizeof(capnp::word);
-
-	return capnp::FlatArrayMessageReader(kj::arrayPtr(messageWords, messageWordsLen));
-}
-
-static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
-{
-	auto message = recv_message(socket, sockopt);
-	auto messageReader = make_MessageReader(message);
-
-	return std::make_tuple(std::move(message), std::move(messageReader));
-}
-
-template <typename RootType>
-static inline auto recv_MessageRoot(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
-{
-	auto [result, resultReader] = recv_MessageReader(socket, sockopt);
-	auto rootReader = resultReader.getRoot<RootType>();
-	return std::make_tuple(std::move(result), std::move(resultReader), rootReader);
-}
+#include "libzmqnet/libzmqnet.hpp"
 
 // Parse user-provided arguments
 static auto parse_argv(int argc, char* const argv[])
@@ -93,6 +59,9 @@ static auto parse_argv(int argc, char* const argv[])
 	}
 	return std::make_tuple(dealerEndpoint, leaf_argv);
 }
+
+namespace workers
+{
 
 // Select stream task based on incoming message's stream ID, and send message to stream task socket
 // Returns control of downstream data socket upon completion
@@ -163,11 +132,15 @@ static zmq::socket_t distribute_stream_inputs(zmq::context_t& ctx, zmq::socket_t
 
 // Proxy result messages produced by local stream tasks to upstream data socket
 // Returns control of upstream data socket upon completion
-static zmq::socket_t proxy_results_upstream(zmq::socket_t&& local_result_socket, zmq::socket_t&& upstream_data_socket)
+static zmq::socket_t proxy_results_upstream(zmq::context_t& ctx, std::string resultEndpoint, zmq::socket_t&& upstream_data_socket)
 {
+	// Create result
+	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
+	result_socket.bind(resultEndpoint);
+
 	while (true) {
 		// Read next incoming local message
-		auto message = recv_message(local_result_socket);
+		auto message = recv_message(result_socket);
 
 		// If exit message indicating all streams completed, return socket back to frontend for cleanup
 		if (make_MessageReader(message).getRoot<NetworkResponse>().isExitAck()) {
@@ -179,8 +152,8 @@ static zmq::socket_t proxy_results_upstream(zmq::socket_t&& local_result_socket,
 	}
 }
 
-static int stream_worker(zmq::context_t& ctx,
-	std::string resultEndpoint,
+// Process result messages; aggregate and send to local result socket
+static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	StreamId streamId, int numChildren, std::string filterPath)
 {
 	int rc = -1;
@@ -277,39 +250,10 @@ static int stream_worker(zmq::context_t& ctx,
 
 	rc = 0;
 
-cleanup_stream_worker:
-	fprintf(stderr, "%d: exiting\n", streamId);
-
 	return rc;
 }
 
-static auto exchangeTopologyData(zmq::context_t& ctx, std::string const& dealerEndpoint,
-	std::string const& controlEndpoint, std::string const& dataEndpoint)
-{
-	// Connect to topology server
-	auto request_socket = zmq::socket_t{ctx, zmq::socket_type::req};
-	request_socket.connect(dealerEndpoint);
-	fprintf(stderr, "connected to topology server %s\n", dealerEndpoint.c_str());
-
-	// Create topology request message
-	auto builder = capnp::MallocMessageBuilder{};
-	auto topologyRequest = builder.initRoot<TopologyRequest>();
-	topologyRequest.setNodeControlEndpoint(controlEndpoint);
-	topologyRequest.setNodeDataEndpoint(dataEndpoint);
-
-	// Send this node's endpoints to topology server
-	send_MessageBuilder(request_socket, builder);
-	fprintf(stderr, "registered endpoints with topology server\n");
-
-	// Receive this node's topology info from topology server
-	auto [response, responseReader, topologyResponse] = recv_MessageRoot<TopologyResponse>(request_socket, zmq::recv_flags::none);
-	fprintf(stderr, "topology server reported parent %s / %s, %d children\n",
-		topologyResponse.getParentControlEndpoint().cStr(),
-		topologyResponse.getParentDataEndpoint().cStr(),
-		topologyResponse.getNumChildren());
-
-	return std::make_tuple(std::move(response), std::move(responseReader), std::move(topologyResponse));
-}
+} // namespace workers
 
 int main(int argc, char* const argv[])
 {
@@ -334,8 +278,28 @@ int main(int argc, char* const argv[])
 	fprintf(stderr, "listening on %s / %s\n", controlEndpoint.c_str(), dataEndpoint.c_str());
 
 	// Send endpoints to topology server and receive parent's endpoints and number of network children
-	{ auto const [response, responseReader, topologyResponse] =
-		exchangeTopologyData(ctx, dealerEndpoint, controlEndpoint, dataEndpoint);
+	{ auto request_socket = zmq::socket_t{ctx, zmq::socket_type::req};
+		request_socket.connect(dealerEndpoint);
+		fprintf(stderr, "connected to topology server %s\n", dealerEndpoint.c_str());
+
+		// Create topology request message
+		auto builder = capnp::MallocMessageBuilder{};
+		auto topologyRequest = builder.initRoot<TopologyRequest>();
+		topologyRequest.setNodeControlEndpoint(controlEndpoint);
+		topologyRequest.setNodeDataEndpoint(dataEndpoint);
+
+		// Send this node's endpoints to topology server
+		send_MessageBuilder(request_socket, builder);
+		fprintf(stderr, "registered endpoints with topology server\n");
+
+		// Receive this node's topology info from topology server
+		auto [response, responseReader, topologyResponse] = recv_MessageRoot<TopologyResponse>(request_socket, zmq::recv_flags::none);
+		fprintf(stderr, "topology server reported parent %s / %s, %d children\n",
+			topologyResponse.getParentControlEndpoint().cStr(),
+			topologyResponse.getParentDataEndpoint().cStr(),
+			topologyResponse.getNumChildren());
+
+		// Apply topology information
 		numChildren += topologyResponse.getNumChildren();
 
 		// Connect to parent's endpoints
@@ -343,7 +307,6 @@ int main(int argc, char* const argv[])
 		auto const& parentDataEndpoint = topologyResponse.getParentDataEndpoint();
 		fprintf(stderr, "connecting to parent %s / %s\n",
 			parentControlEndpoint.cStr(), parentDataEndpoint.cStr());
-
 		upstream.connect(parentControlEndpoint, parentDataEndpoint);
 	}
 
@@ -355,40 +318,41 @@ int main(int argc, char* const argv[])
 	numChildren += localPEs;
 
 	// Launch local children with provided leaf binary
-	auto const leafPath = std::string{cti_be_getBinDir()} + "/" + leaf_argv[0];
-	fprintf(stderr, "forking %d local leaf processes\n", localPEs);
-	for (int rank = firstPE; rank < firstPE + localPEs; rank++) {
+	{ auto const leafPath = std::string{cti_be_getBinDir()} + "/" + leaf_argv[0];
+		fprintf(stderr, "forking %d local leaf processes\n", localPEs);
+		for (int rank = firstPE; rank < firstPE + localPEs; rank++) {
 
-		if (auto const forkedPid = fork()) {
-			// Add launched process to cleanup list
-			localChildPids.emplace_back(forkedPid);
+			if (auto const forkedPid = fork()) {
+				// Add launched process to cleanup list
+				localChildPids.emplace_back(forkedPid);
 
-		} else {
-			// Prepend endpoints and rank number to provided leaf arguments
-			auto completeLeafArgv = cti::ManagedArgv
-				{ leaf_argv[0]
-				, controlEndpoint
-				, dataEndpoint
-				, std::to_string(rank)
-			};
+			} else {
+				// Prepend endpoints and rank number to provided leaf arguments
+				auto completeLeafArgv = cti::ManagedArgv
+					{ leaf_argv[0]
+					, controlEndpoint
+					, dataEndpoint
+					, std::to_string(rank)
+				};
 
-			// Copy provided arguments
-			for (auto argptr = leaf_argv + 1; *argptr != nullptr; argptr++) {
-				completeLeafArgv.add(*argptr);
+				// Copy provided arguments
+				for (auto argptr = leaf_argv + 1; *argptr != nullptr; argptr++) {
+					completeLeafArgv.add(*argptr);
+				}
+
+				// Exec leaf binary
+				execvp(leafPath.c_str(), completeLeafArgv.get());
+				perror("execvp");
+				_exit(-1);
 			}
-
-			// Exec leaf binary
-			execvp(leafPath.c_str(), completeLeafArgv.get());
-			perror("execvp");
-			_exit(-1);
 		}
-	}
 
-	// Wait for all children to connect and send ready
-	for (int i = 0; i < numChildren; i++) {
-		fprintf(stderr, "waiting %d / %d\n", i, numChildren);
-		auto [reader, responseReader, readyResponse] = recv_MessageRoot<NetworkResponse>(downstream.data_socket);
-		assert(readyResponse.isReadyAck());
+		// Wait for all children to connect and send ready
+		for (int i = 0; i < numChildren; i++) {
+			fprintf(stderr, "waiting %d / %d\n", i, numChildren);
+			auto [reader, responseReader, readyResponse] = recv_MessageRoot<NetworkResponse>(downstream.data_socket);
+			assert(readyResponse.isReadyAck());
+		}
 	}
 
 	// Send ready to parent
@@ -400,28 +364,25 @@ int main(int argc, char* const argv[])
 		send_MessageBuilder(upstream.data_socket, builder);
 	}
 
-	// Create stream task work sockets
-	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-	result_socket.bind("inproc://result");
-	auto const resultEndpoint = result_socket.get(zmq::sockopt::last_endpoint);
-	auto streamWorkerTasks = std::vector<std::future<int>>{};
-	auto const filterBasePath = std::string{cti_be_getLibDir()};
-
-	// Receive incoming stream data messages and distribute to respective stream task
+	// Receive incoming stream data messages and distribute to respective stream task,
+	// return control of downstream data socket
 	auto distributeStreamInputsTask = std::async(std::launch::async,
 		[](zmq::context_t& ctx, zmq::socket_t&& downstream_data_socket, int numChildren) {
-			return distribute_stream_inputs(ctx, std::move(downstream_data_socket), numChildren);
+			return workers::distribute_stream_inputs(ctx, std::move(downstream_data_socket), numChildren);
 		}, std::ref(ctx), std::move(downstream.data_socket), numChildren);
 
-	// Proxy local worker result socket to upstream socket
+	// Proxy local worker result socket to upstream socket, return control of upstream data socket
+	auto const resultEndpoint = "inproc://result";
 	auto proxyResultsUpstreamTask = std::async(std::launch::async,
-		[](zmq::socket_t&& local_result_socket, zmq::socket_t&& upstream_data_socket) {
-			return proxy_results_upstream(std::move(local_result_socket), std::move(upstream_data_socket));
-		}, std::move(result_socket), std::move(upstream.data_socket));
+		[](zmq::context_t& ctx, std::string resultEndpoint, zmq::socket_t&& upstream_data_socket) {
+			return workers::proxy_results_upstream(ctx, std::move(resultEndpoint), std::move(upstream_data_socket));
+		}, std::ref(ctx), resultEndpoint, std::move(upstream.data_socket));
 
-	// Command relay loop
-
+	// Command loop
+	auto streamWorkerTasks = std::vector<std::future<int>>{};
+	auto const filterBasePath = std::string{cti_be_getLibDir()};
 	while (true) {
+
 		// Receive next command from parent
 		fprintf(stderr, "waiting for command from upstream\n");
 		auto message = recv_message(upstream.control_socket);
@@ -446,7 +407,7 @@ int main(int argc, char* const argv[])
 			// Create new stream task worker
 			streamWorkerTasks.emplace_back(std::async(std::launch::async,
 				[](zmq::context_t& ctx, std::string resultEndpoint, StreamId streamId, int numChildren, std::string filterPath) {
-					return stream_worker(ctx, std::move(resultEndpoint), streamId, numChildren, std::move(filterPath));
+					return workers::stream_aggregator(ctx, std::move(resultEndpoint), streamId, numChildren, std::move(filterPath));
 				}, std::ref(ctx), resultEndpoint, streamId, numChildren, filterBasePath + "/" + std::string{filterName}));
 
 		} else {
