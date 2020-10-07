@@ -28,12 +28,12 @@ int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& 
 
 	while (true) {
 		auto const [streamId, command] = leafnode.nextCommand();
-		fprintf(stderr, "%d got command %s from stream %d\n", rank, command.c_str(), streamId);
 
 		if (streamId < 0) {
 			return 0;
 
 		} else {
+			fprintf(stderr, "%d got command %s from stream %d\n", rank, command.c_str(), streamId);
 			assert(streamId == 0);
 			leafnode.sendResult(streamId, std::to_string(rank));
 		}
@@ -80,6 +80,8 @@ int main(int argc, char** argv)
 		fprintf(stderr, "result: '%s'\n", result.c_str());
 
 		rootnode.runExit();
+
+		sleep(30);
 
 		cti_deregisterApp(app_id);
 

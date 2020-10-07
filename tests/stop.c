@@ -22,7 +22,9 @@ main(int argc, char* argv[]) {
   MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
   MPI_Comm_size(MPI_COMM_WORLD, &numProcs);
 
+while (1) {
   raise(SIGSTOP);
+}
 
   MPI_Finalize();
 

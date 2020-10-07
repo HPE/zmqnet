@@ -29,10 +29,17 @@ struct NetworkCommand {
 }
 
 struct NetworkResponse {
-  streamId @0 :Int32;
-
   union {
-    ack @1 :Void;
-    userData @2 :Text;
+    readyAck @0 :Void;
+    exitAck @1 :Void;
+
+    streamAck :group {
+      streamId @2 :Int32;
+    }
+
+    userResult :group {
+      streamId @3 :Int32;
+      content @4 :Text;
+    }
   }
 }

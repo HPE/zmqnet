@@ -115,18 +115,17 @@ static int stream_worker(zmq::context_t& ctx,
 	auto filterHandle = cti::Dlopen::Handle{filterPath};
 	auto filterRun = filterHandle.load<FilterRunType>("run");
 
-	// Wait until all children have acknowledged filter
+	// Wait until all children have created stream
 	for (int i = 0; i < numChildren; i++) {
 		fprintf(stderr, "%d: ack %d / %d\n", streamId, i, numChildren);
 		auto [reader, resultReader, response] = recv_MessageRoot<NetworkResponse>(task_socket);
-		assert(response.isAck());
+		assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
 	}
 
 	// Send acknowledgement to parent
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
-		response.setStreamId(streamId);
-		response.setAck();
+		response.initStreamAck().setStreamId(streamId);
 
 		send_MessageBuilder(result_socket, builder);
 	}
@@ -140,16 +139,22 @@ static int stream_worker(zmq::context_t& ctx,
 		// Receive result from task queue
 		auto [reader, resultReader, response] = recv_MessageRoot<NetworkResponse>(task_socket);
 
-		// Check stream ID and user result
-		assert(response.getStreamId() == streamId);
-		assert(response.isUserData());
+		// If exit message, remove one child
+		if (response.isExitAck()) {
+			numChildren--;
+			fprintf(stderr, "%d: child exited, %d remaining\n", streamId, numChildren);
 
-		// Add content to messages list
-		fprintf(stderr, "content: '%s'\n", response.getUserData().cStr());
-		messages.emplace_back(response.getUserData());
+		} else {
+			// Check stream ID and user result
+			assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
 
-		// Aggregate when synchronization predicate satisfied
-		if (messages.size() == numChildren) {
+			// Add content to messages list
+			fprintf(stderr, "content: '%s'\n", response.getUserResult().getContent().cStr());
+			messages.emplace_back(response.getUserResult().getContent());
+		}
+
+		// Aggregate when synchronization predicate satisfied, or all children exit
+		if (!messages.empty() && ((messages.size() == numChildren) || (numChildren == 0))) {
 
 			// Run user filter and clear message list
 			fprintf(stderr, "running user filter\n");
@@ -160,45 +165,75 @@ static int stream_worker(zmq::context_t& ctx,
 			// Create outgoing result
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
-			response.setStreamId(streamId);
-			response.setUserData(result);
+			auto userResult = response.initUserResult();
+			userResult.setStreamId(streamId);
+			userResult.setContent(result);
 
 			// Send result
 			fprintf(stderr, "sending result: '%s'\n", result.c_str());
 			send_MessageBuilder(result_socket, builder);
+		}
+
+		// If all children exited, send exit message to result socket and exit
+		if (numChildren == 0) {
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+			response.setExitAck();
+
+			send_MessageBuilder(result_socket, builder);
+			break;
 		}
 	}
 
 	rc = 0;
 
 cleanup_stream_worker:
+	fprintf(stderr, "%d: exiting\n", streamId);
+
 	return rc;
 }
 
-static int result_worker(zmq::socket_t&& data_socket)
+static zmq::socket_t result_worker(zmq::socket_t&& data_socket, int numChildren)
 {
-	int rc = -1;
-
 	while (true) {
 		// Receive next result from children
 		fprintf(stderr, "waiting for result from downstream\n");
-		try {
-			auto result = recv_message(data_socket);
-			auto resultReader = make_MessageReader(result);
-			auto response = resultReader.getRoot<NetworkResponse>();
+		auto result = recv_message(data_socket);
+		auto resultReader = make_MessageReader(result);
+		auto response = resultReader.getRoot<NetworkResponse>();
 
-			// Extract stream ID and user command
-			auto const streamId = response.getStreamId();
+		// If child exited, forward exit message to every rank and continue
+		if (response.isExitAck()) {
+			fprintf(stderr, "sending exit message to every stream\n");
+			for (auto&& [streamId, task_socket] : taskSockets) {
+				task_socket.send(result, zmq::send_flags::none);
+			}
 
-			// Relay result to stream worker
-			taskSockets.at(streamId).send(std::move(result), zmq::send_flags::none);
-		} catch (zmq::error_t const& err) {
-			break;
+			// Remove one child
+			numChildren--;
+
+			// If no children left, exit
+			if (numChildren == 0) {
+				break;
+			}
+
+			continue;
 		}
+
+		// Response is either stream acknowledgement or user result
+		assert(response.isStreamAck() || response.isUserResult());
+
+		// Extract stream ID to select stream worker
+		auto const streamId = (response.isStreamAck())
+			? response.getStreamAck().getStreamId()
+			: response.getUserResult().getStreamId();
+
+		// Relay result to stream worker
+		taskSockets.at(streamId).send(std::move(result), zmq::send_flags::none);
 	}
 
-cleanup_result_worker:
-	return rc;
+	// Return control of downstream data socket to main thread
+	return std::move(data_socket);
 }
 
 static auto exchangeTopologyData(zmq::context_t& ctx, std::string const& dealerEndpoint,
@@ -306,14 +341,14 @@ int main(int argc, char* const argv[])
 	for (int i = 0; i < numChildren; i++) {
 		fprintf(stderr, "waiting %d / %d\n", i, numChildren);
 		auto [reader, responseReader, readyResponse] = recv_MessageRoot<NetworkResponse>(downstream.data_socket);
-		assert(readyResponse.isAck());
+		assert(readyResponse.isReadyAck());
 	}
 
 	// Send ready to parent
 	fprintf(stderr, "sending ready to parent\n");
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
-		response.setAck();
+		response.setReadyAck();
 
 		send_MessageBuilder(upstream.data_socket, builder);
 	}
@@ -327,19 +362,25 @@ int main(int argc, char* const argv[])
 	auto const filterBasePath = std::string{cti_be_getLibDir()};
 
 	// Proxy local worker result socket to upstream socket
-	auto proxyTask = std::async(std::launch::async, [](zmq::socket_t&& result_socket, zmq::socket_t&& data_socket) {
-		//zmq::proxy(result_socket, data_socket);
+	auto proxyTask = std::async(std::launch::async, [](zmq::socket_t&& local_result_socket, zmq::socket_t&& upstream_data_socket) -> zmq::socket_t {
 		while (true) {
-			auto message = recv_message(result_socket);
-			fprintf(stderr, "proxy got message\n");
-			data_socket.send(std::move(message), zmq::send_flags::none);
+			// Read next incoming local message
+			auto message = recv_message(local_result_socket);
+
+			// If exit message indicating all streams completed, return socket back to frontend for cleanup
+			if (make_MessageReader(message).getRoot<NetworkResponse>().isExitAck()) {
+				return std::move(upstream_data_socket);
+			}
+
+			// Relay application result response upstream
+			upstream_data_socket.send(std::move(message), zmq::send_flags::none);
 		}
-		return 0;
 	}, std::move(result_socket), std::move(upstream.data_socket));
 
 	// Result relay thread
-	auto resultRelayTask = std::async(std::launch::async,
-		result_worker, std::move(downstream.data_socket));
+	auto resultRelayTask = std::async(std::launch::async, [](zmq::socket_t&& downstream_data_socket, int numChildren) {
+		return result_worker(std::move(downstream_data_socket), numChildren);
+	}, std::move(downstream.data_socket), numChildren);
 
 	// Command relay loop
 
@@ -356,9 +397,6 @@ int main(int argc, char* const argv[])
 		// Determine if exit command was received
 		if (command.isExit()) {
 			fprintf(stderr, "got exit command\n");
-
-			// Cancel all stream workers
-
 			break;
 
 		// Determine if new stream is to be registered
@@ -390,8 +428,20 @@ int main(int argc, char* const argv[])
 	rc = 0;
 
 cleanup_main:
+
+	// Wait on all local child PIDs
+	fprintf(stderr, "waiting for child pids\n");
+	for (auto&& pid : localChildPids) {
+		int status;
+		if (waitpid(pid, &status, 0) || (WIFEXITED(status) && WEXITSTATUS(status))) {
+			fprintf(stderr, "pid %d failed\n", pid);
+			rc = -1;
+		}
+	}
+
 	// Wait on stream relay thread
-	(void)resultRelayTask.get();
+	fprintf(stderr, "waiting for result relay thread\n");
+	auto downstream_data_socket = resultRelayTask.get();
 
 	// Wait on stream worker threads
 	fprintf(stderr, "waiting for stream worker threads\n");
@@ -403,23 +453,28 @@ cleanup_main:
 		}
 	}
 
-	// Close network connections to end proxy
-	taskSockets.clear();
-	result_socket.close();
-
-	// Wait for proxy task to complete
+	// Wait for proxy task to complete and regain ownership of upstream data socket
 	fprintf(stderr, "waiting for proxy task\n");
-	(void)proxyTask.get();
+	auto upstream_data_socket = proxyTask.get();
 
-	// Wait on all local child PIDs
-	fprintf(stderr, "waiting for child pids\n");
-	for (auto&& pid : localChildPids) {
-		int status;
-		if (waitpid(pid, &status, 0) || (WIFEXITED(status) && WEXITSTATUS(status))) {
-			fprintf(stderr, "pid %d failed!\n", pid);
-			rc = -1;
-		}
+	// Notify parent that cleanup has completed
+	{ auto builder = capnp::MallocMessageBuilder{};
+		auto response = builder.initRoot<NetworkResponse>();
+		response.setExitAck();
+
+		send_MessageBuilder(upstream_data_socket, builder);
 	}
+
+	// Close all network sockets
+	upstream.control_socket.close();
+	upstream_data_socket.close();
+	downstream.control_socket.close();
+	downstream_data_socket.close();
+	taskSockets.clear();
+	fprintf(stderr, "context reset\n");
+	ctx.close();
+
+	fprintf(stderr, "commnode cleaned up and exiting\n");
 
 	return rc;
 }

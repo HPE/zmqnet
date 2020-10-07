@@ -157,8 +157,8 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
 
 	// Wait for all children to send ready over data socket
 	fprintf(stderr, "waiting for ready report\n");
-	auto [reader, responseReader, readyResponse] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
-	assert(readyResponse.isAck());
+	auto [reader, responseReader, response] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	assert(response.isReadyAck());
 }
 
 void Frontend::registerStream(StreamId const& streamId, std::string const& filterName)
@@ -174,8 +174,8 @@ void Frontend::registerStream(StreamId const& streamId, std::string const& filte
 	send_MessageBuilder(m_downstream.control_socket, builder);
 
 	// Wait for acknowledgement
-	auto [reader, responseReader, filterResponse] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
-	assert(filterResponse.isAck());
+	auto [reader, responseReader, response] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
 }
 
 std::string Frontend::runCommand(StreamId const& streamId, std::string const& command)
@@ -192,10 +192,10 @@ std::string Frontend::runCommand(StreamId const& streamId, std::string const& co
 
 	// Receive aggregated result
 	fprintf(stderr, "receiving results...\n");
-	auto [reader, responseReader, userResponse] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
-	assert(userResponse.getStreamId() == streamId);
+	auto [reader, responseReader, response] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
 
-	auto result = std::string{userResponse.getUserData().cStr()};
+	auto result = std::string{response.getUserResult().getContent().cStr()};
 	fprintf(stderr, "result: %s\n", result.c_str());
 
 	return result;
@@ -213,18 +213,22 @@ void Frontend::runExit()
 	// Send exit command
 	send_MessageBuilder(m_downstream.control_socket, builder);
 
-	// No response
+	// Wait for exit response
+	auto [reader, responseReader, response] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	assert(response.isExitAck());
+
+	fprintf(stderr, "exit completed\n");
 }
 
 Backend::Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
 	: m_upstream{ctx, upstreamControlEndpoint, upstreamDataEndpoint}
 	, m_rank{rank}
 {
-	fprintf(stderr, "rank %d: notifying parent ready from leaf node\n", m_rank);
 	// Notify parent commnode that setup is completed
+	fprintf(stderr, "rank %d: notifying parent ready from leaf node\n", m_rank);
 	auto builder = capnp::MallocMessageBuilder{};
 	auto response = builder.initRoot<NetworkResponse>();
-	response.setAck();
+	response.setReadyAck();
 
 	// Send acknowledgement
 	send_MessageBuilder(m_upstream.data_socket, builder);
@@ -240,6 +244,12 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 		// Detect exit case
 		if (command.isExit()) {
 			fprintf(stderr, "rank %d: exit\n", m_rank);
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+			response.setExitAck();
+
+			send_MessageBuilder(m_upstream.data_socket, builder);
+
 			return std::make_tuple(-1, std::string{});
 
 		// Acknowledge filter case
@@ -247,8 +257,8 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 			fprintf(stderr, "rank %d: filter response\n", m_rank);
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
-			response.setStreamId(command.getNewStream().getNewStreamId());
-			response.setAck();
+			auto streamAck = response.initStreamAck();
+			streamAck.setStreamId(command.getNewStream().getNewStreamId());
 
 			send_MessageBuilder(m_upstream.data_socket, builder);
 
@@ -269,8 +279,9 @@ void Backend::sendResult(StreamId const& streamId, std::string const& result)
 	// Notify parent commnode of result
 	auto builder = capnp::MallocMessageBuilder{};
 	auto response = builder.initRoot<NetworkResponse>();
-	response.setStreamId(streamId);
-	response.setUserData(result);
+	auto userResult = response.initUserResult();
+	userResult.setStreamId(streamId);
+	userResult.setContent(result);
 
 	// Send result
 	send_MessageBuilder(m_upstream.data_socket, builder);
