@@ -81,8 +81,6 @@ int main(int argc, char** argv)
 
 		rootnode.runExit();
 
-		sleep(30);
-
 		cti_deregisterApp(app_id);
 
 	} else if (!strcmp("leaf", argv[4])) {

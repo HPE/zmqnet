@@ -94,107 +94,12 @@ static auto parse_argv(int argc, char* const argv[])
 	return std::make_tuple(dealerEndpoint, leaf_argv);
 }
 
-auto taskSockets = std::unordered_map<StreamId, zmq::socket_t>{};
-
-static int stream_worker(zmq::context_t& ctx,
-	std::string taskEndpoint, std::string resultEndpoint,
-	StreamId streamId, int numChildren, std::string filterPath)
+// Select stream task based on incoming message's stream ID, and send message to stream task socket
+// Returns control of downstream data socket upon completion
+static zmq::socket_t distribute_stream_inputs(zmq::context_t& ctx, zmq::socket_t&& data_socket, int numChildren)
 {
-	int rc = -1;
+	auto taskSockets = std::unordered_map<StreamId, zmq::socket_t>{};
 
-	fprintf(stderr, "%d: connecting to task endpoint %s\n", streamId, taskEndpoint.c_str());
-	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-	task_socket.connect(taskEndpoint);
-
-	fprintf(stderr, "%d: connecting to task result %s\n", streamId, resultEndpoint.c_str());
-	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
-	result_socket.connect(resultEndpoint);
-
-	fprintf(stderr, "%d: opening filter at %s\n", streamId, filterPath.c_str());
-	using FilterRunType = std::string(std::vector<std::string> const&);
-	auto filterHandle = cti::Dlopen::Handle{filterPath};
-	auto filterRun = filterHandle.load<FilterRunType>("run");
-
-	// Wait until all children have created stream
-	for (int i = 0; i < numChildren; i++) {
-		fprintf(stderr, "%d: ack %d / %d\n", streamId, i, numChildren);
-		auto [reader, resultReader, response] = recv_MessageRoot<NetworkResponse>(task_socket);
-		assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
-	}
-
-	// Send acknowledgement to parent
-	{ auto builder = capnp::MallocMessageBuilder{};
-		auto response = builder.initRoot<NetworkResponse>();
-		response.initStreamAck().setStreamId(streamId);
-
-		send_MessageBuilder(result_socket, builder);
-	}
-
-	// Filter synchronization
-	auto messages = std::vector<std::string>{};
-	messages.reserve(numChildren);
-
-	while (true) {
-
-		// Receive result from task queue
-		auto [reader, resultReader, response] = recv_MessageRoot<NetworkResponse>(task_socket);
-
-		// If exit message, remove one child
-		if (response.isExitAck()) {
-			numChildren--;
-			fprintf(stderr, "%d: child exited, %d remaining\n", streamId, numChildren);
-
-		} else {
-			// Check stream ID and user result
-			assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
-
-			// Add content to messages list
-			fprintf(stderr, "content: '%s'\n", response.getUserResult().getContent().cStr());
-			messages.emplace_back(response.getUserResult().getContent());
-		}
-
-		// Aggregate when synchronization predicate satisfied, or all children exit
-		if (!messages.empty() && ((messages.size() == numChildren) || (numChildren == 0))) {
-
-			// Run user filter and clear message list
-			fprintf(stderr, "running user filter\n");
-			auto result = filterRun(std::move(messages));
-			messages.clear();
-			messages.reserve(numChildren);
-
-			// Create outgoing result
-			auto builder = capnp::MallocMessageBuilder{};
-			auto response = builder.initRoot<NetworkResponse>();
-			auto userResult = response.initUserResult();
-			userResult.setStreamId(streamId);
-			userResult.setContent(result);
-
-			// Send result
-			fprintf(stderr, "sending result: '%s'\n", result.c_str());
-			send_MessageBuilder(result_socket, builder);
-		}
-
-		// If all children exited, send exit message to result socket and exit
-		if (numChildren == 0) {
-			auto builder = capnp::MallocMessageBuilder{};
-			auto response = builder.initRoot<NetworkResponse>();
-			response.setExitAck();
-
-			send_MessageBuilder(result_socket, builder);
-			break;
-		}
-	}
-
-	rc = 0;
-
-cleanup_stream_worker:
-	fprintf(stderr, "%d: exiting\n", streamId);
-
-	return rc;
-}
-
-static zmq::socket_t result_worker(zmq::socket_t&& data_socket, int numChildren)
-{
 	while (true) {
 		// Receive next result from children
 		fprintf(stderr, "waiting for result from downstream\n");
@@ -228,12 +133,154 @@ static zmq::socket_t result_worker(zmq::socket_t&& data_socket, int numChildren)
 			? response.getStreamAck().getStreamId()
 			: response.getUserResult().getStreamId();
 
+		// Get socket for given stream ID
+		auto const idSocketPair = taskSockets.find(streamId);
+
+		// Create new stream task connection with known endpoint format, if needed
+		if (idSocketPair == taskSockets.end()) {
+			assert(response.isStreamAck());
+
+			auto task_socket = zmq::socket_t{ctx, zmq::socket_type::push};
+			auto taskEndpoint = "inproc://stream-" + std::to_string(streamId);
+			fprintf(stderr, "creating new task socket %s\n", taskEndpoint.c_str());
+			task_socket.bind(taskEndpoint);
+
+			// Relay result to new task socket
+			task_socket.send(std::move(result), zmq::send_flags::none);
+
+			// Store in stream task socket map
+			taskSockets.emplace_hint(idSocketPair, streamId, std::move(task_socket));
+
 		// Relay result to stream worker
-		taskSockets.at(streamId).send(std::move(result), zmq::send_flags::none);
+		} else {
+			idSocketPair->second.send(std::move(result), zmq::send_flags::none);
+		}
 	}
 
 	// Return control of downstream data socket to main thread
 	return std::move(data_socket);
+}
+
+// Proxy result messages produced by local stream tasks to upstream data socket
+// Returns control of upstream data socket upon completion
+static zmq::socket_t proxy_results_upstream(zmq::socket_t&& local_result_socket, zmq::socket_t&& upstream_data_socket)
+{
+	while (true) {
+		// Read next incoming local message
+		auto message = recv_message(local_result_socket);
+
+		// If exit message indicating all streams completed, return socket back to frontend for cleanup
+		if (make_MessageReader(message).getRoot<NetworkResponse>().isExitAck()) {
+			return std::move(upstream_data_socket);
+		}
+
+		// Otherwise, relay application result response upstream
+		upstream_data_socket.send(std::move(message), zmq::send_flags::none);
+	}
+}
+
+static int stream_worker(zmq::context_t& ctx,
+	std::string resultEndpoint,
+	StreamId streamId, int numChildren, std::string filterPath)
+{
+	int rc = -1;
+
+	// Open task socket to receive this stream's input from downstream data task
+	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
+	{ auto const taskEndpoint = "inproc://stream-" + std::to_string(streamId);
+		fprintf(stderr, "%d: connecting to task endpoint %s\n", streamId, taskEndpoint.c_str());
+		task_socket.connect(taskEndpoint);
+	}
+
+	// Wait until all downstream children have created this stream
+	for (int i = 0; i < numChildren; i++) {
+		fprintf(stderr, "%d: ack %d / %d\n", streamId, i, numChildren);
+		auto [reader, resultReader, response] = recv_MessageRoot<NetworkResponse>(task_socket);
+		assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
+	}
+
+	// Open the filter implementation dynamic library
+	fprintf(stderr, "%d: opening filter at %s\n", streamId, filterPath.c_str());
+	using FilterRunType = std::string(std::vector<std::string> const&);
+	auto filterHandle = cti::Dlopen::Handle{filterPath};
+	auto filterRun = filterHandle.load<FilterRunType>("run");
+
+	// Open result socket to send this stream's output to upstream proxy task
+	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
+	{ fprintf(stderr, "%d: connecting to task result %s\n", streamId, resultEndpoint.c_str());
+		result_socket.connect(resultEndpoint);
+	}
+
+	// Send stream open acknowledgement to parent
+	{ auto builder = capnp::MallocMessageBuilder{};
+		auto response = builder.initRoot<NetworkResponse>();
+		response.initStreamAck().setStreamId(streamId);
+
+		send_MessageBuilder(result_socket, builder);
+	}
+
+	// Filter synchronization, aggregate and send results when all children have reported
+	auto in_progress_results = std::vector<std::string>{};
+	in_progress_results.reserve(numChildren);
+
+	while (true) {
+
+		// Receive result from task socket
+		auto [reader, resultReader, response] = recv_MessageRoot<NetworkResponse>(task_socket);
+
+		// If exit message, remove one child
+		if (response.isExitAck()) {
+			numChildren--;
+			fprintf(stderr, "%d: child exited, %d remaining\n", streamId, numChildren);
+
+		} else {
+			// Check stream ID and user result
+			assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
+
+			// Add content to in-progress result list
+			fprintf(stderr, "content: '%s'\n", response.getUserResult().getContent().cStr());
+			in_progress_results.emplace_back(response.getUserResult().getContent());
+		}
+
+		// Aggregate when all children have reported a result, or all children exit
+		if (!in_progress_results.empty()
+		 && ((in_progress_results.size() == (size_t)numChildren) || (numChildren == 0))) {
+
+			// Run user filter and clear message list
+			fprintf(stderr, "running user filter\n");
+			auto result = filterRun(std::move(in_progress_results));
+			in_progress_results.clear();
+			in_progress_results.reserve(numChildren);
+
+			// Create outgoing result message
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+			auto userResult = response.initUserResult();
+			userResult.setStreamId(streamId);
+			userResult.setContent(result);
+
+			// Send result
+			fprintf(stderr, "sending result: '%s'\n", result.c_str());
+			send_MessageBuilder(result_socket, builder);
+		}
+
+		// If all children exited, send exit message to result socket and exit
+		if (numChildren == 0) {
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+			response.setExitAck();
+
+			send_MessageBuilder(result_socket, builder);
+			break;
+		}
+	}
+
+	rc = 0;
+
+cleanup_stream_worker:
+	fprintf(stderr, "%d: exiting\n", streamId);
+
+	return rc;
 }
 
 static auto exchangeTopologyData(zmq::context_t& ctx, std::string const& dealerEndpoint,
@@ -354,33 +401,23 @@ int main(int argc, char* const argv[])
 	}
 
 	// Create stream task work sockets
-	auto streamSockets = std::unordered_map<StreamId, zmq::socket_t>{};
 	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
 	result_socket.bind("inproc://result");
 	auto const resultEndpoint = result_socket.get(zmq::sockopt::last_endpoint);
-	auto streamWorkers = std::vector<std::future<int>>{};
+	auto streamWorkerTasks = std::vector<std::future<int>>{};
 	auto const filterBasePath = std::string{cti_be_getLibDir()};
 
+	// Receive incoming stream data messages and distribute to respective stream task
+	auto distributeStreamInputsTask = std::async(std::launch::async,
+		[](zmq::context_t& ctx, zmq::socket_t&& downstream_data_socket, int numChildren) {
+			return distribute_stream_inputs(ctx, std::move(downstream_data_socket), numChildren);
+		}, std::ref(ctx), std::move(downstream.data_socket), numChildren);
+
 	// Proxy local worker result socket to upstream socket
-	auto proxyTask = std::async(std::launch::async, [](zmq::socket_t&& local_result_socket, zmq::socket_t&& upstream_data_socket) -> zmq::socket_t {
-		while (true) {
-			// Read next incoming local message
-			auto message = recv_message(local_result_socket);
-
-			// If exit message indicating all streams completed, return socket back to frontend for cleanup
-			if (make_MessageReader(message).getRoot<NetworkResponse>().isExitAck()) {
-				return std::move(upstream_data_socket);
-			}
-
-			// Relay application result response upstream
-			upstream_data_socket.send(std::move(message), zmq::send_flags::none);
-		}
-	}, std::move(result_socket), std::move(upstream.data_socket));
-
-	// Result relay thread
-	auto resultRelayTask = std::async(std::launch::async, [](zmq::socket_t&& downstream_data_socket, int numChildren) {
-		return result_worker(std::move(downstream_data_socket), numChildren);
-	}, std::move(downstream.data_socket), numChildren);
+	auto proxyResultsUpstreamTask = std::async(std::launch::async,
+		[](zmq::socket_t&& local_result_socket, zmq::socket_t&& upstream_data_socket) {
+			return proxy_results_upstream(std::move(local_result_socket), std::move(upstream_data_socket));
+		}, std::move(result_socket), std::move(upstream.data_socket));
 
 	// Command relay loop
 
@@ -406,19 +443,11 @@ int main(int argc, char* const argv[])
 			auto const streamId = newStreamCommand.getNewStreamId();
 			auto const filterName = newStreamCommand.getFilterName();
 
-			// Create new task distribution socket
-			auto task_socket = zmq::socket_t{ctx, zmq::socket_type::push};
-			auto taskEndpoint = "inproc://stream-" + std::to_string(streamId);
-			task_socket.bind(taskEndpoint);
-			taskSockets.emplace(streamId, std::move(task_socket));
-
 			// Create new stream task worker
-			streamWorkers.emplace_back(std::async(std::launch::async, [&](std::string taskEndpoint, std::string filterName) {
-				return stream_worker(ctx,
-					std::move(taskEndpoint),
-					resultEndpoint,
-					streamId, numChildren, filterBasePath + "/" + std::move(filterName));
-			}, std::move(taskEndpoint), std::string{filterName}));
+			streamWorkerTasks.emplace_back(std::async(std::launch::async,
+				[](zmq::context_t& ctx, std::string resultEndpoint, StreamId streamId, int numChildren, std::string filterPath) {
+					return stream_worker(ctx, std::move(resultEndpoint), streamId, numChildren, std::move(filterPath));
+				}, std::ref(ctx), resultEndpoint, streamId, numChildren, filterBasePath + "/" + std::string{filterName}));
 
 		} else {
 			fprintf(stderr, "got user command\n");
@@ -439,23 +468,23 @@ cleanup_main:
 		}
 	}
 
-	// Wait on stream relay thread
-	fprintf(stderr, "waiting for result relay thread\n");
-	auto downstream_data_socket = resultRelayTask.get();
-
 	// Wait on stream worker threads
 	fprintf(stderr, "waiting for stream worker threads\n");
-	for (auto&& streamWorker : streamWorkers) {
-		auto const stream_rc = streamWorker.get();
+	for (auto&& streamWorkerTask : streamWorkerTasks) {
+		auto const stream_rc = streamWorkerTask.get();
 		if (stream_rc) {
 			fprintf(stderr, "stream worker failed with code %d\n", stream_rc);
 			rc = -1;
 		}
 	}
 
+	// Wait on stream relay thread
+	fprintf(stderr, "waiting for result relay thread\n");
+	auto downstream_data_socket = distributeStreamInputsTask.get();
+
 	// Wait for proxy task to complete and regain ownership of upstream data socket
 	fprintf(stderr, "waiting for proxy task\n");
-	auto upstream_data_socket = proxyTask.get();
+	auto upstream_data_socket = proxyResultsUpstreamTask.get();
 
 	// Notify parent that cleanup has completed
 	{ auto builder = capnp::MallocMessageBuilder{};
@@ -470,7 +499,6 @@ cleanup_main:
 	upstream_data_socket.close();
 	downstream.control_socket.close();
 	downstream_data_socket.close();
-	taskSockets.clear();
 	fprintf(stderr, "context reset\n");
 	ctx.close();
 
