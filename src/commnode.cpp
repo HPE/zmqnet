@@ -168,7 +168,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	// Wait until all downstream children have created this stream
 	for (int i = 0; i < numChildren; i++) {
 		fprintf(stderr, "%d: ack %d / %d\n", streamId, i, numChildren);
-		auto [reader, resultReader, response] = recv_MessageRoot<NetworkResponse>(task_socket);
+		auto reader = recv_MessageReader(task_socket);
+		auto response = reader.getRoot<NetworkResponse>();
 		assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
 	}
 
@@ -199,7 +200,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	while (true) {
 
 		// Receive result from task socket
-		auto [reader, resultReader, response] = recv_MessageRoot<NetworkResponse>(task_socket);
+		auto reader = recv_MessageReader(task_socket);
+		auto response = reader.getRoot<NetworkResponse>();
 
 		// If exit message, remove one child
 		if (response.isExitAck()) {
@@ -293,7 +295,8 @@ int main(int argc, char* const argv[])
 		fprintf(stderr, "registered endpoints with topology server\n");
 
 		// Receive this node's topology info from topology server
-		auto [response, responseReader, topologyResponse] = recv_MessageRoot<TopologyResponse>(request_socket, zmq::recv_flags::none);
+		auto reader = recv_MessageReader(request_socket);
+		auto topologyResponse = reader.getRoot<TopologyResponse>();
 		fprintf(stderr, "topology server reported parent %s / %s, %d children\n",
 			topologyResponse.getParentControlEndpoint().cStr(),
 			topologyResponse.getParentDataEndpoint().cStr(),
@@ -350,8 +353,9 @@ int main(int argc, char* const argv[])
 		// Wait for all children to connect and send ready
 		for (int i = 0; i < numChildren; i++) {
 			fprintf(stderr, "waiting %d / %d\n", i, numChildren);
-			auto [reader, responseReader, readyResponse] = recv_MessageRoot<NetworkResponse>(downstream.data_socket);
-			assert(readyResponse.isReadyAck());
+			auto reader = recv_MessageReader(downstream.data_socket);
+			auto response = reader.getRoot<NetworkResponse>();
+			assert(response.isReadyAck());
 		}
 	}
 

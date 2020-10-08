@@ -41,7 +41,8 @@ static void connectFanoutTopology(zmq::socket_t&& dealer_socket,
 
 	for (int seen = 0; seen < num_nodes; seen++) {
 		// Receive topology request from new node
-		{ auto [request, requestReader, topologyRequest] = recv_MessageRoot<TopologyRequest>(dealer_socket, zmq::recv_flags::none);
+		{ auto requestReader = recv_MessageReader(dealer_socket, zmq::recv_flags::none);
+			auto topologyRequest = requestReader.getRoot<TopologyRequest>();
 
 			// Register topology information
 			endpoints.emplace_back(topologyRequest.getNodeControlEndpoint().cStr(), topologyRequest.getNodeDataEndpoint().cStr());
@@ -121,7 +122,8 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
 
 	// Wait for all children to send ready over data socket
 	fprintf(stderr, "waiting for ready report\n");
-	auto [reader, responseReader, response] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	auto reader = recv_MessageReader(m_downstream.data_socket);
+	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isReadyAck());
 }
 
@@ -138,7 +140,8 @@ void Frontend::registerStream(StreamId const& streamId, std::string const& filte
 	send_MessageBuilder(m_downstream.control_socket, builder);
 
 	// Wait for acknowledgement
-	auto [reader, responseReader, response] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	auto reader = recv_MessageReader(m_downstream.data_socket);
+	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
 }
 
@@ -156,7 +159,8 @@ std::string Frontend::runCommand(StreamId const& streamId, std::string const& co
 
 	// Receive aggregated result
 	fprintf(stderr, "receiving results...\n");
-	auto [reader, responseReader, response] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	auto reader = recv_MessageReader(m_downstream.data_socket);
+	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
 
 	auto result = std::string{response.getUserResult().getContent().cStr()};
@@ -178,7 +182,8 @@ void Frontend::runExit()
 	send_MessageBuilder(m_downstream.control_socket, builder);
 
 	// Wait for exit response
-	auto [reader, responseReader, response] = recv_MessageRoot<NetworkResponse>(m_downstream.data_socket);
+	auto reader = recv_MessageReader(m_downstream.data_socket);
+	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isExitAck());
 
 	fprintf(stderr, "exit completed\n");
@@ -203,7 +208,8 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 	while (true) {
 		// Receive next network command
 		fprintf(stderr, "rank %d: waiting for next command...\n", m_rank);
-		auto [reader, commandReader, command] = recv_MessageRoot<NetworkCommand>(m_upstream.control_socket);
+		auto reader = recv_MessageReader(m_upstream.control_socket);
+		auto command = reader.getRoot<NetworkCommand>();
 
 		// Detect exit case
 		if (command.isExit()) {

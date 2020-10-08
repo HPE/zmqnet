@@ -23,21 +23,36 @@ static inline auto make_MessageReader(zmq::message_t& message)
 	auto const messageWords = message.data<capnp::word>();
 	auto const messageWordsLen = message.size() / sizeof(capnp::word);
 
-	return capnp::FlatArrayMessageReader(kj::arrayPtr(messageWords, messageWordsLen));
+	return capnp::UnalignedFlatArrayMessageReader(kj::arrayPtr(messageWords, messageWordsLen));
 }
+
+// Store required message / Reader state in custom object to avoid dropped backing storage
+// Note: Capnp Reader arenas apparently do not move correctly
+class ReaderStorage
+{
+public:
+	zmq::message_t message;
+	capnp::UnalignedFlatArrayMessageReader reader;
+
+	static auto make_Reader(zmq::message_t& message) {
+		assert(message.size() % sizeof(capnp::word) == 0);
+		auto const messageWords = message.data<capnp::word>();
+		auto const messageWordsLen = message.size() / sizeof(capnp::word);
+		auto messageArray = kj::arrayPtr(messageWords, messageWordsLen);
+		return capnp::UnalignedFlatArrayMessageReader(messageArray);
+	}
+
+	ReaderStorage(zmq::message_t&& message_)
+		: message{std::move(message_)}
+		, reader{make_Reader(message)}
+	{}
+
+	template <typename T>
+	auto getRoot() { return reader.getRoot<T>(); }
+};
 
 static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
 {
 	auto message = recv_message(socket, sockopt);
-	auto messageReader = make_MessageReader(message);
-
-	return std::make_tuple(std::move(message), std::move(messageReader));
-}
-
-template <typename RootType>
-static inline auto recv_MessageRoot(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
-{
-	auto [result, resultReader] = recv_MessageReader(socket, sockopt);
-	auto rootReader = resultReader.getRoot<RootType>();
-	return std::make_tuple(std::move(result), std::move(resultReader), rootReader);
+	return ReaderStorage{std::move(message)};
 }
