@@ -1,0 +1,13 @@
+# Copyright 2019-2020 Hewlett Packard Enterprise Development LP.
+
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: libzmqnet
+Description: libzmqnet
+Version: @PACKAGE_VERSION@
+Libs: -L${libdir} -lzmq -lzmqnet -Wl,-rpath,${libdir} -pthread -luuid
+Libs.private: -lsupc++
+Cflags: -I${includedir}
