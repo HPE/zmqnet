@@ -7,12 +7,15 @@
 #endif /* HAVE_CONFIG_H */
 
 #include <unistd.h>
+#include <stdarg.h>
 #include <wait.h>
 
 #include <cassert>
 #include <cmath>
 
 #include <filesystem>
+#include <unordered_map>
+#include <set>
 
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
@@ -23,15 +26,48 @@
 
 #include "libzmqnet.hpp"
 
+static void log(const char* format, ...)
+{
+	static const auto start_ms = get_milliseconds();
+	va_list argptr;
+	va_start(argptr, format);
+	fprintf(stderr, "[%06ld] ", get_milliseconds() - start_ms);
+	vfprintf(stderr, format, argptr);
+	va_end(argptr);
+}
+
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
 // tree by the frontend.
-static void connectFanoutTopology(zmq::socket_t&& dealer_socket,
-	std::string const& rootControlEndpoint, std::string const& rootDataEndpoint,
-	int const fanout, int const num_nodes)
+static void startFcfsTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
+	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
+	// Start topology socket to send its connection info to commnode daemon
+	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
+	dealer_socket.bind("tcp://*:*");
+	auto const dealerEndpoint = replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
+	log("topology dealer listening on %s\n", dealerEndpoint.c_str());
+
+	// Set up commnode daemon arguments with topology connection info and leaf process arguments
+	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
+		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
+
+		// Add provided leaf arguments
+		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
+			commnodeArgv.add(cti::Argv::Argument{*argptr});
+		}
+
+		// Launch commnode daemon
+		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, nullptr)) {
+			throw std::runtime_error(cti_error_str());
+		}
+	}
+
+	// Set up fanout topology and wait for all children to connect
+	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
 	auto endpoints = std::vector<std::tuple<std::string, std::string>>{
 		{rootControlEndpoint, rootDataEndpoint}
 	};
+	auto num_nodes = hostsPlacement.numHosts;
 	endpoints.reserve(num_nodes + 1);
 	auto cursor = 0;
 
@@ -53,7 +89,7 @@ static void connectFanoutTopology(zmq::socket_t&& dealer_socket,
 		levelFilled++;
 		auto const rightFill = levelCap - levelFilled;
 		auto const leftFill = (levelFilled - 1) * fanout;
-		auto const numChildren = std::min(fanout, std::max(0, remain - (rightFill + leftFill)));
+		auto const num_children = std::min(fanout, std::max(0, remain - (rightFill + leftFill)));
 
 		// Create topology response
 		{ auto builder = capnp::MallocMessageBuilder{};
@@ -62,7 +98,7 @@ static void connectFanoutTopology(zmq::socket_t&& dealer_socket,
 			auto const& [parentControlEndpoint, parentDataEndpoint] = endpoints[cursor];
 			topologyResponse.setParentControlEndpoint(parentControlEndpoint);
 			topologyResponse.setParentDataEndpoint(parentDataEndpoint);
-			topologyResponse.setNumChildren(numChildren);
+			topologyResponse.setNumChildren(num_children);
 
 			// Send topology response
 			send_MessageBuilder(dealer_socket, builder);
@@ -77,32 +113,126 @@ static void connectFanoutTopology(zmq::socket_t&& dealer_socket,
 			levelFilled = 0;
 			levelCap = (int)pow(fanout, level);
 		}
-		fprintf(stderr, "%d connected\n", seen);
+		log("%d connected\n", seen);
 	}
 }
 
-Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id, int const fanout,
-	char const* const* leaf_argv)
-	: m_downstream{ctx}
+static void startFanoutTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
+	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
-	// Fetch node layout from CTI for network topology
-	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
-		{ cti_getAppHostsPlacement(app_id)
-		, cti_destroyHostsList
-	};
+	auto const num_levels = (hostsPlacement.numHosts > 1)
+		? int{log(hostsPlacement.numHosts - 1) / log(fanout)} + 2
+		: 1;
+	log("fanout %d, %d hosts, %d levels\n", fanout, hostsPlacement.numHosts, num_levels);
 
-	// Start topology socket to send its connection info to commnode daemon
-	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
-	dealer_socket.bind("tcp://*:*");
-	auto const dealerEndpoint = replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
-	printf("topology dealer listening on %s\n", dealerEndpoint.c_str());
+	auto nodeHostnameMap = std::unordered_map<int, std::string>{};
+	auto hostnameNodeMap = std::unordered_map<std::string, int>{};
+	auto nodeParentMap = std::unordered_map<int, int>{};
+	auto nodeEndpointsMap = std::unordered_map<int, std::tuple<std::string, std::string>>{};
+	auto nodeNumChildrenMap = std::unordered_map<int, int>{};
+	auto nodeNumSubchildrenMap = std::unordered_map<int, int>{};
 
-	// Find commnode path
-	auto const commnodePath = std::string{LIBZMQNET_PREFIX} + "/libexec/commnode";
+	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
 
-	// Set up commnode daemon arguments with topology connection info and leaf process arguments
-	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
-		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
+	// Initialize tree level arrays
+	auto nodeLevels = std::vector<std::vector<int>>{};
+	nodeLevels.reserve(num_levels);
+	for (int i = 0; i < num_levels; i++) {
+		nodeLevels.emplace_back(std::vector<int>{});
+	}
+
+	// Set root node connection information
+	nodeHostnameMap[0] = hostsPlacement.hosts[0].hostname;
+	hostnameNodeMap[hostsPlacement.hosts[0].hostname] = 0;
+	nodeEndpointsMap.emplace(-1, std::make_tuple(rootControlEndpoint, rootDataEndpoint));
+	nodeParentMap[0] = -1;
+	nodeLevels[0].emplace_back(0);
+
+	// Build fanout tree
+	{ int num_nodes = hostsPlacement.numHosts;
+		int cursor = 0;
+		int level = 1;
+
+		for (int i = 1; i < num_nodes; i++) {
+			nodeHostnameMap[i] = hostsPlacement.hosts[i].hostname;
+			hostnameNodeMap[hostsPlacement.hosts[i].hostname] = i;
+
+			nodeNumChildrenMap[cursor]++;
+			nodeParentMap[i] = cursor;
+			nodeLevels[level].emplace_back(i);
+
+			// Advance to next node if parent full
+			if (nodeNumChildrenMap[cursor] == fanout) {
+				cursor++;
+			}
+			// Advance to next level if level full
+			if (nodeLevels[level].size() == (int)pow(fanout, level)) {
+				level++;
+			}
+		}
+	}
+
+	// Count total number of children in each node's subtrees
+	for (int i = num_levels - 1; i >= 0; i--) {
+		for (int j = 0; j < nodeLevels[i].size(); j++) {
+			int node = nodeLevels[i][j];
+			int parent_node = nodeParentMap[node];
+			nodeNumSubchildrenMap[parent_node] += nodeNumSubchildrenMap[node] + 1;
+		}
+	}
+
+	for (int i = 0; i < num_levels; i++) {
+		log("launch level %d\n", i);
+
+		// Create set of parent nodes for this level
+		auto parentNodes = std::set<int>{};
+		for (int j = 0; j < nodeLevels[i].size(); j++) {
+			int node = nodeLevels[i][j];
+			int parent_node = nodeParentMap[node];
+			parentNodes.emplace(parent_node);
+		}
+
+		// Map unique index back into parent node set
+		auto parentNodeIndices = std::unordered_map<int, int>{};
+		{ int parent_node_index = 0;
+			for (auto&& parent_node : parentNodes) {
+				parentNodeIndices[parent_node] = parent_node_index;
+				parent_node_index++;
+			}
+		}
+
+		// Serialize node topology data
+		auto nodeConnectionArg = std::string{};
+		for (int j = 0; j < nodeLevels[i].size(); j++) {
+			int node = nodeLevels[i][j];
+			int parent_node = nodeParentMap[node];
+
+			nodeConnectionArg += nodeHostnameMap[node]
+				+ " " + std::to_string(parentNodeIndices[parent_node])
+				+ " " + std::to_string(nodeNumChildrenMap[node])
+				+ " " + std::to_string(nodeNumSubchildrenMap[node])
+				+ ",";
+		}
+
+		// Separate topology information from connection data
+		nodeConnectionArg.back() = ';';
+
+		// Serialize the connection information for each parent node
+		for (auto&& parent_node : parentNodes) {
+			assert(nodeEndpointsMap.find(parent_node) != nodeEndpointsMap.end());
+			auto [parentControlEndpoint, parentDataEndpoint] = nodeEndpointsMap[parent_node];
+
+			nodeConnectionArg += std::move(parentControlEndpoint)
+				+ " " + std::move(parentDataEndpoint)
+				+ ",";
+		}
+
+		// Remove final separator
+		nodeConnectionArg.pop_back();
+
+		// Set up commnode daemon arguments with topology connection info and leaf process arguments
+		auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
+		commnodeArgv.add(CommnodeArgv::NodeConnectionMap, std::move(nodeConnectionArg));
 
 		// Add provided leaf arguments
 		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
@@ -113,15 +243,47 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
 		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, nullptr)) {
 			throw std::runtime_error(cti_error_str());
 		}
+
+		// Wait for incoming topology messages
+		for (int j = 0; j < nodeLevels[i].size(); j++) {
+			auto reader = recv_MessageReader(rootLink.data_socket);
+			auto response = reader.getRoot<TopologyRequest>();
+			auto const node = hostnameNodeMap[response.getNodeHostname()];
+			log("node %2d %s register %s %s\n", node, response.getNodeHostname().cStr(), response.getNodeControlEndpoint().cStr(), response.getNodeDataEndpoint().cStr());
+			nodeEndpointsMap.emplace(node, std::make_tuple(response.getNodeControlEndpoint(), response.getNodeDataEndpoint()));
+		}
+
+		manifest_id = cti_createManifest(session_id);
+	}
+}
+
+Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const session_id, int const manifest_id, int const fanout,
+	char const* const* leaf_argv)
+	: m_downstream{ctx}
+{
+	// Find commnode path
+	auto const commnodePath = std::string{LIBZMQNET_PREFIX} + "/libexec/commnode";
+
+	// Fetch node layout from CTI for network topology
+	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
+		{ cti_getAppHostsPlacement(app_id)
+		, cti_destroyHostsList
+	};
+
+	// Launch tree
+	startFanoutTree(ctx, m_downstream, app_id, session_id, manifest_id, fanout, leaf_argv, commnodePath, *hostsPlacement);
+
+	// Send leaf start command
+	log("connection completed, sending leaf start message\n");
+	{ auto builder = capnp::MallocMessageBuilder{};
+		auto command = builder.initRoot<NetworkCommand>();
+		command.setStartLeaves();
+
+		send_MessageBuilder(m_downstream.control_socket, builder);
 	}
 
-	// Set up fanout topology and wait for all children to connect
-	auto const [controlEndpoint, dataEndpoint] = formatEndpoints(m_downstream, cti_getHostname());
-	connectFanoutTopology(std::move(dealer_socket), controlEndpoint, dataEndpoint,
-		fanout, hostsPlacement->numHosts);
-
 	// Wait for all children to send ready over data socket
-	fprintf(stderr, "waiting for ready report\n");
+	log("waiting for ready report\n");
 	auto reader = recv_MessageReader(m_downstream.data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isReadyAck());
@@ -136,7 +298,7 @@ void Frontend::registerStream(StreamId const& streamId, std::string const& filte
 	filterCommand.setFilterName(filterName);
 
 	// Send filter create command
-	fprintf(stderr, "registering filter %s with id %d\n", filterName.c_str(), streamId);
+	log("registering filter %s with id %d\n", filterName.c_str(), streamId);
 	send_MessageBuilder(m_downstream.control_socket, builder);
 
 	// Wait for acknowledgement
@@ -154,24 +316,24 @@ std::string Frontend::runCommand(StreamId const& streamId, std::string const& co
 	userCommand.setContent(command);
 
 	// Send user command
-	fprintf(stderr, "user command %s on stream %d\n", command.c_str(), streamId);
+	log("user command %s on stream %d\n", command.c_str(), streamId);
 	send_MessageBuilder(m_downstream.control_socket, builder);
 
 	// Receive aggregated result
-	fprintf(stderr, "receiving results...\n");
+	log("receiving results...\n");
 	auto reader = recv_MessageReader(m_downstream.data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
 
 	auto result = std::string{response.getUserResult().getContent().cStr()};
-	fprintf(stderr, "result: %s\n", result.c_str());
+	log("result: %s\n", result.c_str());
 
 	return result;
 }
 
 void Frontend::runExit()
 {
-	fprintf(stderr, "sending exit command\n");
+	log("sending exit command\n");
 
 	// Create exit command
 	auto builder = capnp::MallocMessageBuilder{};
@@ -186,7 +348,7 @@ void Frontend::runExit()
 	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isExitAck());
 
-	fprintf(stderr, "exit completed\n");
+	log("exit completed\n");
 }
 
 Backend::Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
@@ -213,12 +375,17 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 
 		// Detect exit case
 		if (command.isExit()) {
-			fprintf(stderr, "rank %d: exit\n", m_rank);
-			auto builder = capnp::MallocMessageBuilder{};
-			auto response = builder.initRoot<NetworkResponse>();
-			response.setExitAck();
+			fprintf(stderr, "rank %d: got exit\n", m_rank);
 
-			send_MessageBuilder(m_upstream.data_socket, builder);
+			// Send exit acknowledgement to parent
+			{ auto builder = capnp::MallocMessageBuilder{};
+				auto response = builder.initRoot<NetworkResponse>();
+				response.setExitAck();
+
+				send_MessageBuilder(m_upstream.data_socket, builder);
+			}
+			m_upstream.control_socket.close();
+			m_upstream.data_socket.close();
 
 			return std::make_tuple(-1, std::string{});
 
@@ -232,6 +399,10 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 
 			send_MessageBuilder(m_upstream.data_socket, builder);
 
+			continue;
+
+		} else if (command.isStartLeaves()) {
+			fprintf(stderr, "rank %d: unexpected: startLeaves\n", m_rank);
 			continue;
 
 		// Extract stream ID and user command

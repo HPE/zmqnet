@@ -73,7 +73,7 @@ int main(int argc, char** argv)
 
 		char const* leaf_argv[] = { "topotest", "leaf", nullptr };
 
-		auto rootnode = Frontend{ctx, app_id, manifest_id, 5, leaf_argv};
+		auto rootnode = Frontend{ctx, app_id, session_id, manifest_id, 5, leaf_argv};
 		rootnode.registerStream(0, "libfilter.so");
 
 		auto const result = rootnode.runCommand(0, "send");
@@ -82,6 +82,8 @@ int main(int argc, char** argv)
 		rootnode.runExit();
 
 		cti_deregisterApp(app_id);
+
+		rc = 0;
 
 	} else if (!strcmp("leaf", argv[4])) {
 		auto const [upstreamControlEndpoint, upstreamDataEndpoint, rank,

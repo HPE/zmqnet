@@ -3,6 +3,7 @@
 struct TopologyRequest {
   nodeControlEndpoint @0 :Text;
   nodeDataEndpoint @1 :Text;
+  nodeHostname @2 :Text;
 }
 
 struct TopologyResponse {
@@ -15,6 +16,8 @@ struct TopologyResponse {
 struct NetworkCommand {
   union {
     exit @0 :Void;
+
+    startLeaves @5 :Void;
 
     newStream :group {
       newStreamId @1 :Int32;

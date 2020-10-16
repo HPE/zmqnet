@@ -22,11 +22,12 @@ struct CommnodeArgv : public cti::Argv {
 
     static constexpr Option Help  { "help",  'h' };
 
-    static constexpr Parameter DealerEndpoint { "dealer-endpoint", 'd' };
+    static constexpr Parameter DealerEndpoint    { "dealer-endpoint",     'd' };
+    static constexpr Parameter NodeConnectionMap { "node-connection-map", 'c' };
 
     static constexpr GNUOption long_options[] = {
         Help,
-        DealerEndpoint,
+        DealerEndpoint, NodeConnectionMap,
         long_options_done
     };
 };

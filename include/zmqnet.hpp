@@ -149,7 +149,7 @@ class Frontend
 public:
 	TcpDownstreamLink m_downstream;
 
-	Frontend(zmq::context_t& ctx, int const app_id, int const manifest_id,
+	Frontend(zmq::context_t& ctx, int const app_id, int const session_id, int const manifest_id,
 		int const fanout, char const* const* leaf_argv);
 
 	void registerStream(StreamId const& streamId, std::string const& filterName);

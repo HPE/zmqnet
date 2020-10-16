@@ -2,6 +2,8 @@
  * Copyright 2011-2020 Hewlett Packard Enterprise Development LP.
  */
 
+#include <sys/time.h>
+
 #include <tuple>
 
 #include <zmq.hpp>
@@ -9,6 +11,13 @@
 #include <capnp/message.h>
 #include <capnp/serialize-packed.h>
 #include "libzmqnet/NetworkSchema.capnp.h"
+
+static inline auto get_milliseconds()
+{
+	struct timeval tv{};
+	::gettimeofday(&tv, nullptr);
+	return (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000;
+}
 
 static inline void send_MessageBuilder(zmq::socket_t& socket, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
 {
