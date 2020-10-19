@@ -144,13 +144,23 @@ static auto formatEndpoints(TcpDownstreamLink const& downstream, std::string con
 
 using StreamId = int;
 
+struct Topology
+{
+	enum : int
+		{ Fcfs
+		, Layered
+	} launch;
+
+	int fanout;
+};
+
 class Frontend
 {
 public:
 	TcpDownstreamLink m_downstream;
 
-	Frontend(zmq::context_t& ctx, int const app_id, int const session_id, int const manifest_id,
-		int const fanout, char const* const* leaf_argv);
+	Frontend(zmq::context_t& ctx, int const app_id, long int const session_id, long int const manifest_id,
+		char const* const* leaf_argv, Topology const& topology);
 
 	void registerStream(StreamId const& streamId, std::string const& filterName);
 

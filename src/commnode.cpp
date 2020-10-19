@@ -39,10 +39,7 @@ static void log(const char* format, ...)
 static auto parse_argv(int argc, char* const argv[])
 {
 	auto dealerEndpoint = std::string{};
-	auto parentControlEndpoint = std::string{};
-	auto parentDataEndpoint = std::string{};
-	auto commnode_children = int{};
-	auto commnode_subchildren = int{};
+	auto nodeConnectionMap = std::string{};
 	auto leaf_argv = argv + argc;
 
 	using CA = CommnodeArgv;
@@ -60,55 +57,7 @@ static auto parse_argv(int argc, char* const argv[])
 			break;
 
 		case CA::NodeConnectionMap.val:
-			// Parse out each piece of node topology information connection information for parent nodes
-			{ auto const commnodeHostname = std::string{cti_be_getNodeHostname()};
-
-				// Index of parent node connection information
-				auto parent_node_index = int{-1};
-
-				// Separate topology from connection data
-				auto [topologyData, connectionData] = cti::split::string<2>(std::move(value), ';');
-
-				// Find topology information for this node by comparing hostnames
-				{ auto nodeTopology = std::string{};
-					auto nodeTopologyStream = std::istringstream{std::move(topologyData)};
-
-					// Read next node topology data
-					while (std::getline(nodeTopologyStream, nodeTopology, ',')) {
-
-						// Split out topology data to compare hostnames
-						auto [hostname, parentNodeIndexString, numChildrenString, numSubChildrenString]
-							= cti::split::string<4>(std::move(nodeTopology), ' ');
-						if (hostname == commnodeHostname) {
-							parent_node_index = std::stoi(parentNodeIndexString);
-							commnode_children = std::stoi(numChildrenString);
-							commnode_subchildren = std::stoi(numSubChildrenString);
-							break;
-						}
-					}
-				}
-
-				// If this commnode was not supposed to launch at this level, exit
-				if (parent_node_index < 0) {
-					break;
-				}
-
-				// Find connection information for parent node from index
-				{ auto nodeConnection = std::string{};
-					auto nodeConnectionStream = std::istringstream{std::move(connectionData)};
-
-					// Get parent node data at index
-					for (int i = 0; i <= parent_node_index; i++) {
-						if (!std::getline(nodeConnectionStream, nodeConnection, ',')) {
-							throw std::runtime_error("malformed connection map: invalid parent node index");
-						}
-					}
-
-					// Split out parent connection data
-					std::tie(parentControlEndpoint, parentDataEndpoint)
-						= cti::split::string<2>(std::move(nodeConnection), ' ');
-				}
-			}
+			nodeConnectionMap = std::move(value);
 			break;
 
 		case '?':
@@ -122,7 +71,66 @@ static auto parse_argv(int argc, char* const argv[])
 	if (leaf_argv[0] == nullptr) {
 		throw std::runtime_error("leaf binary not provided");
 	}
-	return std::make_tuple(std::move(parentControlEndpoint), std::move(parentDataEndpoint), commnode_children, commnode_subchildren, leaf_argv);
+	return std::make_tuple(std::move(dealerEndpoint), std::move(nodeConnectionMap), leaf_argv);
+}
+
+// Parse node topology and parent connection data from argument string
+static auto parseNodeConnectionMap(std::string&& nodeConnectionMap)
+{
+	auto parentControlEndpoint = std::string{};
+	auto parentDataEndpoint = std::string{};
+	auto commnode_children = int{};
+	auto commnode_subchildren = int{};
+
+	auto parent_node_index = int{-1};
+
+	// Separate topology from connection data
+	auto [topologyData, connectionData] = cti::split::string<2>(std::move(nodeConnectionMap), ';');
+
+	// Parse out each piece of node topology information connection information for parent nodes
+	{ auto nodeTopology = std::string{};
+		auto nodeTopologyStream = std::istringstream{std::move(topologyData)};
+
+		auto const commnodeHostname = std::string{cti_be_getNodeHostname()};
+
+		// Read next node topology data
+		while (std::getline(nodeTopologyStream, nodeTopology, ',')) {
+
+			// Split out topology data to compare hostnames
+			auto [hostname, parentNodeIndexString, numChildrenString, numSubChildrenString]
+				= cti::split::string<4>(std::move(nodeTopology), ' ');
+			if (hostname == commnodeHostname) {
+				parent_node_index = std::stoi(parentNodeIndexString);
+				commnode_children = std::stoi(numChildrenString);
+				commnode_subchildren = std::stoi(numSubChildrenString);
+				break;
+			}
+		}
+	}
+
+	// If this commnode was not supposed to launch at this level, exit
+	if (parent_node_index < 0) {
+		goto cleanup_parseNodeConnectionMap;
+	}
+
+	// Find connection information for parent node from index
+	{ auto nodeConnection = std::string{};
+		auto nodeConnectionStream = std::istringstream{std::move(connectionData)};
+
+		// Get parent node data at index
+		for (int i = 0; i <= parent_node_index; i++) {
+			if (!std::getline(nodeConnectionStream, nodeConnection, ',')) {
+				throw std::runtime_error("malformed connection map: invalid parent node index");
+			}
+		}
+
+		// Split out parent connection data
+		std::tie(parentControlEndpoint, parentDataEndpoint)
+			= cti::split::string<2>(std::move(nodeConnection), ' ');
+	}
+
+cleanup_parseNodeConnectionMap:
+	return std::make_tuple(std::move(parentControlEndpoint), std::move(parentDataEndpoint), commnode_children, commnode_subchildren);
 }
 
 namespace workers
@@ -323,29 +331,58 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 } // namespace workers
 
-int main(int argc, char* const argv[])
+namespace launch
 {
-	int rc = -1;
-	auto ctx = zmq::context_t{};
 
-	// Read arguments from frontend
-	auto [parentControlEndpoint, parentDataEndpoint, num_children, num_subchildren, leaf_argv] = parse_argv(argc, argv);
+static auto fcfs(zmq::context_t& ctx, UpstreamLink& upstream, TcpDownstreamLink& downstream,
+	std::string const& dealerEndpoint)
+{
+	// Format externally-accessible endpoints
+	auto const hostname = cti_be_getNodeHostname();
+	auto const [controlEndpoint, dataEndpoint] = formatEndpoints(downstream, hostname);
+	log("listening on %s / %s\n", controlEndpoint.c_str(), dataEndpoint.c_str());
 
-	// Determine if launch should continue
-	if (parentControlEndpoint.empty()) {
-		return 0;
+	// Send endpoints to topology server and receive parent's endpoints and number of network children
+	auto request_socket = zmq::socket_t{ctx, zmq::socket_type::req};
+	request_socket.connect(dealerEndpoint);
+	log("connected to topology server %s\n", dealerEndpoint.c_str());
+
+	// Create topology request message
+	{ auto builder = capnp::MallocMessageBuilder{};
+		auto topologyRequest = builder.initRoot<TopologyRequest>();
+		topologyRequest.setNodeControlEndpoint(controlEndpoint);
+		topologyRequest.setNodeDataEndpoint(dataEndpoint);
+
+		// Send this node's endpoints to topology server
+		send_MessageBuilder(request_socket, builder);
+		log("registered endpoints with topology server\n");
 	}
-	log("%d children\n", num_children);
 
-	// Track local leaf processes
-	auto localChildPids = std::vector<pid_t>{};
+	// Receive this node's topology info from topology server
+	auto reader = recv_MessageReader(request_socket);
+	auto topologyResponse = reader.getRoot<TopologyResponse>();
+	log("topology server reported parent %s / %s, %d children\n",
+		topologyResponse.getParentControlEndpoint().cStr(),
+		topologyResponse.getParentDataEndpoint().cStr(),
+		topologyResponse.getNumChildren());
 
-	// Start network connection process
+	// Apply topology information
+	int num_children = topologyResponse.getNumChildren();
 
-	// Create upstream and downstream sockets
-	auto upstream = UpstreamLink{ctx};
-	auto downstream = TcpDownstreamLink{ctx};
+	// Connect to parent's endpoints
+	auto const& parentControlEndpoint = topologyResponse.getParentControlEndpoint();
+	auto const& parentDataEndpoint = topologyResponse.getParentDataEndpoint();
+	log("connecting to parent %s / %s\n",
+		parentControlEndpoint.cStr(), parentDataEndpoint.cStr());
+	upstream.connect(parentControlEndpoint, parentDataEndpoint);
 
+	return num_children;
+}
+
+static void layered(UpstreamLink& upstream, TcpDownstreamLink& downstream,
+	std::string const& parentControlEndpoint, std::string const& parentDataEndpoint,
+	int num_subchildren)
+{
 	// Format externally-accessible endpoints
 	auto const hostname = cti_be_getNodeHostname();
 	auto const [controlEndpoint, dataEndpoint] = formatEndpoints(downstream, hostname);
@@ -383,57 +420,45 @@ int main(int argc, char* const argv[])
 		assert(command.isStartLeaves());
 		downstream.control_socket.send(std::move(message), zmq::send_flags::none);
 	}
+}
 
-#if 0
-	// Topology and child counting
-	auto num_children = int{};
-	auto localChildPids = std::vector<pid_t>{};
+} // namespace launch
+
+int main(int argc, char* const argv[])
+{
+	int rc = -1;
+	auto ctx = zmq::context_t{};
+
+	// Read arguments from frontend
+	auto [dealerEndpoint, nodeConnectionMap, leaf_argv] = parse_argv(argc, argv);
 
 	// Start network connection process
-
-	// Create upstream and downstream sockets
 	auto upstream = UpstreamLink{ctx};
 	auto downstream = TcpDownstreamLink{ctx};
+	auto num_children = int{};
 
-	// Format externally-accessible endpoints
-	auto const [controlEndpoint, dataEndpoint] = formatEndpoints(downstream, cti_be_getNodeHostname());
-	log("listening on %s / %s\n", controlEndpoint.c_str(), dataEndpoint.c_str());
+	// Use either FCFS or leveled tree launch based on arguments
+	if (!dealerEndpoint.empty()) {
 
-	// Send endpoints to topology server and receive parent's endpoints and number of network children
-	{ auto request_socket = zmq::socket_t{ctx, zmq::socket_type::req};
-		request_socket.connect(dealerEndpoint);
-		log("connected to topology server %s\n", dealerEndpoint.c_str());
+		// Run FCFS launch procedure
+		num_children = launch::fcfs(ctx, upstream, downstream, dealerEndpoint);
 
-		// Create topology request message
-		auto builder = capnp::MallocMessageBuilder{};
-		auto topologyRequest = builder.initRoot<TopologyRequest>();
-		topologyRequest.setNodeControlEndpoint(controlEndpoint);
-		topologyRequest.setNodeDataEndpoint(dataEndpoint);
+	} else {
+		// Connect using leveled tree launch
+		auto [parentControlEndpoint, parentDataEndpoint, num_children_, num_subchildren] = parseNodeConnectionMap(std::move(nodeConnectionMap));
+		num_children = num_children_;
 
-		// Send this node's endpoints to topology server
-		send_MessageBuilder(request_socket, builder);
-		log("registered endpoints with topology server\n");
+		// Determine if launch should continue
+		if (parentControlEndpoint.empty()) {
+			return 0;
+		}
 
-		// Receive this node's topology info from topology server
-		auto reader = recv_MessageReader(request_socket);
-		auto topologyResponse = reader.getRoot<TopologyResponse>();
-		log("topology server reported parent %s / %s, %d children\n",
-			topologyResponse.getParentControlEndpoint().cStr(),
-			topologyResponse.getParentDataEndpoint().cStr(),
-			topologyResponse.getnum_children());
-
-		// Apply topology information
-		num_children += topologyResponse.getnum_children();
-
-		// Connect to parent's endpoints
-		auto const& parentControlEndpoint = topologyResponse.getParentControlEndpoint();
-		auto const& parentDataEndpoint = topologyResponse.getParentDataEndpoint();
-		log("connecting to parent %s / %s\n",
-			parentControlEndpoint.cStr(), parentDataEndpoint.cStr());
-		upstream.connect(parentControlEndpoint, parentDataEndpoint);
+		// Run layered launch procedure
+		launch::layered(upstream, downstream, parentControlEndpoint, parentDataEndpoint, num_subchildren);
 	}
-#endif
-	// Start task distribution
+	log("%d network children\n", num_children);
+
+	// Start leaf process launch
 
 	// Determine number of local children, one per PE on node
 	auto const first_pe = cti_be_getNodeFirstPE();
@@ -441,7 +466,9 @@ int main(int argc, char* const argv[])
 	num_children += local_pes;
 
 	// Launch local children with provided leaf binary
+	auto localChildPids = std::vector<pid_t>{};
 	{ auto const leafPath = std::string{cti_be_getBinDir()} + "/" + leaf_argv[0];
+		auto const [controlEndpoint, dataEndpoint] = formatEndpoints(downstream, cti_be_getNodeHostname());
 		log("forking %d local leaf processes\n", local_pes);
 
 		// Prepend endpoints and rank number to provided leaf arguments

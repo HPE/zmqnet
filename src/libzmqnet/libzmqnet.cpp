@@ -117,7 +117,7 @@ static void startFcfsTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int 
 	}
 }
 
-static void startFanoutTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
+static void startLayeredTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
 	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto const num_levels = (hostsPlacement.numHosts > 1)
@@ -255,10 +255,19 @@ static void startFanoutTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, in
 
 		manifest_id = cti_createManifest(session_id);
 	}
+
+	// Send leaf start command
+	log("layered connection completed, sending leaf start message\n");
+	{ auto builder = capnp::MallocMessageBuilder{};
+		auto command = builder.initRoot<NetworkCommand>();
+		command.setStartLeaves();
+
+		send_MessageBuilder(rootLink.control_socket, builder);
+	}
 }
 
-Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const session_id, int const manifest_id, int const fanout,
-	char const* const* leaf_argv)
+Frontend::Frontend(zmq::context_t& ctx, int const app_id, long int const session_id, long int const manifest_id,
+	char const* const* leaf_argv, Topology const& topology)
 	: m_downstream{ctx}
 {
 	// Find commnode path
@@ -271,15 +280,10 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, int const session_id, 
 	};
 
 	// Launch tree
-	startFanoutTree(ctx, m_downstream, app_id, session_id, manifest_id, fanout, leaf_argv, commnodePath, *hostsPlacement);
-
-	// Send leaf start command
-	log("connection completed, sending leaf start message\n");
-	{ auto builder = capnp::MallocMessageBuilder{};
-		auto command = builder.initRoot<NetworkCommand>();
-		command.setStartLeaves();
-
-		send_MessageBuilder(m_downstream.control_socket, builder);
+	if (topology.launch == Topology::Fcfs) {
+		startFcfsTree(ctx, m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
+	} else if (topology.launch == Topology::Layered) {
+		startLayeredTree(ctx, m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	}
 
 	// Wait for all children to send ready over data socket
