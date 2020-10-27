@@ -26,16 +26,6 @@
 
 #include "libzmqnet.hpp"
 
-static void log(const char* format, ...)
-{
-	static const auto start_ms = get_milliseconds();
-	va_list argptr;
-	va_start(argptr, format);
-	fprintf(stderr, "[%06ld] ", get_milliseconds() - start_ms);
-	vfprintf(stderr, format, argptr);
-	va_end(argptr);
-}
-
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
 // tree by the frontend.
 static void startFcfsTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
@@ -121,7 +111,7 @@ static void startLayeredTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, i
 	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto const num_levels = (hostsPlacement.numHosts > 1)
-		? int{log(hostsPlacement.numHosts - 1) / log(fanout)} + 2
+		? (int)(log(hostsPlacement.numHosts - 1) / log(fanout)) + 2
 		: 1;
 	log("fanout %d, %d hosts, %d levels\n", fanout, hostsPlacement.numHosts, num_levels);
 
@@ -150,9 +140,12 @@ static void startLayeredTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, i
 
 	// Build fanout tree
 	{ int num_nodes = hostsPlacement.numHosts;
+		// First level will have `fanout` nodes and node 0 as its parent
 		int cursor = 0;
 		int level = 1;
+		size_t level_size = fanout;
 
+		// Assign parent nodes for every node ID in sequence
 		for (int i = 1; i < num_nodes; i++) {
 			nodeHostnameMap[i] = hostsPlacement.hosts[i].hostname;
 			hostnameNodeMap[hostsPlacement.hosts[i].hostname] = i;
@@ -166,15 +159,16 @@ static void startLayeredTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, i
 				cursor++;
 			}
 			// Advance to next level if level full
-			if (nodeLevels[level].size() == (int)pow(fanout, level)) {
+			if (nodeLevels[level].size() == level_size) {
 				level++;
+				level_size *= fanout;
 			}
 		}
 	}
 
 	// Count total number of children in each node's subtrees
 	for (int i = num_levels - 1; i >= 0; i--) {
-		for (int j = 0; j < nodeLevels[i].size(); j++) {
+		for (int j = 0; j < (int)nodeLevels[i].size(); j++) {
 			int node = nodeLevels[i][j];
 			int parent_node = nodeParentMap[node];
 			nodeNumSubchildrenMap[parent_node] += nodeNumSubchildrenMap[node] + 1;
@@ -186,7 +180,7 @@ static void startLayeredTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, i
 
 		// Create set of parent nodes for this level
 		auto parentNodes = std::set<int>{};
-		for (int j = 0; j < nodeLevels[i].size(); j++) {
+		for (int j = 0; j < (int)nodeLevels[i].size(); j++) {
 			int node = nodeLevels[i][j];
 			int parent_node = nodeParentMap[node];
 			parentNodes.emplace(parent_node);
@@ -202,30 +196,35 @@ static void startLayeredTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, i
 		}
 
 		// Serialize node topology data
-		auto nodeConnectionArg = std::string{};
-		for (int j = 0; j < nodeLevels[i].size(); j++) {
+		auto nodeConnectionStream = std::ostringstream{};
+		for (int j = 0; j < (int)nodeLevels[i].size(); j++) {
 			int node = nodeLevels[i][j];
 			int parent_node = nodeParentMap[node];
 
-			nodeConnectionArg += nodeHostnameMap[node]
-				+ " " + std::to_string(parentNodeIndices[parent_node])
-				+ " " + std::to_string(nodeNumChildrenMap[node])
-				+ " " + std::to_string(nodeNumSubchildrenMap[node])
-				+ ",";
+			nodeConnectionStream << nodeHostnameMap[node]
+				<< " " << parentNodeIndices[parent_node]
+				<< " " << nodeNumChildrenMap[node]
+				<< " " << nodeNumSubchildrenMap[node]
+				<< ",";
 		}
 
 		// Separate topology information from connection data
-		nodeConnectionArg.back() = ';';
+		// Replace last character "," of stream with separator ";"
+		nodeConnectionStream.seekp(-1, std::ios_base::end);
+		nodeConnectionStream << ";";
 
 		// Serialize the connection information for each parent node
 		for (auto&& parent_node : parentNodes) {
 			assert(nodeEndpointsMap.find(parent_node) != nodeEndpointsMap.end());
 			auto [parentControlEndpoint, parentDataEndpoint] = nodeEndpointsMap[parent_node];
 
-			nodeConnectionArg += std::move(parentControlEndpoint)
-				+ " " + std::move(parentDataEndpoint)
-				+ ",";
+			nodeConnectionStream << std::move(parentControlEndpoint)
+				<< " " << std::move(parentDataEndpoint)
+				<< ",";
 		}
+
+		// Create serialized string argument
+		auto nodeConnectionArg = nodeConnectionStream.str();
 
 		// Remove final separator
 		nodeConnectionArg.pop_back();
@@ -244,8 +243,9 @@ static void startLayeredTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, i
 			throw std::runtime_error(cti_error_str());
 		}
 
-		// Wait for incoming topology messages
-		for (int j = 0; j < nodeLevels[i].size(); j++) {
+		// Wait for an incoming topology message from each network child
+		log("waiting for %lu topology messages\n", nodeLevels[i].size());
+		for (int j = 0; j < (int)nodeLevels[i].size(); j++) {
 			auto reader = recv_MessageReader(rootLink.data_socket);
 			auto response = reader.getRoot<TopologyRequest>();
 			auto const node = hostnameNodeMap[response.getNodeHostname()];
@@ -270,6 +270,8 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, long int const session
 	char const* const* leaf_argv, Topology const& topology)
 	: m_downstream{ctx}
 {
+	auto const start_ms = get_milliseconds();
+
 	// Find commnode path
 	auto const commnodePath = std::string{LIBZMQNET_PREFIX} + "/libexec/commnode";
 
@@ -279,6 +281,9 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, long int const session
 		, cti_destroyHostsList
 	};
 
+	auto const startup_ms = get_milliseconds();
+	fprintf(stderr, "launch started: %5ldms\n", startup_ms - start_ms);
+
 	// Launch tree
 	if (topology.launch == Topology::Fcfs) {
 		startFcfsTree(ctx, m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
@@ -286,15 +291,23 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, long int const session
 		startLayeredTree(ctx, m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	}
 
+	auto const launch_ms = get_milliseconds();
+	fprintf(stderr, "all commnodes connected: %5ldms\n", launch_ms - startup_ms);
+
 	// Wait for all children to send ready over data socket
 	log("waiting for ready report\n");
 	auto reader = recv_MessageReader(m_downstream.data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isReadyAck());
+
+	auto const leaf_ms = get_milliseconds();
+	fprintf(stderr, "all leaves connected: %5ldms\n", leaf_ms - launch_ms);
 }
 
 void Frontend::registerStream(StreamId const& streamId, std::string const& filterName)
 {
+	auto const start_ms = get_milliseconds();
+
 	// Create filter create command message
 	auto builder = capnp::MallocMessageBuilder{};
 	auto filterCommand = builder.initRoot<NetworkCommand>().initNewStream();
@@ -309,10 +322,15 @@ void Frontend::registerStream(StreamId const& streamId, std::string const& filte
 	auto reader = recv_MessageReader(m_downstream.data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
+
+	auto const filter_ms = get_milliseconds() - start_ms;
+	fprintf(stderr, "filter registered RT: %5ldms\n", filter_ms);
 }
 
 std::string Frontend::runCommand(StreamId const& streamId, std::string const& command)
 {
+	auto const start_ms = get_milliseconds();
+
 	// Create user command
 	auto builder = capnp::MallocMessageBuilder{};
 	auto userCommand = builder.initRoot<NetworkCommand>().initUserCommand();
@@ -329,14 +347,15 @@ std::string Frontend::runCommand(StreamId const& streamId, std::string const& co
 	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
 
-	auto result = std::string{response.getUserResult().getContent().cStr()};
-	log("result: %s\n", result.c_str());
+	auto const result_ms = get_milliseconds();
+	fprintf(stderr, "result RT: %5ldms\n", result_ms - start_ms);
 
-	return result;
+	return std::string{response.getUserResult().getContent().cStr()};
 }
 
 void Frontend::runExit()
 {
+	auto const start_ms = get_milliseconds();
 	log("sending exit command\n");
 
 	// Create exit command
@@ -353,6 +372,9 @@ void Frontend::runExit()
 	assert(response.isExitAck());
 
 	log("exit completed\n");
+
+	auto const exit_ms = get_milliseconds();
+	fprintf(stderr, "exit RT: %5ldms\n", exit_ms - start_ms);
 }
 
 Backend::Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
@@ -360,7 +382,7 @@ Backend::Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint
 	, m_rank{rank}
 {
 	// Notify parent commnode that setup is completed
-	fprintf(stderr, "rank %d: notifying parent ready from leaf node\n", m_rank);
+	log("rank %d: notifying parent ready from leaf node\n", m_rank);
 	auto builder = capnp::MallocMessageBuilder{};
 	auto response = builder.initRoot<NetworkResponse>();
 	response.setReadyAck();
@@ -373,13 +395,13 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 {
 	while (true) {
 		// Receive next network command
-		fprintf(stderr, "rank %d: waiting for next command...\n", m_rank);
+		log("rank %d: waiting for next command...\n", m_rank);
 		auto reader = recv_MessageReader(m_upstream.control_socket);
 		auto command = reader.getRoot<NetworkCommand>();
 
 		// Detect exit case
 		if (command.isExit()) {
-			fprintf(stderr, "rank %d: got exit\n", m_rank);
+			log("rank %d: got exit\n", m_rank);
 
 			// Send exit acknowledgement to parent
 			{ auto builder = capnp::MallocMessageBuilder{};
@@ -395,7 +417,7 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 
 		// Acknowledge filter case
 		} else if (command.isNewStream()) {
-			fprintf(stderr, "rank %d: filter response\n", m_rank);
+			log("rank %d: filter response\n", m_rank);
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
 			auto streamAck = response.initStreamAck();
@@ -406,12 +428,12 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 			continue;
 
 		} else if (command.isStartLeaves()) {
-			fprintf(stderr, "rank %d: unexpected: startLeaves\n", m_rank);
+			log("rank %d: unexpected: startLeaves\n", m_rank);
 			continue;
 
 		// Extract stream ID and user command
 		} else {
-			fprintf(stderr, "rank %d: user command\n", m_rank);
+			log("rank %d: user command\n", m_rank);
 			assert(command.isUserCommand());
 			auto userCommand = command.getUserCommand();
 			return std::make_tuple(userCommand.getStreamId(), std::string{userCommand.getContent().cStr()});

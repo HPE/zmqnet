@@ -30,15 +30,11 @@
 #pragma once
 
 #include <sstream>
-#include <tuple>
+#include <array>
 #include <utility>
 
 namespace cti {
 
-/* split string into tuple of size determined at complie time. usage:
-    std::string s_1, ..., s_N;
-    std::tie(s_1, ..., s_N) = split::string<N>(line_to_split, delim = ' ');
-*/
 namespace split {
 
     static inline std::string removeLeadingWhitespace(const std::string& str, const std::string& whitespace = " \t") {
@@ -48,64 +44,24 @@ namespace split {
         return str.substr(startPos, endPos - startPos + 1);
         }
 
-    namespace { /* iteration tuple helpers */
-        // C++14 could use std::index_sequence...
-        template<std::size_t I = 0, typename FuncT, typename... Tp>
-        inline typename std::enable_if<I == sizeof...(Tp), void>::type
-        for_each(std::tuple<Tp...> &, FuncT) {}
-
-        template<std::size_t I = 0, typename FuncT, typename... Tp>
-        inline typename std::enable_if<I < sizeof...(Tp), void>::type
-        for_each(std::tuple<Tp...>& t, FuncT f) {
-            f(std::get<I>(t));
-            for_each<I + 1, FuncT, Tp...>(t, f);
-        }
-    };
-
-    namespace { /* type-generating tuple helpers */
-        template<typename, typename>
-        struct append_to_type_seq { };
-
-        template<typename T, typename... Ts, template<typename...> class TT>
-        struct append_to_type_seq<T, TT<Ts...>> {
-            using type = TT<Ts..., T>;
-        };
-
-        template<typename T, unsigned int N, template<typename...> class TT>
-        struct repeat {
-            using type = typename
-                append_to_type_seq<
-                    T,
-                    typename repeat<T, N-1, TT>::type
-                    >::type;
-        };
-
-        template<typename T, template<typename...> class TT>
-        struct repeat<T, 0, TT> {
-            using type = TT<>;
-        };
-    };
-
     template <std::size_t N>
-    using NStringTuple = typename repeat<std::string, N, std::tuple>::type;
+    static inline std::array<std::string, N> string(std::string const& line, char delim = ' ') {
+        auto result = std::array<std::string, N>{};
+        auto linestream = std::stringstream{line};
+        auto token = std::string{};
 
-    template <std::size_t N>
-    static inline NStringTuple<N> string(std::string const& line, char delim = ' ') {
-        NStringTuple<N> tup;
-
-        std::stringstream linestream(line);
-
-        for_each(tup, [&](std::string& str_target){
-            std::getline(linestream, str_target, delim);
-        });
-
-        std::string rest;
-        linestream >> rest;
-        if (!rest.empty()) {
-            std::get<N - 1>(tup).append(delim + rest);
+        auto cursor = std::size_t{};
+        for (cursor = 0; cursor < N - 1; cursor++) {
+            if (std::getline(linestream, token, delim)) {
+                result[cursor] = std::move(token);
+            } else {
+                break;
+            }
         }
 
-        return tup;
+        std::getline(linestream, result[cursor]);
+
+        return result;
     }
 
 } /* namespace cti::split */

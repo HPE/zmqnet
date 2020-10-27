@@ -19,6 +19,16 @@ static inline auto get_milliseconds()
 	return (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000;
 }
 
+static inline void log(const char* format, ...)
+{
+	static const auto start_ms = get_milliseconds();
+	va_list argptr;
+	va_start(argptr, format);
+	fprintf(stderr, "[%06ld] ", get_milliseconds() - start_ms);
+	vfprintf(stderr, format, argptr);
+	va_end(argptr);
+}
+
 static inline void send_MessageBuilder(zmq::socket_t& socket, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
 {
 	auto messageArray = capnp::messageToFlatArray(builder);

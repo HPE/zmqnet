@@ -25,16 +25,6 @@
 
 #include "libzmqnet/libzmqnet.hpp"
 
-static void log(const char* format, ...)
-{
-	static const auto start_ms = get_milliseconds();
-	va_list argptr;
-	va_start(argptr, format);
-	fprintf(stderr, "[%06ld] ", get_milliseconds() - start_ms);
-	vfprintf(stderr, format, argptr);
-	va_end(argptr);
-}
-
 // Parse user-provided arguments
 static auto parse_argv(int argc, char* const argv[])
 {
@@ -125,8 +115,10 @@ static auto parseNodeConnectionMap(std::string&& nodeConnectionMap)
 		}
 
 		// Split out parent connection data
-		std::tie(parentControlEndpoint, parentDataEndpoint)
+		auto [controlEndpoint, dataEndpoint]
 			= cti::split::string<2>(std::move(nodeConnection), ' ');
+		parentControlEndpoint = std::move(controlEndpoint);
+		parentDataEndpoint = std::move(dataEndpoint);
 	}
 
 cleanup_parseNodeConnectionMap:
@@ -426,6 +418,7 @@ static void layered(UpstreamLink& upstream, TcpDownstreamLink& downstream,
 
 int main(int argc, char* const argv[])
 {
+	auto const start_ms = get_milliseconds();
 	int rc = -1;
 	auto ctx = zmq::context_t{};
 
@@ -516,6 +509,7 @@ int main(int argc, char* const argv[])
 
 	// Send ready to parent
 	log("sending ready to parent\n");
+	fprintf(stderr, "%05lu: sending ready to parent\n", get_milliseconds() - start_ms);
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
 		response.setReadyAck();
@@ -633,6 +627,7 @@ cleanup_main:
 	ctx.close();
 
 	log("commnode cleaned up and exiting\n");
+	fprintf(stderr, "%05lu: exiting\n", get_milliseconds() - start_ms);
 
 	return rc;
 }
