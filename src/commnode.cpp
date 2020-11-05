@@ -30,6 +30,8 @@ static auto parse_argv(int argc, char* const argv[])
 {
 	auto dealerEndpoint = std::string{};
 	auto nodeConnectionMap = std::string{};
+	auto packed_mode = false;
+	auto packed_rank = int{-1};
 	auto leaf_argv = argv + argc;
 
 	using CA = CommnodeArgv;
@@ -42,12 +44,20 @@ static auto parse_argv(int argc, char* const argv[])
 
 		switch (c) {
 
+		case CA::Packed.val:
+			packed_mode = true;
+			break;
+
 		case CA::DealerEndpoint.val:
 			dealerEndpoint = std::move(value);
 			break;
 
 		case CA::NodeConnectionMap.val:
 			nodeConnectionMap = std::move(value);
+			break;
+
+		case CA::PackedRank.val:
+			packed_rank = std::stoi(value);
 			break;
 
 		case '?':
@@ -61,7 +71,7 @@ static auto parse_argv(int argc, char* const argv[])
 	if (leaf_argv[0] == nullptr) {
 		throw std::runtime_error("leaf binary not provided");
 	}
-	return std::make_tuple(std::move(dealerEndpoint), std::move(nodeConnectionMap), leaf_argv);
+	return std::make_tuple(std::move(dealerEndpoint), std::move(nodeConnectionMap), packed_mode, packed_rank, leaf_argv);
 }
 
 // Parse node topology and parent connection data from argument string
@@ -220,7 +230,7 @@ static zmq::socket_t proxy_results_upstream(zmq::context_t& ctx, std::string res
 
 // Process result messages; aggregate and send to local result socket
 static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
-	StreamId streamId, int num_children, std::string filterPath)
+	StreamId streamId, int num_children, std::string filterPath, std::string filterFunctionName)
 {
 	int rc = -1;
 
@@ -233,7 +243,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 	// Wait until all downstream children have created this stream
 	for (int i = 0; i < num_children; i++) {
-		log("%d: ack %d / %d\n", streamId, i, num_children);
+		log("%d: waiting for stream create ack %d / %d\n", streamId, i + 1, num_children);
 		auto reader = recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
 		assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
@@ -241,9 +251,9 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 	// Open the filter implementation dynamic library
 	log("%d: opening filter at %s\n", streamId, filterPath.c_str());
-	using FilterRunType = std::string(std::vector<std::string> const&);
+	using FilterRunType = kj::Array<kj::byte>(std::vector<kj::Array<kj::byte>> const&);
 	auto filterHandle = cti::Dlopen::Handle{filterPath};
-	auto filterRun = filterHandle.load<FilterRunType>("run");
+	auto filterRun = filterHandle.load<FilterRunType>(filterFunctionName);
 
 	// Open result socket to send this stream's output to upstream proxy task
 	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
@@ -256,16 +266,18 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 		auto response = builder.initRoot<NetworkResponse>();
 		response.initStreamAck().setStreamId(streamId);
 
+		log("%d: sending stream open acknowledgement\n");
 		send_MessageBuilder(result_socket, builder);
 	}
 
 	// Filter synchronization, aggregate and send results when all children have reported
-	auto in_progress_results = std::vector<std::string>{};
+	auto in_progress_results = std::vector<kj::Array<kj::byte>>{};
 	in_progress_results.reserve(num_children);
 
 	while (true) {
 
 		// Receive result from task socket
+		log("%d: waiting for result from task socket\n", streamId);
 		auto reader = recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
 
@@ -279,8 +291,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
 
 			// Add content to in-progress result list
-			log("content: '%s'\n", response.getUserResult().getContent().cStr());
-			in_progress_results.emplace_back(response.getUserResult().getContent());
+			log("content length: '%lu'\n", response.getUserResult().getContent().size());
+			in_progress_results.emplace_back(kj::heapArray(response.getUserResult().getContent().asBytes()));
 		}
 
 		// Aggregate when all children have reported a result, or all children exit
@@ -298,10 +310,11 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			auto response = builder.initRoot<NetworkResponse>();
 			auto userResult = response.initUserResult();
 			userResult.setStreamId(streamId);
-			userResult.setContent(result);
+			auto const result_size = result.size();
+			userResult.setContent(std::move(result));
 
 			// Send result
-			log("sending result: '%s'\n", result.c_str());
+			log("sending result size %lu\n", result_size);
 			send_MessageBuilder(result_socket, builder);
 		}
 
@@ -423,7 +436,7 @@ int main(int argc, char* const argv[])
 	auto ctx = zmq::context_t{};
 
 	// Read arguments from frontend
-	auto [dealerEndpoint, nodeConnectionMap, leaf_argv] = parse_argv(argc, argv);
+	auto [dealerEndpoint, nodeConnectionMap, packed_mode, packed_rank, leaf_argv] = parse_argv(argc, argv);
 
 	// Start network connection process
 	auto upstream = UpstreamLink{ctx};
@@ -452,17 +465,62 @@ int main(int argc, char* const argv[])
 	log("%d network children\n", num_children);
 
 	// Start leaf process launch
+	auto localChildPids = std::vector<pid_t>{};
 
 	// Determine number of local children, one per PE on node
-	auto const first_pe = cti_be_getNodeFirstPE();
-	auto const local_pes = cti_be_getNodePEs();
+	auto const first_pe = (packed_rank < 0)
+		? cti_be_getNodeFirstPE()
+		: packed_rank;
+	auto const local_pes = 1;
 	num_children += local_pes;
 
+	// If running packed mode and no rank was provided, start other packed commnodes
+	if (packed_mode && (packed_rank < 0)) {
+		auto const packed_commnodes = cti_be_getNodePEs() - 1;
+		log("forking %d local packed commnodes\n", packed_commnodes);
+
+		// Set up commnode daemon arguments with topology connection info and leaf process arguments
+		auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{argv[0]};
+		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
+		commnodeArgv.add(CommnodeArgv::Packed);
+		commnodeArgv.add(cti::Argv::Argument{"-r"});
+		commnodeArgv.add(cti::Argv::Argument{"-1"}); // Add seperately from option so it can be replaced via pointer
+
+		// Add provided leaf arguments
+		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
+			commnodeArgv.add(cti::Argv::Argument{*argptr});
+		}
+
+		// Get pointer to rank argument
+		auto commnode_argv = commnodeArgv.get();
+		auto rank_arg_ptr = (char**)&commnode_argv[4];
+
+		// Launch packed commnodes
+		for (int i = 0; i < packed_commnodes; i++) {
+			log("%d / %d\n", i + 1, packed_commnodes);
+
+			if (auto const forkedPid = fork()) {
+				// Add launched process to cleanup list
+				localChildPids.emplace_back(forkedPid);
+
+			} else {
+				// Set rank argument
+				auto const rank = first_pe + local_pes + i;
+				auto const rankString = std::to_string(rank);
+				*rank_arg_ptr = (char*)rankString.c_str();
+
+				// Exec leaf binary
+				execvp(argv[0], commnode_argv);
+				perror("execvp");
+				_exit(-1);
+			}
+		}
+	}
+
 	// Launch local children with provided leaf binary
-	auto localChildPids = std::vector<pid_t>{};
 	{ auto const leafPath = std::string{cti_be_getBinDir()} + "/" + leaf_argv[0];
 		auto const [controlEndpoint, dataEndpoint] = formatEndpoints(downstream, cti_be_getNodeHostname());
-		log("forking %d local leaf processes\n", local_pes);
+		log("forking %d local leaf processes %s\n", local_pes, leafPath.c_str());
 
 		// Prepend endpoints and rank number to provided leaf arguments
 		auto completeLeafArgv = cti::ManagedArgv
@@ -471,13 +529,15 @@ int main(int argc, char* const argv[])
 			, dataEndpoint
 			, ""
 		};
-		auto complete_leaf_argv = completeLeafArgv.get();
-		auto rank_arg_ptr = &complete_leaf_argv[3];
 
 		// Copy provided arguments
 		for (auto argptr = leaf_argv + 1; *argptr != nullptr; argptr++) {
 			completeLeafArgv.add(*argptr);
 		}
+
+		// Get pointer to rank argument
+		auto complete_leaf_argv = completeLeafArgv.get();
+		auto rank_arg_ptr = &complete_leaf_argv[3];
 
 		for (int rank = first_pe; rank < first_pe + local_pes; rank++) {
 			log("%d / %d\n", rank - first_pe + 1, local_pes);
@@ -500,7 +560,7 @@ int main(int argc, char* const argv[])
 
 		// Wait for all children to connect and send ready
 		for (int i = 0; i < num_children; i++) {
-			log("waiting %d / %d\n", i, num_children);
+			log("waiting for child %d / %d\n", i + 1, num_children);
 			auto reader = recv_MessageReader(downstream.data_socket);
 			auto response = reader.getRoot<NetworkResponse>();
 			assert(response.isReadyAck());
@@ -559,13 +619,14 @@ int main(int argc, char* const argv[])
 			log("got new stream command\n");
 			auto const newStreamCommand = command.getNewStream();
 			auto const streamId = newStreamCommand.getNewStreamId();
-			auto const filterName = newStreamCommand.getFilterName();
+			auto const filterLibraryName = newStreamCommand.getFilterLibraryName();
+			auto const filterFunctionName = newStreamCommand.getFilterFunctionName();
 
 			// Create new stream task worker
 			streamWorkerTasks.emplace_back(std::async(std::launch::async,
-				[](zmq::context_t& ctx, std::string resultEndpoint, StreamId streamId, int num_children, std::string filterPath) {
-					return workers::stream_aggregator(ctx, std::move(resultEndpoint), streamId, num_children, std::move(filterPath));
-				}, std::ref(ctx), resultEndpoint, streamId, num_children, filterBasePath + "/" + std::string{filterName}));
+				[](zmq::context_t& ctx, std::string resultEndpoint, StreamId streamId, int num_children, std::string filterPath, std::string filterFunctionName) {
+					return workers::stream_aggregator(ctx, std::move(resultEndpoint), streamId, num_children, std::move(filterPath), std::move(filterFunctionName));
+				}, std::ref(ctx), resultEndpoint, streamId, num_children, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName));
 
 		} else {
 			log("got user command\n");

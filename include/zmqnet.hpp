@@ -13,6 +13,8 @@
 
 #include <zmq.hpp>
 
+#include <kj/array.h>
+
 static inline std::string generate_uuid()
 {
 	uuid_t id;
@@ -149,6 +151,7 @@ struct Topology
 	enum : int
 		{ Fcfs
 		, Layered
+		, Packed
 	} launch;
 
 	int fanout;
@@ -162,9 +165,9 @@ public:
 	Frontend(zmq::context_t& ctx, int const app_id, long int const session_id, long int const manifest_id,
 		char const* const* leaf_argv, Topology const& topology);
 
-	void registerStream(StreamId const& streamId, std::string const& filterName);
+	void registerStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
 
-	std::string runCommand(StreamId const& streamId, std::string const& command);
+	kj::Array<kj::byte> runCommand(StreamId const& streamId, std::string const& command);
 	void runExit();
 };
 
@@ -191,6 +194,6 @@ public:
 
 	std::tuple<StreamId, std::string> nextCommand();
 
-	void sendResult(StreamId const& streamId, std::string const& result);
+	void sendResult(StreamId const& streamId, char const* result_buffer, size_t result_len);
 };
 

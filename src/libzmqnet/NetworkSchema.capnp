@@ -21,7 +21,8 @@ struct NetworkCommand {
 
     newStream :group {
       newStreamId @1 :Int32;
-      filterName @2 :Text;
+      filterLibraryName @2 :Text;
+      filterFunctionName @6 :Text;
     }
 
     userCommand :group {
@@ -42,7 +43,7 @@ struct NetworkResponse {
 
     userResult :group {
       streamId @3 :Int32;
-      content @4 :Text;
+      content @4 :Data;
     }
   }
 }
