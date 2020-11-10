@@ -174,7 +174,8 @@ public:
 class Backend
 {
 public:
-	static auto getParams(int argc, char const* const* argv)
+	template <typename CharPtr>
+	static auto getParams(int argc, CharPtr argv)
 	{
 		if (argc < 4) {
 			throw std::runtime_error("expected 3 network param arguments");
