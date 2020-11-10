@@ -13,6 +13,8 @@
 
 #include <zmq.hpp>
 
+#include <kj/array.h>
+
 static inline std::string generate_uuid()
 {
 	uuid_t id;
@@ -124,7 +126,7 @@ static inline auto recv_message(zmq::socket_t& socket, zmq::recv_flags const soc
 	}
 }
 
-static auto replace_endpoint_host(std::string endpoint, std::string const& hostname)
+static inline auto replace_endpoint_host(std::string endpoint, std::string const& hostname)
 {
 	// Extract port from generated endpoint
 	endpoint = endpoint.substr(endpoint.find("://") + 3);
@@ -134,7 +136,7 @@ static auto replace_endpoint_host(std::string endpoint, std::string const& hostn
 };
 
 // Replace the sockets' endpoints with e.g. known-accessible hostname from CTI
-static auto formatEndpoints(TcpDownstreamLink const& downstream, std::string const& hostname)
+static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::string const& hostname)
 {
 	return std::make_tuple(
 		replace_endpoint_host(downstream.controlEndpoint, hostname),
@@ -149,6 +151,7 @@ struct Topology
 	enum : int
 		{ Fcfs
 		, Layered
+		, Packed
 	} launch;
 
 	int fanout;
@@ -162,16 +165,17 @@ public:
 	Frontend(zmq::context_t& ctx, int const app_id, long int const session_id, long int const manifest_id,
 		char const* const* leaf_argv, Topology const& topology);
 
-	void registerStream(StreamId const& streamId, std::string const& filterName);
+	void registerStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
 
-	std::string runCommand(StreamId const& streamId, std::string const& command);
+	kj::Array<kj::byte> runCommand(StreamId const& streamId, std::string const& command);
 	void runExit();
 };
 
 class Backend
 {
 public:
-	static auto getParams(int argc, char const* const* argv)
+	template <typename CharPtr>
+	static auto getParams(int argc, CharPtr argv)
 	{
 		if (argc < 4) {
 			throw std::runtime_error("expected 3 network param arguments");
@@ -191,6 +195,5 @@ public:
 
 	std::tuple<StreamId, std::string> nextCommand();
 
-	void sendResult(StreamId const& streamId, std::string const& result);
+	void sendResult(StreamId const& streamId, char const* result_buffer, size_t result_len);
 };
-

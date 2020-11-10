@@ -37,6 +37,8 @@ static void startFcfsTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int 
 	auto const dealerEndpoint = replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
 	log("topology dealer listening on %s\n", dealerEndpoint.c_str());
 
+	cti_addManifestBinary(manifest_id, commnodePath.c_str());
+
 	// Set up commnode daemon arguments with topology connection info and leaf process arguments
 	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
 		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
@@ -54,10 +56,93 @@ static void startFcfsTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int 
 
 	// Set up fanout topology and wait for all children to connect
 	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
-	auto endpoints = std::vector<std::tuple<std::string, std::string>>{
+	auto endpoints = std::vector<std::tuple<std::string, std::string>> {
 		{rootControlEndpoint, rootDataEndpoint}
 	};
 	auto num_nodes = hostsPlacement.numHosts;
+	endpoints.reserve(num_nodes + 1);
+	auto cursor = 0;
+
+	int level = 0;
+	int levelFilled = 0;
+	int levelCap = 1;
+
+	log("waiting for %d nodes to connect...\n", num_nodes);
+	for (int seen = 0; seen < num_nodes; seen++) {
+		// Receive topology request from new node
+		{ auto requestReader = recv_MessageReader(dealer_socket, zmq::recv_flags::none);
+			auto topologyRequest = requestReader.getRoot<TopologyRequest>();
+
+			// Register topology information
+			endpoints.emplace_back(topologyRequest.getNodeControlEndpoint().cStr(), topologyRequest.getNodeDataEndpoint().cStr());
+		}
+
+		// Determine the number of children of current node
+		auto const remain = num_nodes - (seen + 1);
+		levelFilled++;
+		auto const rightFill = levelCap - levelFilled;
+		auto const leftFill = (levelFilled - 1) * fanout;
+		auto const num_children = std::min(fanout, std::max(0, remain - (rightFill + leftFill)));
+
+		// Create topology response
+		{ auto builder = capnp::MallocMessageBuilder{};
+			auto topologyResponse = builder.initRoot<TopologyResponse>();
+
+			auto const& [parentControlEndpoint, parentDataEndpoint] = endpoints[cursor];
+			topologyResponse.setParentControlEndpoint(parentControlEndpoint);
+			topologyResponse.setParentDataEndpoint(parentDataEndpoint);
+			topologyResponse.setNumChildren(num_children);
+
+			// Send topology response
+			send_MessageBuilder(dealer_socket, builder);
+		}
+
+		// Advance to next node
+		if (seen % fanout == 0) {
+			cursor++;
+		}
+		if (levelFilled == (int)pow(fanout, level)) {
+			level++;
+			levelFilled = 0;
+			levelCap = (int)pow(fanout, level);
+		}
+		log("%d connected\n", seen);
+	}
+}
+
+static void startPackedTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
+	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
+{
+	// Start topology socket to send its connection info to commnode daemon
+	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
+	dealer_socket.bind("tcp://*:*");
+	auto const dealerEndpoint = replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
+	log("topology dealer listening on %s\n", dealerEndpoint.c_str());
+
+	cti_addManifestBinary(manifest_id, commnodePath.c_str());
+
+	// Set up commnode daemon arguments with topology connection info and leaf process arguments
+	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
+		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
+		commnodeArgv.add(CommnodeArgv::Packed);
+
+		// Add provided leaf arguments
+		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
+			commnodeArgv.add(cti::Argv::Argument{*argptr});
+		}
+
+		// Launch commnode daemon
+		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, nullptr)) {
+			throw std::runtime_error(cti_error_str());
+		}
+	}
+
+	// Set up fanout topology and wait for all children to connect
+	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
+	auto endpoints = std::vector<std::tuple<std::string, std::string>> {
+		{rootControlEndpoint, rootDataEndpoint}
+	};
+	auto num_nodes = cti_getNumAppPEs(app_id);
 	endpoints.reserve(num_nodes + 1);
 	auto cursor = 0;
 
@@ -114,6 +199,8 @@ static void startLayeredTree(zmq::context_t& ctx, TcpDownstreamLink& rootLink, i
 		? (int)(log(hostsPlacement.numHosts - 1) / log(fanout)) + 2
 		: 1;
 	log("fanout %d, %d hosts, %d levels\n", fanout, hostsPlacement.numHosts, num_levels);
+
+	cti_addManifestBinary(manifest_id, commnodePath.c_str());
 
 	auto nodeHostnameMap = std::unordered_map<int, std::string>{};
 	auto hostnameNodeMap = std::unordered_map<std::string, int>{};
@@ -289,6 +376,8 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, long int const session
 		startFcfsTree(ctx, m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	} else if (topology.launch == Topology::Layered) {
 		startLayeredTree(ctx, m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
+	} else if (topology.launch == Topology::Packed) {
+		startPackedTree(ctx, m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	}
 
 	auto const launch_ms = get_milliseconds();
@@ -304,18 +393,19 @@ Frontend::Frontend(zmq::context_t& ctx, int const app_id, long int const session
 	fprintf(stderr, "all leaves connected: %5ldms\n", leaf_ms - launch_ms);
 }
 
-void Frontend::registerStream(StreamId const& streamId, std::string const& filterName)
+void Frontend::registerStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
 {
 	auto const start_ms = get_milliseconds();
 
 	// Create filter create command message
 	auto builder = capnp::MallocMessageBuilder{};
-	auto filterCommand = builder.initRoot<NetworkCommand>().initNewStream();
-	filterCommand.setNewStreamId(streamId);
-	filterCommand.setFilterName(filterName);
+	auto streamCommand = builder.initRoot<NetworkCommand>().initNewStream();
+	streamCommand.setNewStreamId(streamId);
+	streamCommand.setFilterLibraryName(filterLibraryName);
+	streamCommand.setFilterFunctionName(filterFunctionName);
 
 	// Send filter create command
-	log("registering filter %s with id %d\n", filterName.c_str(), streamId);
+	log("registering filter %s function %s with id %d\n", filterLibraryName.c_str(), filterFunctionName.c_str(), streamId);
 	send_MessageBuilder(m_downstream.control_socket, builder);
 
 	// Wait for acknowledgement
@@ -327,7 +417,7 @@ void Frontend::registerStream(StreamId const& streamId, std::string const& filte
 	fprintf(stderr, "filter registered RT: %5ldms\n", filter_ms);
 }
 
-std::string Frontend::runCommand(StreamId const& streamId, std::string const& command)
+kj::Array<kj::byte> Frontend::runCommand(StreamId const& streamId, std::string const& command)
 {
 	auto const start_ms = get_milliseconds();
 
@@ -350,7 +440,7 @@ std::string Frontend::runCommand(StreamId const& streamId, std::string const& co
 	auto const result_ms = get_milliseconds();
 	fprintf(stderr, "result RT: %5ldms\n", result_ms - start_ms);
 
-	return std::string{response.getUserResult().getContent().cStr()};
+	return kj::heapArray<kj::byte>(response.getUserResult().getContent().asBytes());
 }
 
 void Frontend::runExit()
@@ -441,14 +531,16 @@ std::tuple<StreamId, std::string> Backend::nextCommand()
 	}
 }
 
-void Backend::sendResult(StreamId const& streamId, std::string const& result)
+void Backend::sendResult(StreamId const& streamId, char const* result_buffer, size_t result_len)
 {
 	// Notify parent commnode of result
 	auto builder = capnp::MallocMessageBuilder{};
 	auto response = builder.initRoot<NetworkResponse>();
 	auto userResult = response.initUserResult();
 	userResult.setStreamId(streamId);
-	userResult.setContent(result);
+	if (result_len > 0) {
+		userResult.setContent(kj::ArrayPtr<kj::byte const>{(unsigned char const*)result_buffer, result_len});
+	}
 
 	// Send result
 	send_MessageBuilder(m_upstream.data_socket, builder);

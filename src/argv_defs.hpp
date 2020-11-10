@@ -20,14 +20,16 @@ struct CommnodeArgv : public cti::Argv {
     using Option    = cti::Argv::Option;
     using Parameter = cti::Argv::Parameter;
 
-    static constexpr Option Help  { "help",  'h' };
+    static constexpr Option Help   { "help",   'h' };
+    static constexpr Option Packed { "packed", 'p' };
 
     static constexpr Parameter DealerEndpoint    { "dealer-endpoint",     'd' };
     static constexpr Parameter NodeConnectionMap { "node-connection-map", 'c' };
+    static constexpr Parameter PackedRank { "packed-rank", 'r' };
 
     static constexpr GNUOption long_options[] = {
-        Help,
-        DealerEndpoint, NodeConnectionMap,
+        Help, Packed,
+        DealerEndpoint, NodeConnectionMap, PackedRank,
         long_options_done
     };
 };

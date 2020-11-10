@@ -24,7 +24,7 @@ static inline void log(const char* format, ...)
 	static const auto start_ms = get_milliseconds();
 	va_list argptr;
 	va_start(argptr, format);
-	fprintf(stderr, "[%06ld] ", get_milliseconds() - start_ms);
+	fprintf(stderr, "[%5d %6ld] ", getpid(), get_milliseconds() - start_ms);
 	vfprintf(stderr, format, argptr);
 	va_end(argptr);
 }
