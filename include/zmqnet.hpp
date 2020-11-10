@@ -126,7 +126,7 @@ static inline auto recv_message(zmq::socket_t& socket, zmq::recv_flags const soc
 	}
 }
 
-static auto replace_endpoint_host(std::string endpoint, std::string const& hostname)
+static inline auto replace_endpoint_host(std::string endpoint, std::string const& hostname)
 {
 	// Extract port from generated endpoint
 	endpoint = endpoint.substr(endpoint.find("://") + 3);
@@ -136,7 +136,7 @@ static auto replace_endpoint_host(std::string endpoint, std::string const& hostn
 };
 
 // Replace the sockets' endpoints with e.g. known-accessible hostname from CTI
-static auto formatEndpoints(TcpDownstreamLink const& downstream, std::string const& hostname)
+static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::string const& hostname)
 {
 	return std::make_tuple(
 		replace_endpoint_host(downstream.controlEndpoint, hostname),
@@ -196,4 +196,3 @@ public:
 
 	void sendResult(StreamId const& streamId, char const* result_buffer, size_t result_len);
 };
-
