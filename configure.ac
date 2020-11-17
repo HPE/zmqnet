@@ -1,9 +1,9 @@
-# Copyright 2011-2019,2020 Hewlett Packard Enterprise Development LP.
+# Copyright 2020 Hewlett Packard Enterprise Development LP.
 #
 AC_PREREQ([2.69])
 
 AC_INIT([zmqnet], m4_esyscmd([source $PWD/release_versioning; echo $major.$minor | tr -d '\n']))
-AC_COPYRIGHT([Copyright 2019-2020 Hewlett Packard Enterprise Development LP.])
+AC_COPYRIGHT([Copyright 2020 Hewlett Packard Enterprise Development LP.])
 
 AC_CONFIG_SRCDIR([src/Makefile.am])
 AC_CONFIG_MACRO_DIRS([m4])

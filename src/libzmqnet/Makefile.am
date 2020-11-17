@@ -1,4 +1,4 @@
-# Copyright 2019,2020 Hewlett Packard Enterprise Development LP.
+# Copyright 2020 Hewlett Packard Enterprise Development LP.
 
 SRC = $(top_srcdir)/src
 AM_CPPFLAGS = -I$(SRC) -I$(prefix)/include -I$(top_srcdir)/include

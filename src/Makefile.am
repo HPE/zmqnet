@@ -1,4 +1,4 @@
-# Copyright 2019,2020 Hewlett Packard Enterprise Development LP.
+# Copyright 2020 Hewlett Packard Enterprise Development LP.
 
 SUBDIRS = libzmqnet
 

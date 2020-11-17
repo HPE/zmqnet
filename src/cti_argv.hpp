@@ -1,7 +1,7 @@
 /*********************************************************************************\
  * cti_argv.hpp: Interface for handling argv.
  *
- * Copyright 2019-2020 Hewlett Packard Enterprise Development LP.
+ * Copyright 2020 Hewlett Packard Enterprise Development LP.
  ******************************************************************************/
 #pragma once
 
