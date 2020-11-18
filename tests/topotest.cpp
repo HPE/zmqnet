@@ -22,9 +22,7 @@ int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& 
 {
 	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
-	auto ctx = zmq::context_t{};
-
-	auto leafnode = Backend{ctx, upstreamControlEndpoint, upstreamDataEndpoint, rank};
+	auto leafnode = zmqnet::Backend{upstreamControlEndpoint, upstreamDataEndpoint, rank};
 
 	while (true) {
 		auto const [streamId, command] = leafnode.nextCommand();
@@ -35,7 +33,8 @@ int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& 
 		} else {
 			fprintf(stderr, "%d got command %s from stream %d\n", rank, command.c_str(), streamId);
 			assert(streamId == 0);
-			leafnode.sendResult(streamId, std::to_string(rank));
+			auto const result = std::to_string(rank);
+			leafnode.sendResult(streamId, result.c_str(), result.length() + 1);
 		}
 	}
 }
@@ -51,9 +50,9 @@ int main(int argc, char** argv)
 
 	fprintf(stderr, "mode: %s\n", argv[1]);
 
-	if (!strcmp("leaf", argv[4])) {
+	if ((argc > 4) && !strcmp("leaf", argv[4])) {
 		auto const [upstreamControlEndpoint, upstreamDataEndpoint, rank,
-			rest_argc, rest_argv] = Backend::getParams(argc, argv);
+			rest_argc, rest_argv] = zmqnet::Backend::getParams(argc, argv);
 		assert(rest_argc == argc - 3);
 		assert(!strcmp("leaf", rest_argv[1]));
 
@@ -63,14 +62,12 @@ int main(int argc, char** argv)
 
 	} else {
 
-		auto ctx = zmq::context_t{};
-
-		char const* launcher_args[(argc - 3) + 1];
-		for (int i = 0; i < argc - 3; i++) {
-			launcher_args[i] = argv[3 + i];
+		char const* launcher_args[(argc - 4) + 1];
+		for (int i = 0; i < argc - 4; i++) {
+			launcher_args[i] = argv[4 + i];
 		}
-		launcher_args[argc - 3 + 0] = "./stop";
-		launcher_args[argc - 3 + 1] = nullptr;
+		launcher_args[argc - 4 + 0] = "./stop";
+		launcher_args[argc - 4 + 1] = nullptr;
 
 		app_id = cti_launchApp(launcher_args, -1, -1, nullptr, nullptr, nullptr);
 		if (!app_id) {
@@ -84,11 +81,11 @@ int main(int argc, char** argv)
 
 		char const* leaf_argv[] = { "topotest", "leaf", nullptr };
 
-		auto topology = Topology{};
+		auto topology = zmqnet::Topology{};
 		if (!strcmp("fcfs", argv[1])) {
-			topology.launch = Topology::Fcfs;
+			topology.launch = zmqnet::Topology::Fcfs;
 		} else if (!strcmp("layered", argv[1])) {
-			topology.launch = Topology::Layered;
+			topology.launch = zmqnet::Topology::Layered;
 		} else {
 			fprintf(stderr, "bad args: ");
 			for (int i = 0; i < argc; i++) {
@@ -99,11 +96,36 @@ int main(int argc, char** argv)
 		}
 		topology.fanout = std::stoi(argv[2]);
 
-		{ auto rootnode = Frontend{ctx, app_id, session_id, manifest_id, leaf_argv, topology};
-			rootnode.registerStream(0, "libfilter.so");
+		auto const synchronousMode = !strcmp(argv[3], "sync");
+
+		if (synchronousMode) {
+			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
+			rootnode.registerStream(0, "libfilter.so", "run");
 
 			auto const result = rootnode.runCommand(0, "send");
-			fprintf(stderr, "result: '%s'\n", result.c_str());
+			fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
+
+			rootnode.runExit();
+
+		} else {
+			auto result_mutex = std::mutex{};
+			auto result_cv = std::condition_variable{};
+			auto result_received = std::atomic<bool>{false};
+
+			auto rootnode = zmqnet::AsyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
+			rootnode.registerStream(0, "libfilter.so", "run", [&result_received, &result_cv](kj::Array<kj::byte> result) {
+				fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
+
+				result_received = true;
+				result_cv.notify_one();
+			});
+
+			rootnode.sendCommand(0, "send");
+
+			{ auto result_lock = std::unique_lock<std::mutex>{result_mutex};
+				result_cv.wait(result_lock,
+					[&result_received] { return result_received.load(); });
+			}
 
 			rootnode.runExit();
 		}
