@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <stdarg.h>
+#include <unistd.h>
+#include <wait.h>
+
 #include <uuid/uuid.h>
 
 #include <vector>

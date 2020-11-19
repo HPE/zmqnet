@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2020 Hewlett Packard Enterprise Development LP.
+ * Copyright 2020 Hewlett Packard Enterprise Development LP.
  */
 
 #include <unistd.h>
