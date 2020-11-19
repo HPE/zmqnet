@@ -20,6 +20,8 @@
 
 namespace net
 {
+	struct shared_semaphore;
+
 	class TcpDownstreamLink;
 	class UpstreamLink;
 }
@@ -75,16 +77,14 @@ public:
 
 private:
 	zmq::context_t m_ctx;
-	std::unordered_map<StreamId, CallbackFunc> m_callbacks;
 	std::unordered_map<StreamId, std::future<bool>> m_callbackWorkers;
-	std::unordered_map<StreamId, zmq::socket_t> m_callbackSockets;
-	zmq::socket_t m_distributor_sync_socket;
-	std::string m_distributorSyncSocketEndpoint;
-	std::future<bool> m_callbackDistributor;
+	std::unique_ptr<net::shared_semaphore> m_stream_registering;
+	std::future<zmq::socket_t> m_callbackDistributor;
 
 public:
 	AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
 		char const* const* leaf_argv, Topology const& topology);
+	~AsyncFrontend();
 
 	void registerStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
 		CallbackFunc callback);

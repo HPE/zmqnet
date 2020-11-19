@@ -46,6 +46,26 @@ static inline void log(const char* format, ...)
 namespace net
 {
 
+// Synchronization
+
+// Cleaner to pass this object instead of three from main thread to std::async launched tasks
+struct shared_semaphore
+{
+	std::mutex m_mutex;
+	std::condition_variable m_cv;
+	std::atomic<bool> m_flag;
+
+	shared_semaphore(bool flag) : m_mutex{}, m_cv{}, m_flag{flag} {}
+
+	auto acquire_lock() { return std::unique_lock<std::mutex>{m_mutex}; }
+	bool get(std::unique_lock<std::mutex> const&) { return m_flag.load(); }
+	void set(std::unique_lock<std::mutex> const&, bool flag) { m_flag = flag; }
+	void unlock_and_notify_one(std::unique_lock<std::mutex>&& expiring_lock) { m_cv.notify_one(); }
+	void unlock_and_wait_until(std::unique_lock<std::mutex>&& lock, bool target) {
+		m_cv.wait(lock, [this, target=target] { return (m_flag.load() == target); });
+	}
+};
+
 // ZMQ and network
 
 static inline std::string generate_uuid()
