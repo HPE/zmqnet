@@ -27,7 +27,7 @@ struct NetworkCommand {
 
     userCommand :group {
       streamId @3 :Int32;
-      content @4 :Text;
+      content @4 :Data;
     }
   }
 }

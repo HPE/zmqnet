@@ -418,19 +418,18 @@ void zmqnet::Frontend::createStream(zmqnet::StreamId const& streamId, std::strin
 	net::send_MessageBuilder(m_downstream->control_socket, builder);
 }
 
-void zmqnet::Frontend::sendCommand(zmqnet::StreamId const& streamId, std::string const& command)
+void zmqnet::Frontend::sendCommand(zmqnet::StreamId const& streamId, char const* command_buffer, size_t command_len)
 {
 	// Create user command
 	auto builder = capnp::MallocMessageBuilder{};
 	auto userCommand = builder.initRoot<NetworkCommand>().initUserCommand();
 	userCommand.setStreamId(streamId);
-	userCommand.setContent(command);
+	userCommand.setContent(kj::ArrayPtr<kj::byte const>{(unsigned char const*)command_buffer, command_len});
 
 	// Send user command
-	log("user command %s on stream %d\n", command.c_str(), streamId);
+	log("user command length %zu on stream %d\n", command_len, streamId);
 	net::send_MessageBuilder(m_downstream->control_socket, builder);
 }
-
 
 void zmqnet::Frontend::sendExit()
 {
@@ -462,12 +461,12 @@ void zmqnet::SyncFrontend::registerStream(zmqnet::StreamId const& streamId, std:
 }
 
 
-zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::StreamId const& streamId, std::string const& command)
+zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::StreamId const& streamId, char const* command_buffer, size_t command_len)
 {
 	auto const start_ms = get_milliseconds();
 
 	// Send user command
-	sendCommand(streamId, command);
+	sendCommand(streamId, command_buffer, command_len);
 
 	// Receive aggregated result
 	log("receiving results...\n");

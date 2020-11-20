@@ -20,7 +20,7 @@
 namespace async
 {
 
-static bool callback_worker(zmq::context_t& ctx, zmqnet::StreamId streamId, zmqnet::AsyncFrontend::CallbackFunc&& callbackFunc)
+static bool callback_worker(zmq::context_t& ctx, zmqnet::StreamId streamId, zmqnet::CallbackFunc&& callbackFunc)
 {
 	// Open task socket to receive this stream's input from downstream data task
 	auto callback_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
@@ -52,7 +52,7 @@ static bool callback_worker(zmq::context_t& ctx, zmqnet::StreamId streamId, zmqn
 		assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
 
 		// Run user-provided callback. TODO: pass ArrayPtr instead of new heap array
-		callbackFunc(kj::heapArray(response.getUserResult().getContent().asBytes()));
+		callbackFunc(streamId, kj::heapArray(response.getUserResult().getContent().asBytes()));
 	}
 }
 
@@ -160,7 +160,7 @@ zmqnet::AsyncFrontend::~AsyncFrontend()
 }
 
 void zmqnet::AsyncFrontend::registerStream(zmqnet::StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
-	zmqnet::AsyncFrontend::CallbackFunc callbackFunc)
+	zmqnet::CallbackFunc callbackFunc)
 {
 	// Ensure stream not registered
 	if (m_callbackWorkers.find(streamId) != m_callbackWorkers.end()) {
@@ -169,7 +169,7 @@ void zmqnet::AsyncFrontend::registerStream(zmqnet::StreamId const& streamId, std
 
 	// Launch worker thread
 	m_callbackWorkers.emplace(streamId, std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmqnet::StreamId streamId, zmqnet::AsyncFrontend::CallbackFunc&& callbackFunc) {
+		[](zmq::context_t& ctx, zmqnet::StreamId streamId, zmqnet::CallbackFunc&& callbackFunc) {
 			return async::callback_worker(ctx, streamId, std::move(callbackFunc));
 		}, std::ref(m_ctx), streamId, std::move(callbackFunc)));
 
@@ -189,7 +189,7 @@ void zmqnet::AsyncFrontend::registerStream(zmqnet::StreamId const& streamId, std
 	m_stream_registering->unlock_and_wait_until(std::move(stream_lock), false);
 }
 
-void zmqnet::AsyncFrontend::sendCommand(zmqnet::StreamId const& streamId, std::string const& command)
+void zmqnet::AsyncFrontend::sendCommand(zmqnet::StreamId const& streamId, char const* command_buffer, size_t command_len)
 {
 	// Ensure stream registered
 	if (m_callbackWorkers.find(streamId) == m_callbackWorkers.end()) {
@@ -197,7 +197,7 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::StreamId const& streamId, std::s
 	}
 
 	// Send user command
-	Frontend::sendCommand(streamId, command);
+	Frontend::sendCommand(streamId, command_buffer, command_len);
 }
 
 void zmqnet::AsyncFrontend::runExit()

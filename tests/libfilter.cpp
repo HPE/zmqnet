@@ -11,7 +11,7 @@
 
 extern "C" {
 
-zmqnet::ByteArray run(std::vector<zmqnet::ByteArray> const& inputs)
+zmqnet::ByteArray run(zmqnet::StreamId const& streamId, std::vector<zmqnet::ByteArray> const& inputs)
 {
 	auto result = std::string{"{ "};
 	for (auto&& input : inputs) {
@@ -21,7 +21,7 @@ zmqnet::ByteArray run(std::vector<zmqnet::ByteArray> const& inputs)
 	}
 	result += "}";
 
-	return kj::heapArray((unsigned char const*)result.c_str(), result.length() + 1);
+	return zmqnet::make_ByteArray(result.c_str(), result.length() + 1);
 }
 
 }

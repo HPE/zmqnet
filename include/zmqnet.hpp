@@ -31,6 +31,12 @@ namespace zmqnet
 
 using StreamId = int;
 using ByteArray = kj::Array<kj::byte>;
+using CallbackFunc = std::function<void(StreamId const&, ByteArray)>;
+
+static inline auto make_ByteArray(char const* buffer, size_t buffer_len)
+{
+	return kj::heapArray((unsigned char const*)buffer, buffer_len);
+}
 
 struct Topology
 {
@@ -56,7 +62,7 @@ public:
 
 protected:
 	void createStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
-	void sendCommand(StreamId const& streamId, std::string const& command);
+	void sendCommand(StreamId const& streamId, char const* command_buffer, size_t command_len);
 	void sendExit();
 };
 
@@ -66,15 +72,12 @@ public:
 	using Frontend::Frontend;
 
 	void registerStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
-	ByteArray runCommand(StreamId const& streamId, std::string const& command);
+	ByteArray runCommand(StreamId const& streamId, char const* command_buffer, size_t command_len);
 	void runExit();
 };
 
 class AsyncFrontend : public Frontend
 {
-public:
-	using CallbackFunc = std::function<void(ByteArray)>;
-
 private:
 	zmq::context_t m_ctx;
 	std::unordered_map<StreamId, std::future<bool>> m_callbackWorkers;
@@ -87,8 +90,8 @@ public:
 	~AsyncFrontend();
 
 	void registerStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
-		CallbackFunc callback);
-	void sendCommand(StreamId const& streamId, std::string const& command);
+		CallbackFunc callbackFunc);
+	void sendCommand(StreamId const& streamId, char const* command_buffer, size_t command_len);
 	void runExit();
 };
 
@@ -109,16 +112,43 @@ public:
 			argv + 3);
 	}
 
+protected:
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::UpstreamLink> m_upstream;
 	int m_rank;
 
+	void notifyReady();
+
+public:
 	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
 	~Backend();
 
-	std::tuple<StreamId, std::string> nextCommand();
-
 	void sendResult(StreamId const& streamId, char const* result_buffer, size_t result_len);
+};
+
+class SyncBackend : public Backend
+{
+public:
+	SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
+	std::tuple<StreamId, ByteArray> nextCommand();
+};
+
+
+class AsyncBackend : public Backend
+{
+private:
+	zmq::context_t m_ctx;
+	std::unordered_map<StreamId, std::future<bool>> m_callbackWorkers;
+	std::unique_ptr<net::shared_semaphore> m_exiting;
+	std::future<zmq::socket_t> m_callbackDistributor;
+
+public:
+	AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
+	~AsyncBackend();
+
+	void registerCallback(StreamId const& streamId, CallbackFunc callbackFunc);
+	using Backend::notifyReady;
+	void waitForExit();
 };
 
 } // zmqnet
