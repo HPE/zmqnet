@@ -1,16 +1,34 @@
 /*
- * Copyright 2011-2020 Hewlett Packard Enterprise Development LP.
+ * Copyright 2020 Hewlett Packard Enterprise Development LP.
  */
+
+#pragma once
+
+#include <stdarg.h>
+#include <unistd.h>
+#include <wait.h>
+
+#include <uuid/uuid.h>
+
+#include <vector>
+#include <string>
+#include <tuple>
+
+// Logging
 
 #include <sys/time.h>
 
-#include <tuple>
+// ZMQ and network
 
 #include <zmq.hpp>
+
+// Capnp and application protocol
 
 #include <capnp/message.h>
 #include <capnp/serialize-packed.h>
 #include "libzmqnet/NetworkSchema.capnp.h"
+
+// Logging
 
 static inline auto get_milliseconds()
 {
@@ -28,6 +46,162 @@ static inline void log(const char* format, ...)
 	vfprintf(stderr, format, argptr);
 	va_end(argptr);
 }
+
+namespace net
+{
+
+// Synchronization
+
+// Cleaner to pass this object instead of three from main thread to std::async launched tasks
+struct shared_semaphore
+{
+	std::mutex m_mutex;
+	std::condition_variable m_cv;
+	std::atomic<bool> m_flag;
+
+	shared_semaphore(bool flag) : m_mutex{}, m_cv{}, m_flag{flag} {}
+
+	auto acquire_lock() { return std::unique_lock<std::mutex>{m_mutex}; }
+	bool get(std::unique_lock<std::mutex> const&) { return m_flag.load(); }
+	void set(std::unique_lock<std::mutex> const&, bool flag) { m_flag = flag; }
+	void unlock_and_notify_one(std::unique_lock<std::mutex>&& expiring_lock) { m_cv.notify_one(); }
+	void unlock_and_wait_until(std::unique_lock<std::mutex>&& lock, bool target) {
+		m_cv.wait(lock, [this, target=target] { return (m_flag.load() == target); });
+	}
+};
+
+// ZMQ and network
+
+static inline std::string generate_uuid()
+{
+	uuid_t id;
+	uuid_generate(id);
+
+	char uuid_str[37];
+	uuid_unparse(id, uuid_str);
+
+	return std::string{uuid_str};
+}
+
+class UpstreamLink
+{
+public:
+	zmq::socket_t control_socket, data_socket;
+
+	void connect(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
+	{
+		// Connect to upstream sockets
+		control_socket.connect(upstreamControlEndpoint);
+		data_socket.connect(upstreamDataEndpoint);
+
+		// Subscribe to all topics
+		control_socket.set(zmq::sockopt::subscribe, "");
+	}
+
+	UpstreamLink(zmq::context_t& ctx)
+		: control_socket{ctx, zmq::socket_type::sub}
+		, data_socket{ctx, zmq::socket_type::push}
+	{}
+
+	UpstreamLink(zmq::context_t& ctx,
+		std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
+		: UpstreamLink{ctx}
+	{
+		connect(upstreamControlEndpoint, upstreamDataEndpoint);
+	}
+};
+
+class DownstreamLink
+{
+public:
+	std::string controlEndpoint;
+	std::string dataEndpoint;
+
+	zmq::socket_t control_socket, data_socket;
+
+	DownstreamLink(zmq::context_t& ctx,
+		std::string const& controlEndpoint_, std::string const& dataEndpoint_)
+		: control_socket{ctx, zmq::socket_type::pub}
+		, data_socket{ctx, zmq::socket_type::pull}
+	{
+		// Bind to specified endpoints
+		control_socket.bind(controlEndpoint_);
+		data_socket.bind(dataEndpoint_);
+
+		// Set real endpoint values
+		controlEndpoint = control_socket.get(zmq::sockopt::last_endpoint);
+		dataEndpoint = data_socket.get(zmq::sockopt::last_endpoint);
+	}
+};
+
+class InprocDownstreamLink : public DownstreamLink
+{
+public:
+	InprocDownstreamLink(zmq::context_t& ctx)
+		: DownstreamLink
+			{ ctx
+			, "inproc://" + generate_uuid() // control endpoint
+			, "inproc://" + generate_uuid() // data endpoint
+		}
+	{}
+};
+
+class IpcDownstreamLink : public DownstreamLink
+{
+public:
+	IpcDownstreamLink(zmq::context_t& ctx)
+		: DownstreamLink
+			{ ctx
+			, "ipc://ipc-" + generate_uuid() // control endpoint
+			, "ipc://ipc-" + generate_uuid() // data endpoint
+		}
+	{}
+};
+
+class TcpDownstreamLink : public DownstreamLink
+{
+public:
+	TcpDownstreamLink(zmq::context_t& ctx)
+		: DownstreamLink
+			{ ctx
+			, "tcp://*:*" // control endpoint
+			, "tcp://*:*" // data endpoint
+		}
+	{}
+};
+
+static inline auto recv_message(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
+{
+	while (true) {
+		auto received_result = zmq::message_t{};
+		auto maybe_bytes = socket.recv(received_result, sockopt);
+		if (!maybe_bytes) {
+			continue;
+		}
+
+		return received_result;
+	}
+}
+
+static inline auto replace_endpoint_host(std::string endpoint, std::string const& hostname)
+{
+	// Extract port from generated endpoint
+	endpoint = endpoint.substr(endpoint.find("://") + 3);
+	endpoint = endpoint.substr(endpoint.find(":") + 1);
+
+	return "tcp://" + hostname + ":" + std::move(endpoint);
+};
+
+// Replace the sockets' endpoints with e.g. known-accessible hostname from CTI
+static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::string const& hostname)
+{
+	return std::make_tuple(
+		replace_endpoint_host(downstream.controlEndpoint, hostname),
+		replace_endpoint_host(downstream.dataEndpoint,    hostname)
+	);
+}
+
+// Capnp and application protocol
 
 static inline void send_MessageBuilder(zmq::socket_t& socket, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
 {
@@ -72,6 +246,8 @@ public:
 
 static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
 {
-	auto message = recv_message(socket, sockopt);
+	auto message = net::recv_message(socket, sockopt);
 	return ReaderStorage{std::move(message)};
 }
+
+} // net

@@ -10,141 +10,27 @@
 #include <string>
 #include <unordered_map>
 #include <future>
+#include <memory>
 
 #include <zmq.hpp>
 
 #include <kj/array.h>
 
-static inline std::string generate_uuid()
+// Forward-declares
+
+namespace net
 {
-	uuid_t id;
-	uuid_generate(id);
+	struct shared_semaphore;
 
-	char uuid_str[37];
-	uuid_unparse(id, uuid_str);
-
-	return std::string{uuid_str};
+	class TcpDownstreamLink;
+	class UpstreamLink;
 }
 
-class UpstreamLink
+namespace zmqnet
 {
-public:
-	zmq::socket_t control_socket, data_socket;
-
-	void connect(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
-	{
-		// Connect to upstream sockets
-		control_socket.connect(upstreamControlEndpoint);
-		data_socket.connect(upstreamDataEndpoint);
-
-		// Subscribe to all topics
-		control_socket.set(zmq::sockopt::subscribe, "");
-	}
-
-	UpstreamLink(zmq::context_t& ctx)
-		: control_socket{ctx, zmq::socket_type::sub}
-		, data_socket{ctx, zmq::socket_type::push}
-	{}
-
-	UpstreamLink(zmq::context_t& ctx,
-		std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
-		: UpstreamLink{ctx}
-	{
-		connect(upstreamControlEndpoint, upstreamDataEndpoint);
-	}
-};
-
-class DownstreamLink
-{
-public:
-	std::string controlEndpoint;
-	std::string dataEndpoint;
-
-	zmq::socket_t control_socket, data_socket;
-
-	DownstreamLink(zmq::context_t& ctx,
-		std::string const& controlEndpoint_, std::string const& dataEndpoint_)
-		: control_socket{ctx, zmq::socket_type::pub}
-		, data_socket{ctx, zmq::socket_type::pull}
-	{
-		// Bind to specified endpoints
-		control_socket.bind(controlEndpoint_);
-		data_socket.bind(dataEndpoint_);
-
-		// Set real endpoint values
-		controlEndpoint = control_socket.get(zmq::sockopt::last_endpoint);
-		dataEndpoint = data_socket.get(zmq::sockopt::last_endpoint);
-	}
-};
-
-class InprocDownstreamLink : public DownstreamLink
-{
-public:
-	InprocDownstreamLink(zmq::context_t& ctx)
-		: DownstreamLink
-			{ ctx
-			, "inproc://" + generate_uuid() // control endpoint
-			, "inproc://" + generate_uuid() // data endpoint
-		}
-	{}
-};
-
-class IpcDownstreamLink : public DownstreamLink
-{
-public:
-	IpcDownstreamLink(zmq::context_t& ctx)
-		: DownstreamLink
-			{ ctx
-			, "ipc://ipc-" + generate_uuid() // control endpoint
-			, "ipc://ipc-" + generate_uuid() // data endpoint
-		}
-	{}
-};
-
-class TcpDownstreamLink : public DownstreamLink
-{
-public:
-	TcpDownstreamLink(zmq::context_t& ctx)
-		: DownstreamLink
-			{ ctx
-			, "tcp://*:*" // control endpoint
-			, "tcp://*:*" // data endpoint
-		}
-	{}
-};
-
-static inline auto recv_message(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
-{
-	while (true) {
-		auto received_result = zmq::message_t{};
-		auto maybe_bytes = socket.recv(received_result, sockopt);
-		if (!maybe_bytes) {
-			continue;
-		}
-
-		return received_result;
-	}
-}
-
-static inline auto replace_endpoint_host(std::string endpoint, std::string const& hostname)
-{
-	// Extract port from generated endpoint
-	endpoint = endpoint.substr(endpoint.find("://") + 3);
-	endpoint = endpoint.substr(endpoint.find(":") + 1);
-
-	return "tcp://" + hostname + ":" + std::move(endpoint);
-};
-
-// Replace the sockets' endpoints with e.g. known-accessible hostname from CTI
-static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::string const& hostname)
-{
-	return std::make_tuple(
-		replace_endpoint_host(downstream.controlEndpoint, hostname),
-		replace_endpoint_host(downstream.dataEndpoint,    hostname)
-	);
-}
 
 using StreamId = int;
+using ByteArray = kj::Array<kj::byte>;
 
 struct Topology
 {
@@ -159,15 +45,50 @@ struct Topology
 
 class Frontend
 {
-public:
-	TcpDownstreamLink m_downstream;
+protected:
+	zmq::context_t m_ctx;
+	std::unique_ptr<net::TcpDownstreamLink> m_downstream;
 
-	Frontend(zmq::context_t& ctx, int const app_id, long int const session_id, long int const manifest_id,
+public:
+	Frontend(int const app_id, long int const session_id, long int const manifest_id,
 		char const* const* leaf_argv, Topology const& topology);
+	~Frontend();
+
+protected:
+	void createStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
+	void sendCommand(StreamId const& streamId, std::string const& command);
+	void sendExit();
+};
+
+class SyncFrontend : public Frontend
+{
+public:
+	using Frontend::Frontend;
 
 	void registerStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
+	ByteArray runCommand(StreamId const& streamId, std::string const& command);
+	void runExit();
+};
 
-	kj::Array<kj::byte> runCommand(StreamId const& streamId, std::string const& command);
+class AsyncFrontend : public Frontend
+{
+public:
+	using CallbackFunc = std::function<void(ByteArray)>;
+
+private:
+	zmq::context_t m_ctx;
+	std::unordered_map<StreamId, std::future<bool>> m_callbackWorkers;
+	std::unique_ptr<net::shared_semaphore> m_stream_registering;
+	std::future<zmq::socket_t> m_callbackDistributor;
+
+public:
+	AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
+		char const* const* leaf_argv, Topology const& topology);
+	~AsyncFrontend();
+
+	void registerStream(StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
+		CallbackFunc callback);
+	void sendCommand(StreamId const& streamId, std::string const& command);
 	void runExit();
 };
 
@@ -188,12 +109,16 @@ public:
 			argv + 3);
 	}
 
-	UpstreamLink m_upstream;
+	zmq::context_t m_ctx;
+	std::unique_ptr<net::UpstreamLink> m_upstream;
 	int m_rank;
 
-	Backend(zmq::context_t& ctx, std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
+	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
+	~Backend();
 
 	std::tuple<StreamId, std::string> nextCommand();
 
 	void sendResult(StreamId const& streamId, char const* result_buffer, size_t result_len);
 };
+
+} // zmqnet

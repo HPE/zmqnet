@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2020 Hewlett Packard Enterprise Development LP.
+ * Copyright 2020 Hewlett Packard Enterprise Development LP.
  */
 
 #include <unistd.h>
@@ -142,13 +142,13 @@ namespace workers
 // Returns control of downstream data socket upon completion
 static zmq::socket_t distribute_stream_inputs(zmq::context_t& ctx, zmq::socket_t&& data_socket, int num_children)
 {
-	auto taskSockets = std::unordered_map<StreamId, zmq::socket_t>{};
+	auto taskSockets = std::unordered_map<zmqnet::StreamId, zmq::socket_t>{};
 
 	while (true) {
 		// Receive next result from children
 		log("waiting for result from downstream\n");
-		auto result = recv_message(data_socket);
-		auto resultReader = make_MessageReader(result);
+		auto result = net::recv_message(data_socket);
+		auto resultReader = net::make_MessageReader(result);
 		auto response = resultReader.getRoot<NetworkResponse>();
 
 		// If child exited, forward exit message to every rank and continue
@@ -216,10 +216,10 @@ static zmq::socket_t proxy_results_upstream(zmq::context_t& ctx, std::string res
 
 	while (true) {
 		// Read next incoming local message
-		auto message = recv_message(result_socket);
+		auto message = net::recv_message(result_socket);
 
 		// If exit message indicating all streams completed, return socket back to frontend for cleanup
-		if (make_MessageReader(message).getRoot<NetworkResponse>().isExitAck()) {
+		if (net::make_MessageReader(message).getRoot<NetworkResponse>().isExitAck()) {
 			return std::move(upstream_data_socket);
 		}
 
@@ -230,7 +230,7 @@ static zmq::socket_t proxy_results_upstream(zmq::context_t& ctx, std::string res
 
 // Process result messages; aggregate and send to local result socket
 static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
-	StreamId streamId, int num_children, std::string filterPath, std::string filterFunctionName)
+	zmqnet::StreamId streamId, int num_children, std::string filterPath, std::string filterFunctionName)
 {
 	int rc = -1;
 
@@ -244,14 +244,14 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	// Wait until all downstream children have created this stream
 	for (int i = 0; i < num_children; i++) {
 		log("%d: waiting for stream create ack %d / %d\n", streamId, i + 1, num_children);
-		auto reader = recv_MessageReader(task_socket);
+		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
 		assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
 	}
 
 	// Open the filter implementation dynamic library
 	log("%d: opening filter at %s\n", streamId, filterPath.c_str());
-	using FilterRunType = kj::Array<kj::byte>(std::vector<kj::Array<kj::byte>> const&);
+	using FilterRunType = zmqnet::ByteArray(std::vector<zmqnet::ByteArray> const&);
 	auto filterHandle = cti::Dlopen::Handle{filterPath};
 	auto filterRun = filterHandle.load<FilterRunType>(filterFunctionName);
 
@@ -267,18 +267,18 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 		response.initStreamAck().setStreamId(streamId);
 
 		log("%d: sending stream open acknowledgement\n");
-		send_MessageBuilder(result_socket, builder);
+		net::send_MessageBuilder(result_socket, builder);
 	}
 
 	// Filter synchronization, aggregate and send results when all children have reported
-	auto in_progress_results = std::vector<kj::Array<kj::byte>>{};
+	auto in_progress_results = std::vector<zmqnet::ByteArray>{};
 	in_progress_results.reserve(num_children);
 
 	while (true) {
 
 		// Receive result from task socket
 		log("%d: waiting for result from task socket\n", streamId);
-		auto reader = recv_MessageReader(task_socket);
+		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
 
 		// If exit message, remove one child
@@ -315,7 +315,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 			// Send result
 			log("sending result size %lu\n", result_size);
-			send_MessageBuilder(result_socket, builder);
+			net::send_MessageBuilder(result_socket, builder);
 		}
 
 		// If all children exited, send exit message to result socket and exit
@@ -324,7 +324,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			auto response = builder.initRoot<NetworkResponse>();
 			response.setExitAck();
 
-			send_MessageBuilder(result_socket, builder);
+			net::send_MessageBuilder(result_socket, builder);
 			break;
 		}
 	}
@@ -339,7 +339,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 namespace launch
 {
 
-static auto fcfs(zmq::context_t& ctx, UpstreamLink& upstream, TcpDownstreamLink& downstream,
+static auto fcfs(zmq::context_t& ctx, net::UpstreamLink& upstream, net::TcpDownstreamLink& downstream,
 	std::string const& dealerEndpoint)
 {
 	// Format externally-accessible endpoints
@@ -359,12 +359,12 @@ static auto fcfs(zmq::context_t& ctx, UpstreamLink& upstream, TcpDownstreamLink&
 		topologyRequest.setNodeDataEndpoint(dataEndpoint);
 
 		// Send this node's endpoints to topology server
-		send_MessageBuilder(request_socket, builder);
+		net::send_MessageBuilder(request_socket, builder);
 		log("registered endpoints with topology server\n");
 	}
 
 	// Receive this node's topology info from topology server
-	auto reader = recv_MessageReader(request_socket);
+	auto reader = net::recv_MessageReader(request_socket);
 	auto topologyResponse = reader.getRoot<TopologyResponse>();
 	log("topology server reported parent %s / %s, %d children\n",
 		topologyResponse.getParentControlEndpoint().cStr(),
@@ -384,7 +384,7 @@ static auto fcfs(zmq::context_t& ctx, UpstreamLink& upstream, TcpDownstreamLink&
 	return num_children;
 }
 
-static void layered(UpstreamLink& upstream, TcpDownstreamLink& downstream,
+static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstream,
 	std::string const& parentControlEndpoint, std::string const& parentDataEndpoint,
 	int num_subchildren)
 {
@@ -406,21 +406,21 @@ static void layered(UpstreamLink& upstream, TcpDownstreamLink& downstream,
 		topologyRequest.setNodeHostname(hostname);
 
 		// Send this node's endpoints to topology server
-		send_MessageBuilder(upstream.data_socket, builder);
+		net::send_MessageBuilder(upstream.data_socket, builder);
 	}
 	log("registered with frontend. relaying child messages\n");
 
 	// Receive and relay all future levels of connection messages
 	for (int i = 0; i < num_subchildren; i++) {
-		auto message = recv_message(downstream.data_socket);
+		auto message = net::recv_message(downstream.data_socket);
 		log("subchild %d/%d connection\n", i + 1, num_subchildren);
 		upstream.data_socket.send(std::move(message), zmq::send_flags::none);
 	}
 
 	// Wait for leaf start command from frontend and relay
 	log("children launched, waiting for rest of network to launch\n");
-	{ auto message = recv_message(upstream.control_socket);
-		auto reader = make_MessageReader(message);
+	{ auto message = net::recv_message(upstream.control_socket);
+		auto reader = net::make_MessageReader(message);
 		auto command = reader.getRoot<NetworkCommand>();
 		assert(command.isStartLeaves());
 		downstream.control_socket.send(std::move(message), zmq::send_flags::none);
@@ -439,8 +439,8 @@ int main(int argc, char* const argv[])
 	auto [dealerEndpoint, nodeConnectionMap, packed_mode, packed_rank, leaf_argv] = parse_argv(argc, argv);
 
 	// Start network connection process
-	auto upstream = UpstreamLink{ctx};
-	auto downstream = TcpDownstreamLink{ctx};
+	auto upstream = net::UpstreamLink{ctx};
+	auto downstream = net::TcpDownstreamLink{ctx};
 	auto num_children = int{};
 
 	// Use either FCFS or leveled tree launch based on arguments
@@ -519,7 +519,7 @@ int main(int argc, char* const argv[])
 
 	// Launch local children with provided leaf binary
 	{ auto const leafPath = std::string{cti_be_getBinDir()} + "/" + leaf_argv[0];
-		auto const [controlEndpoint, dataEndpoint] = formatEndpoints(downstream, cti_be_getNodeHostname());
+		auto const [controlEndpoint, dataEndpoint] = net::formatEndpoints(downstream, cti_be_getNodeHostname());
 		log("forking %d local leaf processes %s\n", local_pes, leafPath.c_str());
 
 		// Prepend endpoints and rank number to provided leaf arguments
@@ -561,7 +561,7 @@ int main(int argc, char* const argv[])
 		// Wait for all children to connect and send ready
 		for (int i = 0; i < num_children; i++) {
 			log("waiting for child %d / %d\n", i + 1, num_children);
-			auto reader = recv_MessageReader(downstream.data_socket);
+			auto reader = net::recv_MessageReader(downstream.data_socket);
 			auto response = reader.getRoot<NetworkResponse>();
 			assert(response.isReadyAck());
 		}
@@ -574,7 +574,7 @@ int main(int argc, char* const argv[])
 		auto response = builder.initRoot<NetworkResponse>();
 		response.setReadyAck();
 
-		send_MessageBuilder(upstream.data_socket, builder);
+		net::send_MessageBuilder(upstream.data_socket, builder);
 	}
 
 	// Receive incoming stream data messages and distribute to respective stream task,
@@ -598,8 +598,8 @@ int main(int argc, char* const argv[])
 
 		// Receive next command from parent
 		log("waiting for command from upstream\n");
-		auto message = recv_message(upstream.control_socket);
-		auto messageReader = make_MessageReader(message);
+		auto message = net::recv_message(upstream.control_socket);
+		auto messageReader = net::make_MessageReader(message);
 		auto command = messageReader.getRoot<NetworkCommand>();
 
 		// Relay command to children
@@ -624,7 +624,7 @@ int main(int argc, char* const argv[])
 
 			// Create new stream task worker
 			streamWorkerTasks.emplace_back(std::async(std::launch::async,
-				[](zmq::context_t& ctx, std::string resultEndpoint, StreamId streamId, int num_children, std::string filterPath, std::string filterFunctionName) {
+				[](zmq::context_t& ctx, std::string resultEndpoint, zmqnet::StreamId streamId, int num_children, std::string filterPath, std::string filterFunctionName) {
 					return workers::stream_aggregator(ctx, std::move(resultEndpoint), streamId, num_children, std::move(filterPath), std::move(filterFunctionName));
 				}, std::ref(ctx), resultEndpoint, streamId, num_children, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName));
 
@@ -675,7 +675,7 @@ cleanup_main:
 		auto response = builder.initRoot<NetworkResponse>();
 		response.setExitAck();
 
-		send_MessageBuilder(upstream.data_socket, builder);
+		net::send_MessageBuilder(upstream.data_socket, builder);
 		log("frontend notified of exit\n");
 	}
 
