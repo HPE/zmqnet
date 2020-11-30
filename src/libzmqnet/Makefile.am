@@ -12,7 +12,7 @@ lib_LTLIBRARIES = libzmqnet.la
 
 libzmqnet_la_SOURCES = Frontend.cpp AsyncFrontend.cpp Backend.cpp NetworkSchema.capnp.c++
 libzmqnet_la_CXXFLAGS = -fPIC -fno-rtti $(AM_CXXFLAGS) $(LIBZMQ_CFLAGS) $(CAPNP_CFLAGS) $(COMMON_TOOLS_FE_CFLAGS) $(COMMON_TOOLS_BE_CFLAGS)
-libzmqnet_la_LDFLAGS = $(AM_LDFLAGS) $(LIBZMQ_LIBS) $(CAPNP_LIBS) $(COMMON_TOOLS_FE_LIBS) $(COMMON_TOOLS_BE_LIBS)
+libzmqnet_la_LDFLAGS = $(AM_LDFLAGS) $(LIBZMQ_LIBS) $(CAPNP_LIBS) $(COMMON_TOOLS_FE_LIBS) $(COMMON_TOOLS_BE_LIBS) -luuid
 
 clean-local:
 	rm -f NetworkSchema.capnp.*

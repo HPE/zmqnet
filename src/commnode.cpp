@@ -237,27 +237,27 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	// Open task socket to receive this stream's input from downstream data task
 	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
 	{ auto const taskEndpoint = "inproc://stream-" + std::to_string(streamId);
-		log("%d: connecting to task endpoint %s\n", streamId, taskEndpoint.c_str());
+		log("commnode %d: connecting to task endpoint %s\n", streamId, taskEndpoint.c_str());
 		task_socket.connect(taskEndpoint);
 	}
 
 	// Wait until all downstream children have created this stream
 	for (int i = 0; i < num_children; i++) {
-		log("%d: waiting for stream create ack %d / %d\n", streamId, i + 1, num_children);
+		log("commnode %d: waiting for stream create ack %d / %d\n", streamId, i + 1, num_children);
 		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
 		assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
 	}
 
 	// Open the filter implementation dynamic library
-	log("%d: opening filter at %s\n", streamId, filterPath.c_str());
+	log("commnode %d: opening filter at %s\n", streamId, filterPath.c_str());
 	using FilterRunType = zmqnet::ByteArray(std::vector<zmqnet::ByteArray> const&);
 	auto filterHandle = cti::Dlopen::Handle{filterPath};
 	auto filterRun = filterHandle.load<FilterRunType>(filterFunctionName);
 
 	// Open result socket to send this stream's output to upstream proxy task
 	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
-	{ log("%d: connecting to task result %s\n", streamId, resultEndpoint.c_str());
+	{ log("commnode %d: connecting to task result %s\n", streamId, resultEndpoint.c_str());
 		result_socket.connect(resultEndpoint);
 	}
 
@@ -266,7 +266,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 		auto response = builder.initRoot<NetworkResponse>();
 		response.initStreamAck().setStreamId(streamId);
 
-		log("%d: sending stream open acknowledgement\n");
+		log("commnode %d: sending stream open acknowledgement\n");
 		net::send_MessageBuilder(result_socket, builder);
 	}
 
@@ -277,14 +277,14 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	while (true) {
 
 		// Receive result from task socket
-		log("%d: waiting for result from task socket\n", streamId);
+		log("commnode %d: waiting for result from task socket\n", streamId);
 		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
 
 		// If exit message, remove one child
 		if (response.isExitAck()) {
 			num_children--;
-			log("%d: child exited, %d remaining\n", streamId, num_children);
+			log("commnode %d: child exited, %d remaining\n", streamId, num_children);
 
 		} else {
 			// Check stream ID and user result

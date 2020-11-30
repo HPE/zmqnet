@@ -31,7 +31,6 @@ namespace zmqnet
 
 using StreamId = int;
 using ByteArray = kj::Array<kj::byte>;
-using CallbackFunc = std::function<void(StreamId const&, ByteArray)>;
 
 static inline auto make_ByteArray(char const* buffer, size_t buffer_len)
 {
@@ -78,6 +77,9 @@ public:
 
 class AsyncFrontend : public Frontend
 {
+public:
+	using CallbackFunc = std::function<void(StreamId const&, ByteArray)>;
+
 private:
 	zmq::context_t m_ctx;
 	std::unordered_map<StreamId, std::future<bool>> m_callbackWorkers;
@@ -136,10 +138,16 @@ public:
 
 class AsyncBackend : public Backend
 {
+public:
+	using CallbackFunc = std::function<ByteArray(StreamId const&, ByteArray)>;
+
 private:
 	zmq::context_t m_ctx;
 	std::unordered_map<StreamId, std::future<bool>> m_callbackWorkers;
 	std::unique_ptr<net::shared_semaphore> m_exiting;
+	std::string m_upstreamProxyEndpoint;
+	zmq::socket_t m_upstreamProxySocket;
+	std::future<zmq::socket_t> m_upstreamProxy;
 	std::future<zmq::socket_t> m_callbackDistributor;
 
 public:
@@ -147,7 +155,7 @@ public:
 	~AsyncBackend();
 
 	void registerCallback(StreamId const& streamId, CallbackFunc callbackFunc);
-	using Backend::notifyReady;
+	void notifyReady();
 	void waitForExit();
 };
 

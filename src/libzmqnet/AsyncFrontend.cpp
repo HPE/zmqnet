@@ -20,7 +20,7 @@
 namespace async
 {
 
-static bool callback_worker(zmq::context_t& ctx, zmqnet::StreamId streamId, zmqnet::CallbackFunc&& callbackFunc)
+static bool callback_worker(zmq::context_t& ctx, zmqnet::StreamId streamId, zmqnet::AsyncFrontend::CallbackFunc&& callbackFunc)
 {
 	// Open task socket to receive this stream's input from downstream data task
 	auto callback_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
@@ -160,7 +160,7 @@ zmqnet::AsyncFrontend::~AsyncFrontend()
 }
 
 void zmqnet::AsyncFrontend::registerStream(zmqnet::StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
-	zmqnet::CallbackFunc callbackFunc)
+	zmqnet::AsyncFrontend::CallbackFunc callbackFunc)
 {
 	// Ensure stream not registered
 	if (m_callbackWorkers.find(streamId) != m_callbackWorkers.end()) {
@@ -169,7 +169,7 @@ void zmqnet::AsyncFrontend::registerStream(zmqnet::StreamId const& streamId, std
 
 	// Launch worker thread
 	m_callbackWorkers.emplace(streamId, std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmqnet::StreamId streamId, zmqnet::CallbackFunc&& callbackFunc) {
+		[](zmq::context_t& ctx, zmqnet::StreamId streamId, CallbackFunc&& callbackFunc) {
 			return async::callback_worker(ctx, streamId, std::move(callbackFunc));
 		}, std::ref(m_ctx), streamId, std::move(callbackFunc)));
 
