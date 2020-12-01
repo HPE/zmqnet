@@ -84,7 +84,7 @@ private:
 	zmq::context_t m_ctx;
 	std::unordered_map<StreamId, std::future<bool>> m_callbackWorkers;
 	std::unique_ptr<net::shared_semaphore> m_stream_registering;
-	std::future<zmq::socket_t> m_callbackDistributor;
+	std::future<zmq::socket_t> m_responseDistributor;
 
 public:
 	AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
@@ -143,12 +143,13 @@ public:
 
 private:
 	zmq::context_t m_ctx;
-	std::unordered_map<StreamId, std::future<bool>> m_callbackWorkers;
-	std::unique_ptr<net::shared_semaphore> m_exiting;
-	std::string m_upstreamProxyEndpoint;
-	zmq::socket_t m_upstreamProxySocket;
-	std::future<zmq::socket_t> m_upstreamProxy;
-	std::future<zmq::socket_t> m_callbackDistributor;
+
+	std::string m_collectorEndpoint;
+	zmq::socket_t m_collectorSocket;
+	std::future<zmq::socket_t> m_responseCollector;
+
+	std::unordered_map<StreamId, std::future<bool>> m_commandWorkers;
+	std::future<zmq::socket_t> m_commandDistributor;
 
 public:
 	AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);

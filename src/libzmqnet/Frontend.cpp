@@ -393,7 +393,7 @@ zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int
 	log("waiting for ready report\n");
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
-	assert(response.isReadyAck());
+	assert(response.isReady());
 
 	auto const leaf_ms = get_milliseconds();
 	log("all leaves connected: %5ldms\n", leaf_ms - launch_ms);
@@ -408,8 +408,8 @@ void zmqnet::Frontend::createStream(zmqnet::StreamId const& streamId, std::strin
 {
 	// Create filter create command message
 	auto builder = capnp::MallocMessageBuilder{};
-	auto streamCommand = builder.initRoot<NetworkCommand>().initNewStream();
-	streamCommand.setNewStreamId(streamId);
+	auto streamCommand = builder.initRoot<NetworkCommand>().initStream();
+	streamCommand.setStreamId(streamId);
 	streamCommand.setFilterLibraryName(filterLibraryName);
 	streamCommand.setFilterFunctionName(filterFunctionName);
 
@@ -422,7 +422,7 @@ void zmqnet::Frontend::sendCommand(zmqnet::StreamId const& streamId, char const*
 {
 	// Create user command
 	auto builder = capnp::MallocMessageBuilder{};
-	auto userCommand = builder.initRoot<NetworkCommand>().initUserCommand();
+	auto userCommand = builder.initRoot<NetworkCommand>().initUser();
 	userCommand.setStreamId(streamId);
 	userCommand.setContent(kj::ArrayPtr<kj::byte const>{(unsigned char const*)command_buffer, command_len});
 
@@ -454,7 +454,7 @@ void zmqnet::SyncFrontend::registerStream(zmqnet::StreamId const& streamId, std:
 	// Wait for acknowledgement
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
-	assert(response.isStreamAck() && (response.getStreamAck().getStreamId() == streamId));
+	assert(response.isStream() && (response.getStream().getStreamId() == streamId));
 
 	auto const filter_ms = get_milliseconds() - start_ms;
 	log("filter registered RT: %5ldms\n", filter_ms);
@@ -472,12 +472,12 @@ zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::StreamId const& strea
 	log("receiving results...\n");
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
-	assert(response.isUserResult() && (response.getUserResult().getStreamId() == streamId));
+	assert(response.isUser() && (response.getUser().getStreamId() == streamId));
 
 	auto const result_ms = get_milliseconds();
 	log("result RT: %5ldms\n", result_ms - start_ms);
 
-	return kj::heapArray<kj::byte>(response.getUserResult().getContent().asBytes());
+	return kj::heapArray<kj::byte>(response.getUser().getContent().asBytes());
 }
 
 void zmqnet::SyncFrontend::runExit()
@@ -491,7 +491,7 @@ void zmqnet::SyncFrontend::runExit()
 	// Wait for exit response
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
-	assert(response.isExitAck());
+	assert(response.isExit());
 
 	log("exit completed\n");
 
