@@ -45,7 +45,7 @@ int run_async_leafnode(std::string const& upstreamControlEndpoint, std::string c
 
 	auto leafnode = zmqnet::AsyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, rank};
 
-	leafnode.registerCallback(0, [rank](zmqnet::StreamId const& streamId, zmqnet::ByteArray command) {
+	leafnode.registerCallback(0, [rank](zmqnet::Stream::Id const& streamId, zmqnet::ByteArray command) {
 		fprintf(stderr, "%d got command %s from stream %d\n", rank, command.begin(), streamId);
 		assert(streamId == 0);
 		auto const result = std::to_string(rank);
@@ -125,9 +125,9 @@ int main(int argc, char** argv)
 
 		if (synchronousMode) {
 			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
-			rootnode.registerStream(0, "libfilter.so", "run");
+			auto stream = rootnode.registerStream(0, "libfilter.so", "run");
 
-			auto const result = rootnode.runCommand(0, "send", 5);
+			auto const result = rootnode.runCommand(stream, "send", 5);
 			fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
 
 			rootnode.runExit();
@@ -138,8 +138,8 @@ int main(int argc, char** argv)
 			auto result_received = std::atomic<bool>{false};
 
 			auto rootnode = zmqnet::AsyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
-			rootnode.registerStream(0, "libfilter.so", "run",
-				[&result_received, &result_cv](zmqnet::StreamId const& streamId, kj::Array<kj::byte> result) {
+			auto stream = rootnode.registerStream(0, "libfilter.so", "run",
+				[&result_received, &result_cv](zmqnet::Stream::Id const& streamId, kj::Array<kj::byte> result) {
 					assert(streamId == 0);
 					fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
 
@@ -147,7 +147,7 @@ int main(int argc, char** argv)
 					result_cv.notify_one();
 				});
 
-			rootnode.sendCommand(0, "send", 5);
+			rootnode.sendCommand(stream, "send", 5);
 
 			{ auto result_lock = std::unique_lock<std::mutex>{result_mutex};
 				result_cv.wait(result_lock,

@@ -404,7 +404,7 @@ zmqnet::Frontend::~Frontend()
 	// Generate destructor for forward-declared net::TcpDownstreamLink
 }
 
-void zmqnet::Frontend::createStream(zmqnet::StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
+zmqnet::Stream zmqnet::Frontend::createStream(zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
 {
 	// Create filter create command message
 	auto builder = capnp::MallocMessageBuilder{};
@@ -416,18 +416,21 @@ void zmqnet::Frontend::createStream(zmqnet::StreamId const& streamId, std::strin
 	// Send filter create command
 	log("registering filter %s function %s with id %d\n", filterLibraryName.c_str(), filterFunctionName.c_str(), streamId);
 	net::send_MessageBuilder(m_downstream->control_socket, builder);
+
+	// Return new stream handle
+	return Stream { .id = streamId };
 }
 
-void zmqnet::Frontend::sendCommand(zmqnet::StreamId const& streamId, char const* command_buffer, size_t command_len)
+void zmqnet::Frontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
 {
 	// Create user command
 	auto builder = capnp::MallocMessageBuilder{};
 	auto userCommand = builder.initRoot<NetworkCommand>().initUser();
-	userCommand.setStreamId(streamId);
+	userCommand.setStreamId(stream.id);
 	userCommand.setContent(kj::ArrayPtr<kj::byte const>{(unsigned char const*)command_buffer, command_len});
 
 	// Send user command
-	log("user command length %zu on stream %d\n", command_len, streamId);
+	log("user command length %zu on stream %d\n", command_len, stream.id);
 	net::send_MessageBuilder(m_downstream->control_socket, builder);
 }
 
@@ -444,7 +447,7 @@ void zmqnet::Frontend::sendExit()
 
 // Synchronous frontend implementation
 
-void zmqnet::SyncFrontend::registerStream(zmqnet::StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
+zmqnet::Stream zmqnet::SyncFrontend::registerStream(zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
 {
 	auto const start_ms = get_milliseconds();
 
@@ -458,21 +461,24 @@ void zmqnet::SyncFrontend::registerStream(zmqnet::StreamId const& streamId, std:
 
 	auto const filter_ms = get_milliseconds() - start_ms;
 	log("filter registered RT: %5ldms\n", filter_ms);
+
+	// Return new stream handle
+	return Stream { .id = streamId };
 }
 
 
-zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::StreamId const& streamId, char const* command_buffer, size_t command_len)
+zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
 {
 	auto const start_ms = get_milliseconds();
 
 	// Send user command
-	sendCommand(streamId, command_buffer, command_len);
+	sendCommand(stream, command_buffer, command_len);
 
 	// Receive aggregated result
 	log("receiving results...\n");
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
-	assert(response.isUser() && (response.getUser().getStreamId() == streamId));
+	assert(response.isUser() && (response.getUser().getStreamId() == stream.id));
 
 	auto const result_ms = get_milliseconds();
 	log("result RT: %5ldms\n", result_ms - start_ms);

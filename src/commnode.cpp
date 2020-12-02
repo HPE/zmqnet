@@ -139,8 +139,8 @@ namespace workers
 {
 
 // Process result messages; aggregate and send to local result socket
-static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
-	zmqnet::StreamId streamId, int num_children, std::string filterPath, std::string filterFunctionName)
+static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
+	zmqnet::Stream::Id streamId, int num_children, std::string filterPath, std::string filterFunctionName)
 {
 	int rc = -1;
 
@@ -533,8 +533,8 @@ int main(int argc, char* const argv[])
 
 			// Create new stream task worker
 			streamWorkerTasks.emplace_back(std::async(std::launch::async,
-				[](zmq::context_t& ctx, std::string collectorEndpoint, zmqnet::StreamId streamId, int num_children, std::string filterPath, std::string filterFunctionName) {
-					return workers::stream_aggregator(ctx, std::move(collectorEndpoint), streamId, num_children, std::move(filterPath), std::move(filterFunctionName));
+				[](zmq::context_t& ctx, std::string collectorEndpoint, zmqnet::Stream::Id streamId, int num_children, std::string filterPath, std::string filterFunctionName) {
+					return workers::response_callback(ctx, std::move(collectorEndpoint), streamId, num_children, std::move(filterPath), std::move(filterFunctionName));
 				}, std::ref(ctx), collectorEndpoint, streamId, num_children, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName));
 
 		} else {

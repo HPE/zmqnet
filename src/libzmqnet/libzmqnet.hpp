@@ -291,7 +291,7 @@ using MaybeLock = std::optional<std::unique_lock<std::mutex>>;
 template <typename MessageProto>
 static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket_t&& input_socket, int num_clients, MaybeSemaphore maybeStreamSemaphore = std::nullopt)
 {
-	auto taskSockets = std::unordered_map<zmqnet::StreamId, zmq::socket_t>{};
+	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
 
 	while (true) {
 		// Receive next message

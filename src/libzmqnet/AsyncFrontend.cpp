@@ -17,10 +17,10 @@
 #include "libzmqnet.hpp"
 
 // Static asynchronous frontend functions to be run in own threads
-namespace async
+namespace workers
 {
 
-static bool callback_worker(zmq::context_t& ctx, zmqnet::StreamId streamId, zmqnet::AsyncFrontend::CallbackFunc&& callbackFunc)
+static bool response_callback(zmq::context_t& ctx, zmqnet::Stream::Id streamId, zmqnet::AsyncFrontend::CallbackFunc&& callbackFunc)
 {
 	// Open task socket to receive this stream's input from downstream data task
 	auto callback_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
@@ -78,7 +78,7 @@ zmqnet::AsyncFrontend::~AsyncFrontend()
 	// Generate destructor for forward-declared net::shared_semaphore
 }
 
-void zmqnet::AsyncFrontend::registerStream(zmqnet::StreamId const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
+zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
 	zmqnet::AsyncFrontend::CallbackFunc callbackFunc)
 {
 	// Ensure stream not registered
@@ -88,8 +88,8 @@ void zmqnet::AsyncFrontend::registerStream(zmqnet::StreamId const& streamId, std
 
 	// Launch worker thread
 	m_callbackWorkers.emplace(streamId, std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmqnet::StreamId streamId, CallbackFunc&& callbackFunc) {
-			return async::callback_worker(ctx, streamId, std::move(callbackFunc));
+		[](zmq::context_t& ctx, zmqnet::Stream::Id streamId, CallbackFunc&& callbackFunc) {
+			return workers::response_callback(ctx, streamId, std::move(callbackFunc));
 		}, std::ref(m_ctx), streamId, std::move(callbackFunc)));
 
 	// Lock stream registration flag shared with callback distributor task
@@ -107,17 +107,20 @@ void zmqnet::AsyncFrontend::registerStream(zmqnet::StreamId const& streamId, std
 	log("waiting for stream %d registration to complete\n", streamId);
 	m_stream_registering->unlock_and_wait_until(std::move(stream_lock), false);
 	log("stream %d registration completed\n", streamId);
+
+	// Return new stream handle
+	return Stream { .id = streamId };
 }
 
-void zmqnet::AsyncFrontend::sendCommand(zmqnet::StreamId const& streamId, char const* command_buffer, size_t command_len)
+void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
 {
 	// Ensure stream registered
-	if (m_callbackWorkers.find(streamId) == m_callbackWorkers.end()) {
-		throw std::runtime_error("no asynchronous callback registered for stream ID " + std::to_string(streamId));
+	if (m_callbackWorkers.find(stream.id) == m_callbackWorkers.end()) {
+		throw std::runtime_error("no asynchronous callback registered for stream ID " + std::to_string(stream.id));
 	}
 
 	// Send user command
-	Frontend::sendCommand(streamId, command_buffer, command_len);
+	Frontend::sendCommand(stream, command_buffer, command_len);
 }
 
 void zmqnet::AsyncFrontend::runExit()

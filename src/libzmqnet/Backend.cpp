@@ -35,7 +35,7 @@ void zmqnet::Backend::notifyReady()
 	net::send_MessageBuilder(m_upstream->data_socket, builder);
 }
 
-void zmqnet::Backend::sendResult(zmqnet::StreamId const& streamId, char const* result_buffer, size_t result_len)
+void zmqnet::Backend::sendResult(zmqnet::Stream::Id const& streamId, char const* result_buffer, size_t result_len)
 {
 	// Notify parent commnode of result
 	auto builder = capnp::MallocMessageBuilder{};
@@ -59,7 +59,7 @@ zmqnet::SyncBackend::SyncBackend(std::string const& upstreamControlEndpoint, std
 	notifyReady();
 }
 
-std::tuple<zmqnet::StreamId, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
+std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 {
 	while (true) {
 		// Receive next network command
@@ -112,10 +112,10 @@ std::tuple<zmqnet::StreamId, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand
 // Asynchronous Backend
 
 // Static asynchronous backend functions to be run in own threads
-namespace async
+namespace workers
 {
 
-static bool callback_worker(zmq::context_t& ctx, std::string resultEndpoint, zmqnet::StreamId streamId, zmqnet::AsyncBackend::CallbackFunc&& callbackFunc)
+static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zmqnet::Stream::Id streamId, zmqnet::AsyncBackend::CallbackFunc&& callbackFunc)
 {
 	// Open task socket to receive this stream's command from upstream control task
 	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
@@ -220,7 +220,7 @@ zmqnet::AsyncBackend::~AsyncBackend()
 	// Generate destructor for forward-declared net::shared_semaphore
 }
 
-void zmqnet::AsyncBackend::registerCallback(StreamId const& streamId, zmqnet::AsyncBackend::CallbackFunc callbackFunc)
+void zmqnet::AsyncBackend::registerCallback(zmqnet::Stream::Id const& streamId, zmqnet::AsyncBackend::CallbackFunc callbackFunc)
 {
 	// Ensure stream not registered
 	if (m_commandWorkers.find(streamId) != m_commandWorkers.end()) {
@@ -229,8 +229,8 @@ void zmqnet::AsyncBackend::registerCallback(StreamId const& streamId, zmqnet::As
 
 	// Launch worker thread
 	m_commandWorkers.emplace(streamId, std::async(std::launch::async,
-		[](zmq::context_t& ctx, std::string collectorEndpoint, zmqnet::StreamId streamId, CallbackFunc&& callbackFunc) {
-			return async::callback_worker(ctx, std::move(collectorEndpoint), streamId, std::move(callbackFunc));
+		[](zmq::context_t& ctx, std::string collectorEndpoint, zmqnet::Stream::Id streamId, CallbackFunc&& callbackFunc) {
+			return workers::command_callback(ctx, std::move(collectorEndpoint), streamId, std::move(callbackFunc));
 		}, std::ref(m_ctx), m_collectorEndpoint, streamId, std::move(callbackFunc)));
 }
 

@@ -11,7 +11,7 @@
 
 extern "C" {
 
-zmqnet::ByteArray run(zmqnet::StreamId const& streamId, std::vector<zmqnet::ByteArray> const& inputs)
+zmqnet::ByteArray run(zmqnet::Stream::Id const& streamId, std::vector<zmqnet::ByteArray> const& inputs)
 {
 	auto result = std::string{"{ "};
 	for (auto&& input : inputs) {
