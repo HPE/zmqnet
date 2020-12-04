@@ -146,7 +146,7 @@ static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
 
 	// Open task socket to receive this stream's input from downstream data task
 	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-	{ auto const taskEndpoint = "inproc://stream-" + std::to_string(streamId);
+	{ auto const taskEndpoint = async::task_socket_endpoint(streamId);
 		log("commnode %d: connecting to task endpoint %s\n", streamId, taskEndpoint.c_str());
 		task_socket.connect(taskEndpoint);
 	}

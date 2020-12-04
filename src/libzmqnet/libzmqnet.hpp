@@ -280,6 +280,31 @@ static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::
 	}
 }
 
+// Standard endpoint format for task sockets created by message distributor
+static inline std::string task_socket_endpoint(zmqnet::Stream::Id const streamId)
+{
+	return "inproc://stream-" + std::to_string(streamId);
+}
+
+namespace
+{
+
+static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream::Id const streamId, zmq::message_t&& stream_message)
+{
+	// Create task socket and bind to known endpoint format
+	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::push};
+	auto const taskEndpoint = task_socket_endpoint(streamId);
+	log("distributor creating new task socket %s\n", taskEndpoint.c_str());
+	task_socket.bind(taskEndpoint);
+
+	// Relay message to new task socket
+	task_socket.send(std::move(stream_message), zmq::send_flags::none);
+
+	return std::move(task_socket);
+}
+
+} // anonymous namespace
+
 // Select stream task based on incoming message's stream ID, and send message to stream task socket
 // Stream tasks are created by main thread.
 // Completed when received `num_clients` exit messages.
@@ -344,16 +369,9 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 				: std::nullopt;
 			assert(!maybeStreamLock || (maybeStreamSemaphore->get().get(*maybeStreamLock) == true));
 
-			auto task_socket = zmq::socket_t{ctx, zmq::socket_type::push};
-			auto taskEndpoint = "inproc://stream-" + std::to_string(streamId);
-			log("distributor creating new task socket %s\n", taskEndpoint.c_str());
-			task_socket.bind(taskEndpoint);
-
-			// Relay message to new task socket
-			task_socket.send(std::move(message), zmq::send_flags::none);
-
-			// Store in stream task socket map
-			taskSockets.emplace_hint(idSocketPair, streamId, std::move(task_socket));
+			// Create task socket and store in stream task socket map
+			taskSockets.emplace_hint(idSocketPair, streamId,
+				make_task_socket(ctx, streamId, std::move(message)));
 
 			// Notify via semaphore that stream registration has completed, if provided
 			log("distributor: notifying main thread that stream registration has completed\n");
