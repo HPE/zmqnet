@@ -19,29 +19,30 @@ struct NetworkCommand {
 
     startLeaves @5 :Void;
 
-    newStream :group {
-      newStreamId @1 :Int32;
+    stream :group {
+      streamId @1 :Int32;
       filterLibraryName @2 :Text;
       filterFunctionName @6 :Text;
     }
 
-    userCommand :group {
+    user :group {
       streamId @3 :Int32;
-      content @4 :Text;
+      content @4 :Data;
     }
   }
 }
 
 struct NetworkResponse {
   union {
-    readyAck @0 :Void;
-    exitAck @1 :Void;
+    exit @0 :Void;
 
-    streamAck :group {
+    ready @1 :Void;
+
+    stream :group {
       streamId @2 :Int32;
     }
 
-    userResult :group {
+    user :group {
       streamId @3 :Int32;
       content @4 :Data;
     }

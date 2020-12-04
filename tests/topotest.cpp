@@ -18,11 +18,11 @@
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
 
-int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
+int run_sync_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
 {
 	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
-	auto leafnode = zmqnet::Backend{upstreamControlEndpoint, upstreamDataEndpoint, rank};
+	auto leafnode = zmqnet::SyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, rank};
 
 	while (true) {
 		auto const [streamId, command] = leafnode.nextCommand();
@@ -31,12 +31,32 @@ int run_leafnode(std::string const& upstreamControlEndpoint, std::string const& 
 			return 0;
 
 		} else {
-			fprintf(stderr, "%d got command %s from stream %d\n", rank, command.c_str(), streamId);
+			fprintf(stderr, "%d got command %s from stream %d\n", rank, command.begin(), streamId);
 			assert(streamId == 0);
 			auto const result = std::to_string(rank);
 			leafnode.sendResult(streamId, result.c_str(), result.length() + 1);
 		}
 	}
+}
+
+int run_async_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
+{
+	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
+
+	auto leafnode = zmqnet::AsyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, rank};
+
+	leafnode.registerCallback(0, [rank](zmqnet::Stream::Id const& streamId, zmqnet::ByteArray command) {
+		fprintf(stderr, "%d got command %s from stream %d\n", rank, command.begin(), streamId);
+		assert(streamId == 0);
+		auto const result = std::to_string(rank);
+		return zmqnet::make_ByteArray(result.c_str(), result.length() + 1);
+	});
+
+	leafnode.notifyReady();
+
+	leafnode.waitForExit();
+
+	return 0;
 }
 
 int main(int argc, char** argv)
@@ -56,7 +76,12 @@ int main(int argc, char** argv)
 		assert(rest_argc == argc - 3);
 		assert(!strcmp("leaf", rest_argv[1]));
 
-		rc = run_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, rank);
+		auto const synchronousMode = !strcmp(argv[3], "sync");
+		if (synchronousMode) {
+			rc = run_sync_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, rank);
+		} else {
+			rc = run_async_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, rank);
+		}
 
 		goto cleanup_main;
 
@@ -100,9 +125,9 @@ int main(int argc, char** argv)
 
 		if (synchronousMode) {
 			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
-			rootnode.registerStream(0, "libfilter.so", "run");
+			auto stream = rootnode.registerStream(0, "libfilter.so", "run");
 
-			auto const result = rootnode.runCommand(0, "send");
+			auto const result = rootnode.runCommand(stream, "send", 5);
 			fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
 
 			rootnode.runExit();
@@ -113,14 +138,16 @@ int main(int argc, char** argv)
 			auto result_received = std::atomic<bool>{false};
 
 			auto rootnode = zmqnet::AsyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
-			rootnode.registerStream(0, "libfilter.so", "run", [&result_received, &result_cv](kj::Array<kj::byte> result) {
-				fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
+			auto stream = rootnode.registerStream(0, "libfilter.so", "run",
+				[&result_received, &result_cv](zmqnet::Stream::Id const& streamId, kj::Array<kj::byte> result) {
+					assert(streamId == 0);
+					fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
 
-				result_received = true;
-				result_cv.notify_one();
-			});
+					result_received = true;
+					result_cv.notify_one();
+				});
 
-			rootnode.sendCommand(0, "send");
+			rootnode.sendCommand(stream, "send", 5);
 
 			{ auto result_lock = std::unique_lock<std::mutex>{result_mutex};
 				result_cv.wait(result_lock,

@@ -13,6 +13,7 @@
 #include <vector>
 #include <string>
 #include <tuple>
+#include <optional>
 
 // Logging
 
@@ -251,3 +252,140 @@ static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags con
 }
 
 } // net
+
+
+// Message collectors / distributors for asynchronous implementations
+namespace async
+{
+
+// Proxy result messages produced by local stream tasks to upstream data socket
+// Returns control of upstream data socket upon completion
+static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::string collectorEndpoint, zmq::socket_t&& output_socket)
+{
+	// Create incoming message socket
+	auto collector_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
+	collector_socket.bind(collectorEndpoint);
+
+	while (true) {
+		// Read next incoming local message
+		auto message = net::recv_message(collector_socket);
+
+		// If exit message, return socket back to caller for cleanup
+		if (net::make_MessageReader(message).getRoot<NetworkResponse>().isExit()) {
+			return std::move(output_socket);
+		}
+
+		// Otherwise, relay application result response upstream
+		output_socket.send(std::move(message), zmq::send_flags::none);
+	}
+}
+
+// Standard endpoint format for task sockets created by message distributor
+static inline std::string task_socket_endpoint(zmqnet::Stream::Id const streamId)
+{
+	return "inproc://stream-" + std::to_string(streamId);
+}
+
+namespace
+{
+
+static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream::Id const streamId, zmq::message_t&& stream_message)
+{
+	// Create task socket and bind to known endpoint format
+	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::push};
+	auto const taskEndpoint = task_socket_endpoint(streamId);
+	log("distributor creating new task socket %s\n", taskEndpoint.c_str());
+	task_socket.bind(taskEndpoint);
+
+	// Relay message to new task socket
+	task_socket.send(std::move(stream_message), zmq::send_flags::none);
+
+	return std::move(task_socket);
+}
+
+} // anonymous namespace
+
+// Select stream task based on incoming message's stream ID, and send message to stream task socket
+// Stream tasks are created by main thread.
+// Completed when received `num_clients` exit messages.
+// Returns control of input socket upon completion.
+static constexpr auto BackendClient = int{1}; // Frontends and backends have only one client
+static constexpr auto FrontendClient = int{1};
+using MaybeSemaphore = std::optional<std::reference_wrapper<net::shared_semaphore>>;
+using MaybeLock = std::optional<std::unique_lock<std::mutex>>;
+template <typename MessageProto>
+static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket_t&& input_socket, int num_clients, MaybeSemaphore maybeStreamSemaphore = std::nullopt)
+{
+	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
+
+	while (true) {
+		// Receive next message
+		log("distributor: receiving message...\n");
+		auto message = net::recv_message(input_socket);
+		auto reader = net::make_MessageReader(message);
+		auto content = reader.getRoot<MessageProto>();
+
+		// If exit, clean up
+		if (content.isExit()) {
+			log("distributor: exit (%d remaining)\n", num_clients - 1);
+
+			// Relay exit message to task sockets
+			for (auto&& [streamId, task_socket] : taskSockets) {
+				task_socket.send(message, zmq::send_flags::none);
+			}
+
+			// One client has exited
+			num_clients--;
+
+			// If all clients have exited, run cleanup
+			if (num_clients == 0) {
+
+				// Return control of the upstream control socket back to main thread
+				return std::move(input_socket);
+			}
+
+			continue;
+		}
+
+		// Content is either stream or user content
+		assert(content.isStream() || content.isUser());
+
+		// Extract stream ID to select stream worker
+		auto const streamId = (content.isStream())
+			? content.getStream().getStreamId()
+			: content.getUser().getStreamId();
+
+		// Get socket for given stream ID
+		auto const idSocketPair = taskSockets.find(streamId);
+
+		// Create new stream task connection with known endpoint format, if needed
+		if (idSocketPair == taskSockets.end()) {
+			log("distributor: new stream %d\n", streamId);
+			assert(content.isStream());
+
+			// Lock stream registration flag shared with main thread, if provided
+			auto maybeStreamLock = (maybeStreamSemaphore)
+				? MaybeLock{maybeStreamSemaphore->get().acquire_lock()}
+				: std::nullopt;
+			assert(!maybeStreamLock || (maybeStreamSemaphore->get().get(*maybeStreamLock) == true));
+
+			// Create task socket and store in stream task socket map
+			taskSockets.emplace_hint(idSocketPair, streamId,
+				make_task_socket(ctx, streamId, std::move(message)));
+
+			// Notify via semaphore that stream registration has completed, if provided
+			log("distributor: notifying main thread that stream registration has completed\n");
+			if (maybeStreamSemaphore) {
+				maybeStreamSemaphore->get().set(*maybeStreamLock, false);
+				maybeStreamSemaphore->get().unlock_and_notify_one(std::move(*maybeStreamLock));
+			}
+
+		// Relay message to task socket
+		} else {
+			log("distributor: relay message to stream %d\n", streamId);
+			idSocketPair->second.send(std::move(message), zmq::send_flags::none);
+		}
+	}
+}
+
+} // async
