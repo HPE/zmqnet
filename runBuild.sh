@@ -13,18 +13,17 @@ source ./external/cdst_build_library/build_lib
 
 setup_modules
 
-#module load cray-cdst-support
+module load cray-cdst-support
 check_exit_status
 
-#module load cray-cti-devel
+module load cray-cti-devel
 check_exit_status
 
 # Create install directory
 source $top_level/release_versioning
 zmqnet_version="$major.$minor.$revision"
 echo "zmqnet version: \"$zmqnet_version\""
-#install_dir="/opt/cray/pe/zmqnet/$zmqnet_version"
-install_dir=$PWD/install
+install_dir="/opt/cray/pe/zmqnet/$zmqnet_version"
 echo "Install dir: \"$install_dir\""
 mkdir -p $install_dir
 check_exit_status
@@ -79,7 +78,7 @@ check_exit_status
 pushd build
 check_exit_status
 
-CFLAGS="-g -O2 -Wall" PKG_CONFIG_PATH=$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH cmake -DCMAKE_INSTALL_PREFIX:PATH=$install_dir ..
+CFLAGS="-g -O2 -Wall" PKG_CONFIG_PATH=$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH cmake -DCMAKE_INSTALL_PREFIX:PATH=$install_dir -DCPPZMQ_BUILD_TESTS=OFF ..
 check_exit_status
 
 make $cdst_j_flags
@@ -104,6 +103,34 @@ if [[ ! -f $top_level/external/capnproto/README.md ]]; then
 fi
 
 pushd $top_level/external/capnproto/c++
+check_exit_status
+
+autoreconf -ifv
+check_exit_status
+
+./configure --prefix=$install_dir
+check_exit_status
+
+make $cdst_j_flags
+check_exit_status
+
+make $cdst_j_flags install
+check_exit_status
+
+popd
+check_exit_status
+
+echo "############################################"
+echo "#           Building LRLE Bitset           #"
+echo "############################################"
+
+# ensure submodule is checked out
+if [[ ! -f $top_level/external/lrle_bitset/configure.ac ]]; then
+    echo "lrle_bitset submodule not checked out..."
+    exit 1
+fi
+
+pushd $top_level/external/lrle_bitset
 check_exit_status
 
 autoreconf -ifv
