@@ -18,6 +18,8 @@
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
 
+static constexpr auto TestStreamId = zmqnet::Stream::Id{1};
+
 int run_sync_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
 {
 	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
@@ -32,7 +34,7 @@ int run_sync_leafnode(std::string const& upstreamControlEndpoint, std::string co
 
 		} else {
 			fprintf(stderr, "%d got command %s from stream %d\n", rank, command.begin(), streamId);
-			assert(streamId == 0);
+			assert(streamId == TestStreamId);
 			auto const result = std::to_string(rank);
 			leafnode.sendResult(streamId, result.c_str(), result.length() + 1);
 		}
@@ -45,9 +47,9 @@ int run_async_leafnode(std::string const& upstreamControlEndpoint, std::string c
 
 	auto leafnode = zmqnet::AsyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, rank};
 
-	leafnode.registerCallback(0, [rank](zmqnet::Stream::Id const& streamId, zmqnet::ByteArray command) {
+	leafnode.registerCallback(TestStreamId, [rank](zmqnet::Stream::Id const& streamId, zmqnet::ByteArray command) {
 		fprintf(stderr, "%d got command %s from stream %d\n", rank, command.begin(), streamId);
-		assert(streamId == 0);
+		assert(streamId == TestStreamId);
 		auto const result = std::to_string(rank);
 		return zmqnet::make_ByteArray(result.c_str(), result.length() + 1);
 	});
@@ -125,7 +127,7 @@ int main(int argc, char** argv)
 
 		if (synchronousMode) {
 			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
-			auto stream = rootnode.registerStream(0, "libfilter.so", "run");
+			auto stream = rootnode.registerStream(TestStreamId, "libfilter.so", "run");
 
 			auto const result = rootnode.runCommand(stream, "send", 5);
 			fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
@@ -138,9 +140,9 @@ int main(int argc, char** argv)
 			auto result_received = std::atomic<bool>{false};
 
 			auto rootnode = zmqnet::AsyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
-			auto stream = rootnode.registerStream(0, "libfilter.so", "run",
+			auto stream = rootnode.registerStream(TestStreamId, "libfilter.so", "run",
 				[&result_received, &result_cv](zmqnet::Stream::Id const& streamId, kj::Array<kj::byte> result) {
-					assert(streamId == 0);
+					assert(streamId == TestStreamId);
 					fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
 
 					result_received = true;

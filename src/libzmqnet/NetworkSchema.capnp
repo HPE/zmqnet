@@ -23,6 +23,7 @@ struct NetworkCommand {
       streamId @1 :Int32;
       filterLibraryName @2 :Text;
       filterFunctionName @6 :Text;
+      ranks @7 :Data;
     }
 
     user :group {
@@ -44,6 +45,7 @@ struct NetworkResponse {
 
     user :group {
       streamId @3 :Int32;
+      ranks @5 :Data;
       content @4 :Data;
     }
   }

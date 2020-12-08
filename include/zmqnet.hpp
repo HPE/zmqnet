@@ -9,6 +9,8 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <set>
+
 #include <future>
 #include <memory>
 
@@ -50,14 +52,17 @@ struct Topology
 struct Stream
 {
 	using Id = int;
-	Id id;
+	Id id, subsetId;
 };
+
+using RankSet = std::set<int>;
 
 class Frontend
 {
 protected:
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::TcpDownstreamLink> m_downstream;
+	Stream::Id m_next_subsetId;
 
 public:
 	Frontend(int const app_id, long int const session_id, long int const manifest_id,
@@ -66,6 +71,8 @@ public:
 
 protected:
 	Stream createStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
+	Stream createSubset(Stream::Id const& streamId, RankSet const& ranks);
+
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void sendExit();
 };
@@ -76,6 +83,8 @@ public:
 	using Frontend::Frontend;
 
 	Stream registerStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
+	Stream registerSubset(Stream::Id const& streamId, RankSet const& ranks);
+
 	ByteArray runCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void runExit();
 };
@@ -98,6 +107,8 @@ public:
 
 	Stream registerStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
 		CallbackFunc callbackFunc);
+	Stream registerSubset(Stream::Id const& streamId, RankSet const& ranks);
+
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void runExit();
 };

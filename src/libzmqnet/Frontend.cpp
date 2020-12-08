@@ -12,6 +12,9 @@
 #include <unordered_map>
 #include <set>
 
+#include "bitset.hpp"
+#include "lrle_bitset_impl.hpp"
+
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
 
@@ -95,7 +98,7 @@ static void fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 			topologyResponse.setNumChildren(num_children);
 
 			// Send topology response
-			net::send_MessageBuilder(dealer_socket, builder);
+			net::send_MessageBuilder(dealer_socket, net::subset_ids::AllRanks, builder);
 		}
 
 		// Advance to next node
@@ -177,7 +180,7 @@ static void packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 			topologyResponse.setNumChildren(num_children);
 
 			// Send topology response
-			net::send_MessageBuilder(dealer_socket, builder);
+			net::send_MessageBuilder(dealer_socket, net::subset_ids::AllRanks, builder);
 		}
 
 		// Advance to next node
@@ -350,7 +353,7 @@ static void layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 		auto command = builder.initRoot<NetworkCommand>();
 		command.setStartLeaves();
 
-		net::send_MessageBuilder(rootLink.control_socket, builder);
+		net::send_MessageBuilder(rootLink.control_socket, net::subset_ids::AllRanks, builder);
 	}
 }
 
@@ -362,6 +365,7 @@ zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int
 	char const* const* leaf_argv, zmqnet::Topology const& topology)
 	: m_ctx{}
 	, m_downstream{std::make_unique<net::TcpDownstreamLink>(m_ctx)}
+	, m_next_subsetId{1}
 {
 	auto const start_ms = get_milliseconds();
 
@@ -413,12 +417,31 @@ zmqnet::Stream zmqnet::Frontend::createStream(zmqnet::Stream::Id const& streamId
 	streamCommand.setFilterLibraryName(filterLibraryName);
 	streamCommand.setFilterFunctionName(filterFunctionName);
 
+#if 0
+	// If stream is subset communication, compress and set rank set in message
+	if (!ranks.empty()) {
+
+		// Pack rank set into bitset
+		auto const max_rank = *ranks.rbegin();
+		auto unpacked_rank_set = unpacked_bitset{max_rank + 1};
+		for (auto&& rank : ranks) { unpacked_rank_set.set(rank); }
+
+		// Compress bitset into lrle bitset
+		auto const lrle_rank_set = lrle_bitset{unpacked_rank_set.bytes.data(), unpacked_rank_set.bytes.size()};
+
+		streamCommand.setRanks(kj::ArrayPtr<kj::byte const>
+			{ (unsigned char const*)lrle_rank_set.compressed.data()
+			, lrle_rank_set.compressed.size()
+		});
+	}
+#endif
+
 	// Send filter create command
 	log("registering filter %s function %s with id %d\n", filterLibraryName.c_str(), filterFunctionName.c_str(), streamId);
-	net::send_MessageBuilder(m_downstream->control_socket, builder);
+	net::send_MessageBuilder(m_downstream->control_socket, net::subset_ids::AllRanks, builder);
 
 	// Return new stream handle
-	return Stream { .id = streamId };
+	return Stream { .id = streamId, .subsetId = net::subset_ids::AllRanks };
 }
 
 void zmqnet::Frontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
@@ -430,8 +453,8 @@ void zmqnet::Frontend::sendCommand(zmqnet::Stream const& stream, char const* com
 	userCommand.setContent(kj::ArrayPtr<kj::byte const>{(unsigned char const*)command_buffer, command_len});
 
 	// Send user command
-	log("user command length %zu on stream %d\n", command_len, stream.id);
-	net::send_MessageBuilder(m_downstream->control_socket, builder);
+	log("user command length %zu on stream %d, id 0x%02x\n", command_len, stream.id, stream.subsetId);
+	net::send_MessageBuilder(m_downstream->control_socket, stream.subsetId, builder);
 }
 
 void zmqnet::Frontend::sendExit()
@@ -442,7 +465,7 @@ void zmqnet::Frontend::sendExit()
 	command.setExit();
 
 	// Send exit command
-	net::send_MessageBuilder(m_downstream->control_socket, builder);
+	net::send_MessageBuilder(m_downstream->control_socket, net::subset_ids::AllRanks, builder);
 }
 
 // Synchronous frontend implementation
@@ -452,7 +475,7 @@ zmqnet::Stream zmqnet::SyncFrontend::registerStream(zmqnet::Stream::Id const& st
 	auto const start_ms = get_milliseconds();
 
 	// Send filter create command
-	createStream(streamId, filterLibraryName, filterFunctionName);
+	auto const result = createStream(streamId, filterLibraryName, filterFunctionName);
 
 	// Wait for acknowledgement
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
@@ -463,7 +486,7 @@ zmqnet::Stream zmqnet::SyncFrontend::registerStream(zmqnet::Stream::Id const& st
 	log("filter registered RT: %5ldms\n", filter_ms);
 
 	// Return new stream handle
-	return Stream { .id = streamId };
+	return result;
 }
 
 

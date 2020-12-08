@@ -94,9 +94,6 @@ public:
 		// Connect to upstream sockets
 		control_socket.connect(upstreamControlEndpoint);
 		data_socket.connect(upstreamDataEndpoint);
-
-		// Subscribe to all topics
-		control_socket.set(zmq::sockopt::subscribe, "");
 	}
 
 	UpstreamLink(zmq::context_t& ctx)
@@ -204,9 +201,68 @@ static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::str
 
 // Capnp and application protocol
 
-static inline void send_MessageBuilder(zmq::socket_t& socket, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
+namespace subset_ids
 {
-	auto messageArray = capnp::messageToFlatArray(builder);
+	static constexpr auto AllRanks = int{0xff};
+};
+
+
+// Subscribe to messages starting with the given tag
+static inline void subscribe_to_tag(UpstreamLink& upstream, int tag)
+{
+	assert((0 < tag) && (tag <= 0xff)); // TODO: pad out to the right
+
+	// ff-pad tag into char buffer
+	unsigned char buf[] = {(unsigned char)tag, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, '\0'};
+
+	// Subscribe to padded tag topic
+	upstream.control_socket.set(zmq::sockopt::subscribe, (char const*)buf);
+}
+
+static inline auto builderToTaggedMessage(int tag, capnp::MessageBuilder& builder)
+{
+	auto const& segments = builder.getSegmentsForOutput();
+
+	auto result = kj::heapArray<capnp::word>(1 + capnp::computeSerializedSizeInWords(segments));
+
+	// ff-pad tag to word length
+	{ assert((0 < tag) && (tag <= 0xff));
+		unsigned char buf[] = {(unsigned char)tag, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+		static_assert(sizeof(buf) == sizeof(capnp::word));
+
+		// Write padded tag to beginning of message
+		result[0] = *(capnp::word*)buf;
+	}
+
+	// Pack rest of message using builder's segments (see capnp::messageToFlatArray)
+	auto table = reinterpret_cast<capnp::_::WireValue<uint32_t>*>(result.begin() + 1);
+
+	table[0].set(segments.size() - 1);
+
+	for (uint i = 0; i < segments.size(); i++) {
+		table[i + 1].set(segments[i].size());
+	}
+
+	if (segments.size() % 2 == 0) {
+		// Set padding byte.
+		table[segments.size() + 1].set(0);
+	}
+
+	auto dst = (result.begin() + 1) + segments.size() / 2 + 1;
+
+	for (auto& segment: segments) {
+		memcpy(dst, segment.begin(), segment.size() * sizeof(capnp::word));
+		dst += segment.size();
+	}
+
+	KJ_DASSERT(dst == result.end(), "Buffer overrun/underrun bug in code above.");
+
+	return kj::mv(result);
+}
+
+static inline void send_MessageBuilder(zmq::socket_t& socket, zmqnet::Stream::Id subsetId, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
+{
+	auto messageArray = builderToTaggedMessage(subsetId, builder);
 	auto const messageBytes = messageArray.asBytes();
 	socket.send(zmq::message_t{messageBytes.begin(), messageBytes.size()}, sockopt);
 }
@@ -214,8 +270,10 @@ static inline void send_MessageBuilder(zmq::socket_t& socket, capnp::MessageBuil
 static inline auto make_MessageReader(zmq::message_t& message)
 {
 	assert(message.size() % sizeof(capnp::word) == 0);
-	auto const messageWords = message.data<capnp::word>();
-	auto const messageWordsLen = message.size() / sizeof(capnp::word);
+
+	// Discard subset tag from message
+	auto const messageWords = message.data<capnp::word>() + 1;
+	auto const messageWordsLen = (message.size() / sizeof(capnp::word)) - 1;
 
 	return capnp::UnalignedFlatArrayMessageReader(kj::arrayPtr(messageWords, messageWordsLen));
 }
@@ -230,8 +288,11 @@ public:
 
 	static auto make_Reader(zmq::message_t& message) {
 		assert(message.size() % sizeof(capnp::word) == 0);
-		auto const messageWords = message.data<capnp::word>();
-		auto const messageWordsLen = message.size() / sizeof(capnp::word);
+
+		// Discard subset tag from message
+		auto const messageWords = message.data<capnp::word>() + 1;
+		auto const messageWordsLen = (message.size() / sizeof(capnp::word)) - 1;
+
 		auto messageArray = kj::arrayPtr(messageWords, messageWordsLen);
 		return capnp::UnalignedFlatArrayMessageReader(messageArray);
 	}

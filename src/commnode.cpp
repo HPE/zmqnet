@@ -177,7 +177,7 @@ static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
 		response.initStream().setStreamId(streamId);
 
 		log("commnode %d: sending stream open acknowledgement\n");
-		net::send_MessageBuilder(result_socket, builder);
+		net::send_MessageBuilder(result_socket, net::subset_ids::AllRanks, builder);
 	}
 
 	// Filter synchronization, aggregate and send results when all children have reported
@@ -225,7 +225,7 @@ static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
 
 			// Send result
 			log("sending result size %lu\n", result_size);
-			net::send_MessageBuilder(result_socket, builder);
+			net::send_MessageBuilder(result_socket, net::subset_ids::AllRanks, builder);
 		}
 
 		// If all children exited, end loop
@@ -264,7 +264,7 @@ static auto fcfs(zmq::context_t& ctx, net::UpstreamLink& upstream, net::TcpDowns
 		topologyRequest.setNodeDataEndpoint(dataEndpoint);
 
 		// Send this node's endpoints to topology server
-		net::send_MessageBuilder(request_socket, builder);
+		net::send_MessageBuilder(request_socket, net::subset_ids::AllRanks, builder);
 		log("registered endpoints with topology server\n");
 	}
 
@@ -311,7 +311,7 @@ static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstr
 		topologyRequest.setNodeHostname(hostname);
 
 		// Send this node's endpoints to topology server
-		net::send_MessageBuilder(upstream.data_socket, builder);
+		net::send_MessageBuilder(upstream.data_socket, net::subset_ids::AllRanks, builder);
 	}
 	log("registered with frontend. relaying child messages\n");
 
@@ -345,6 +345,7 @@ int main(int argc, char* const argv[])
 
 	// Start network connection process
 	auto upstream = net::UpstreamLink{ctx};
+	net::subscribe_to_tag(upstream, net::subset_ids::AllRanks);
 	auto downstream = net::TcpDownstreamLink{ctx};
 	auto num_children = int{};
 
@@ -479,7 +480,7 @@ int main(int argc, char* const argv[])
 		auto response = builder.initRoot<NetworkResponse>();
 		response.setReady();
 
-		net::send_MessageBuilder(upstream.data_socket, builder);
+		net::send_MessageBuilder(upstream.data_socket, net::subset_ids::AllRanks, builder);
 	}
 
 	// Proxy local worker result socket to upstream socket, return control of upstream data socket
@@ -565,7 +566,7 @@ cleanup_main:
 		response.setExit();
 
 		// Send exit message to proxy
-		net::send_MessageBuilder(collector_socket, builder);
+		net::send_MessageBuilder(collector_socket, net::subset_ids::AllRanks, builder);
 	}
 
 	// Wait for proxy task to complete and regain ownership of upstream data socket
@@ -592,7 +593,7 @@ cleanup_main:
 		auto response = builder.initRoot<NetworkResponse>();
 		response.setExit();
 
-		net::send_MessageBuilder(upstream.data_socket, builder);
+		net::send_MessageBuilder(upstream.data_socket, net::subset_ids::AllRanks, builder);
 		log("frontend notified of exit\n");
 	}
 

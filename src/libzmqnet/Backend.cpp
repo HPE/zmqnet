@@ -16,7 +16,9 @@ zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string
 	: m_ctx{}
 	, m_upstream{std::make_unique<net::UpstreamLink>(m_ctx, upstreamControlEndpoint, upstreamDataEndpoint)}
 	, m_rank{rank}
-{}
+{
+	net::subscribe_to_tag(*m_upstream, net::subset_ids::AllRanks);
+}
 
 zmqnet::Backend::~Backend()
 {
@@ -32,7 +34,7 @@ void zmqnet::Backend::notifyReady()
 	response.setReady();
 
 	// Send acknowledgement
-	net::send_MessageBuilder(m_upstream->data_socket, builder);
+	net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
 }
 
 void zmqnet::Backend::sendResult(zmqnet::Stream::Id const& streamId, char const* result_buffer, size_t result_len)
@@ -47,7 +49,7 @@ void zmqnet::Backend::sendResult(zmqnet::Stream::Id const& streamId, char const*
 	}
 
 	// Send result
-	net::send_MessageBuilder(m_upstream->data_socket, builder);
+	net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
 }
 
 // Synchronous Backend
@@ -76,7 +78,7 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 				auto response = builder.initRoot<NetworkResponse>();
 				response.setExit();
 
-				net::send_MessageBuilder(m_upstream->data_socket, builder);
+				net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
 			}
 			m_upstream->control_socket.close();
 			m_upstream->data_socket.close();
@@ -91,7 +93,7 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 			auto streamAck = response.initStream();
 			streamAck.setStreamId(command.getStream().getStreamId());
 
-			net::send_MessageBuilder(m_upstream->data_socket, builder);
+			net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
 
 			continue;
 
@@ -145,7 +147,7 @@ static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zm
 		streamAck.setStreamId(streamId);
 
 		// Relay acknowledgement to proxy
-		net::send_MessageBuilder(result_socket, builder);
+		net::send_MessageBuilder(result_socket, net::subset_ids::AllRanks, builder);
 	}
 
 	while (true) {
@@ -181,7 +183,7 @@ static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zm
 
 			// Send result
 			log("backend %d: sending result size %lu\n", streamId, result_size);
-			net::send_MessageBuilder(result_socket, builder);
+			net::send_MessageBuilder(result_socket, net::subset_ids::AllRanks, builder);
 		}
 	}
 }
@@ -243,7 +245,7 @@ void zmqnet::AsyncBackend::notifyReady()
 	response.setReady();
 
 	// Send ready acknowledgement
-	net::send_MessageBuilder(m_collectorSocket, builder);
+	net::send_MessageBuilder(m_collectorSocket, net::subset_ids::AllRanks, builder);
 }
 
 void zmqnet::AsyncBackend::waitForExit()
@@ -264,7 +266,7 @@ void zmqnet::AsyncBackend::waitForExit()
 		response.setExit();
 
 		// Send exit message to proxy
-		net::send_MessageBuilder(m_collectorSocket, builder);
+		net::send_MessageBuilder(m_collectorSocket, net::subset_ids::AllRanks, builder);
 	}
 
 	// Reacquire upstream data socket from exiting proxy
@@ -279,6 +281,6 @@ void zmqnet::AsyncBackend::waitForExit()
 		response.setExit();
 
 		// Send acknowledgement to proxy
-		net::send_MessageBuilder(m_upstream->data_socket, builder);
+		net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
 	}
 }

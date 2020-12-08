@@ -101,7 +101,7 @@ zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Stream::Id const& s
 	m_stream_registering->set(stream_lock, true);
 
 	// Send filter create command
-	createStream(streamId, filterLibraryName, filterFunctionName);
+	auto const result = createStream(streamId, filterLibraryName, filterFunctionName);
 
 	// Wait for distributor to clear stream registration flag (registration flag is unlocked during wait)
 	log("waiting for stream %d registration to complete\n", streamId);
@@ -109,7 +109,7 @@ zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Stream::Id const& s
 	log("stream %d registration completed\n", streamId);
 
 	// Return new stream handle
-	return Stream { .id = streamId };
+	return result;
 }
 
 void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
