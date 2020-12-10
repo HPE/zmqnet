@@ -134,6 +134,8 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 	}
 }
 
+#if 0
+
 // Asynchronous Backend
 
 // Static asynchronous backend functions to be run in own threads
@@ -307,3 +309,5 @@ void zmqnet::AsyncBackend::waitForExit()
 		net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
 	}
 }
+
+#endif

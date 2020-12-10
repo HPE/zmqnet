@@ -49,10 +49,16 @@ struct Topology
 	int fanout;
 };
 
+struct Communicator
+{
+	using Id = int;
+	Id id;
+};
+
 struct Stream
 {
 	using Id = int;
-	Id id, subsetId;
+	Id id;
 };
 
 using RankSet = std::set<int>;
@@ -70,8 +76,8 @@ public:
 	~Frontend();
 
 protected:
+	Communicator createCommunicator(Stream const& stream, RankSet const& ranks);
 	Stream createStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
-	Stream createSubset(Stream const& stream, RankSet const& ranks);
 
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void sendExit();
@@ -89,6 +95,7 @@ public:
 	void runExit();
 };
 
+#if 0
 class AsyncFrontend : public Frontend
 {
 public:
@@ -112,7 +119,7 @@ public:
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void runExit();
 };
-
+#endif
 class Backend
 {
 public:
@@ -152,7 +159,7 @@ public:
 	std::tuple<Stream::Id, ByteArray> nextCommand();
 };
 
-
+#if 0
 class AsyncBackend : public Backend
 {
 public:
@@ -176,5 +183,6 @@ public:
 	void notifyReady();
 	void waitForExit();
 };
+#endif
 
 } // zmqnet
