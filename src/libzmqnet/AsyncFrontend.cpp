@@ -112,6 +112,28 @@ zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Stream::Id const& s
 	return result;
 }
 
+zmqnet::Stream zmqnet::AsyncFrontend::registerSubset(zmqnet::Stream const& stream, zmqnet::RankSet const& ranks)
+{
+	// Lock stream registration flag shared with callback distributor task
+	log("starting stream %d subset registration\n", stream.id);
+	auto stream_lock = m_stream_registering->acquire_lock();
+
+	// Set stream registration flag
+	assert(m_stream_registering->get(stream_lock) == false);
+	m_stream_registering->set(stream_lock, true);
+
+	// Send filter create command
+	auto const result = createSubset(stream, ranks);
+
+	// Wait for distributor to clear stream registration flag (registration flag is unlocked during wait)
+	log("waiting for stream %d subset registration to complete\n", stream.id);
+	m_stream_registering->unlock_and_wait_until(std::move(stream_lock), false);
+	log("stream %d registration completed\n", stream.id);
+
+	// Return new stream handle
+	return result;
+}
+
 void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
 {
 	// Ensure stream registered

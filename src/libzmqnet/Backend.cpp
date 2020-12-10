@@ -12,10 +12,13 @@
 // Internal helpers and classes
 #include "libzmqnet.hpp"
 
+#include "lrle_bitset_impl.hpp"
+
 zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
 	: m_ctx{}
 	, m_upstream{std::make_unique<net::UpstreamLink>(m_ctx, upstreamControlEndpoint, upstreamDataEndpoint)}
 	, m_rank{rank}
+	, m_rank_bitset{std::move(lrle_bitset{(size_t)m_rank}.compressed)}
 {
 	net::subscribe_to_tag(*m_upstream, net::subset_ids::AllRanks);
 }
@@ -31,7 +34,13 @@ void zmqnet::Backend::notifyReady()
 	log("rank backend %d: notifying parent ready from leaf node\n", m_rank);
 	auto builder = capnp::MallocMessageBuilder{};
 	auto response = builder.initRoot<NetworkResponse>();
-	response.setReady();
+	auto ready = response.initReady();
+
+	// Set rank bitset
+	response.setRanks(kj::ArrayPtr<kj::byte const>
+		{ (unsigned char const*)m_rank_bitset.data()
+		, m_rank_bitset.size()
+	});
 
 	// Send acknowledgement
 	net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
@@ -47,6 +56,12 @@ void zmqnet::Backend::sendResult(zmqnet::Stream::Id const& streamId, char const*
 	if (result_len > 0) {
 		user.setContent(kj::ArrayPtr<kj::byte const>{(unsigned char const*)result_buffer, result_len});
 	}
+
+	// Set rank bitset
+	user.setRanks(kj::ArrayPtr<kj::byte const>
+		{ (unsigned char const*)m_rank_bitset.data()
+		, m_rank_bitset.size()
+	});
 
 	// Send result
 	net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
@@ -85,13 +100,21 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 
 			return std::make_tuple(-1, ByteArray{});
 
-		// Acknowledge filter case
-		} else if (command.isStream()) {
-			log("rank backend %d: filter response\n", m_rank);
+		// Acknowledge filter / subset case
+		} else if (command.isStream() || command.isSubset()) {
+			log("rank backend %d: filter / subset response\n", m_rank);
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
-			auto streamAck = response.initStream();
-			streamAck.setStreamId(command.getStream().getStreamId());
+
+			if (command.isStream()) {
+				auto streamAck = response.initStream();
+				streamAck.setStreamId(command.getStream().getStreamId());
+
+			} else if (command.isSubset()) {
+				auto subsetAck = response.initSubset();
+				subsetAck.setStreamId(command.getSubset().getStreamId());
+				subsetAck.setRanks(command.getSubset().getRanks());
+			}
 
 			net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
 

@@ -17,18 +17,23 @@ struct NetworkCommand {
   union {
     exit @0 :Void;
 
-    startLeaves @5 :Void;
+    startLeaves @1 :Void;
 
     stream :group {
-      streamId @1 :Int32;
-      filterLibraryName @2 :Text;
-      filterFunctionName @6 :Text;
+      streamId @2 :Int32;
+      filterLibraryName @3 :Text;
+      filterFunctionName @4 :Text;
+    }
+
+    subset :group {
+      streamId @5 :Int32;
+      subsetId @6 :Int32;
       ranks @7 :Data;
     }
 
     user :group {
-      streamId @3 :Int32;
-      content @4 :Data;
+      streamId @8 :Int32;
+      content @9 :Data;
     }
   }
 }
@@ -37,16 +42,24 @@ struct NetworkResponse {
   union {
     exit @0 :Void;
 
-    ready @1 :Void;
+    ready :group {
+      ranks @1 :Data;
+    }
 
     stream :group {
       streamId @2 :Int32;
     }
 
-    user :group {
+    subset :group {
       streamId @3 :Int32;
+      subsetId @4 :Int32;
       ranks @5 :Data;
-      content @4 :Data;
+    }
+
+    user :group {
+      streamId @6 :Int32;
+      ranks @7 :Data;
+      content @8 :Data;
     }
   }
 }

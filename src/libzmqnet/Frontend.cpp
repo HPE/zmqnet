@@ -417,12 +417,29 @@ zmqnet::Stream zmqnet::Frontend::createStream(zmqnet::Stream::Id const& streamId
 	streamCommand.setFilterLibraryName(filterLibraryName);
 	streamCommand.setFilterFunctionName(filterFunctionName);
 
-#if 0
-	// If stream is subset communication, compress and set rank set in message
-	if (!ranks.empty()) {
+	// Send filter create command
+	log("registering filter %s function %s with id %d\n", filterLibraryName.c_str(), filterFunctionName.c_str(), streamId);
+	net::send_MessageBuilder(m_downstream->control_socket, net::subset_ids::AllRanks, builder);
 
-		// Pack rank set into bitset
-		auto const max_rank = *ranks.rbegin();
+	// Return new stream handle
+	return Stream { .id = streamId, .subsetId = net::subset_ids::AllRanks };
+}
+
+zmqnet::Stream zmqnet::Frontend::createSubset(zmqnet::Stream const& stream, zmqnet::RankSet const& ranks)
+{
+	if (ranks.empty()) {
+		throw std::runtime_error("expected non-empty rank set");
+	}
+
+	// Create subset create command message
+	auto builder = capnp::MallocMessageBuilder{};
+	auto streamCommand = builder.initRoot<NetworkCommand>().initSubset();
+	auto const subsetId = m_next_subsetId++;
+	streamCommand.setStreamId(stream.id);
+	streamCommand.setStreamId(subsetId);
+
+	// Pack rank set into bitset
+	{ auto const max_rank = (size_t)*ranks.rbegin();
 		auto unpacked_rank_set = unpacked_bitset{max_rank + 1};
 		for (auto&& rank : ranks) { unpacked_rank_set.set(rank); }
 
@@ -434,14 +451,13 @@ zmqnet::Stream zmqnet::Frontend::createStream(zmqnet::Stream::Id const& streamId
 			, lrle_rank_set.compressed.size()
 		});
 	}
-#endif
 
 	// Send filter create command
-	log("registering filter %s function %s with id %d\n", filterLibraryName.c_str(), filterFunctionName.c_str(), streamId);
+	log("registering subset %02x with stream id %d\n", subsetId, stream.id);
 	net::send_MessageBuilder(m_downstream->control_socket, net::subset_ids::AllRanks, builder);
 
 	// Return new stream handle
-	return Stream { .id = streamId, .subsetId = net::subset_ids::AllRanks };
+	return Stream { .id = stream.id, .subsetId = subsetId };
 }
 
 void zmqnet::Frontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
@@ -489,6 +505,25 @@ zmqnet::Stream zmqnet::SyncFrontend::registerStream(zmqnet::Stream::Id const& st
 	return result;
 }
 
+zmqnet::Stream zmqnet::SyncFrontend::registerSubset(zmqnet::Stream const& stream, zmqnet::RankSet const& ranks)
+{
+	auto const start_ms = get_milliseconds();
+
+	// Send subset create command
+	auto const result = createSubset(stream, ranks);
+
+	// Wait for acknowledgement
+	auto reader = net::recv_MessageReader(m_downstream->data_socket);
+	auto response = reader.getRoot<NetworkResponse>();
+	assert(response.isSubset() && (response.getSubset().getStreamId() == stream.id)
+		&& (response.getSubset().getSubsetId() == result.subsetId));
+
+	auto const filter_ms = get_milliseconds() - start_ms;
+	log("subset registered RT: %5ldms\n", filter_ms);
+
+	// Return new subset stream handle
+	return result;
+}
 
 zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
 {

@@ -409,12 +409,14 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 		}
 
 		// Content is either stream or user content
-		assert(content.isStream() || content.isUser());
+		assert(content.isStream() || content.isSubset() || content.isUser());
 
 		// Extract stream ID to select stream worker
 		auto const streamId = (content.isStream())
 			? content.getStream().getStreamId()
-			: content.getUser().getStreamId();
+			: (content.isSubset())
+				? content.getSubset().getStreamId()
+				: content.getUser().getStreamId();
 
 		// Get socket for given stream ID
 		auto const idSocketPair = taskSockets.find(streamId);
@@ -434,17 +436,21 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 			taskSockets.emplace_hint(idSocketPair, streamId,
 				make_task_socket(ctx, streamId, std::move(message)));
 
-			// Notify via semaphore that stream registration has completed, if provided
-			log("distributor: notifying main thread that stream registration has completed\n");
-			if (maybeStreamSemaphore) {
-				maybeStreamSemaphore->get().set(*maybeStreamLock, false);
-				maybeStreamSemaphore->get().unlock_and_notify_one(std::move(*maybeStreamLock));
-			}
-
 		// Relay message to task socket
 		} else {
 			log("distributor: relay message to stream %d\n", streamId);
 			idSocketPair->second.send(std::move(message), zmq::send_flags::none);
+		}
+
+		// Stream and subset messages should notify main thread, if raised
+		if ((content.isStream() || content.isSubset()) && maybeStreamSemaphore) {
+			auto stream_lock = maybeStreamSemaphore->get().acquire_lock();
+
+			log("distributor: notifying main thread that stream registration has completed\n");
+			if (maybeStreamSemaphore->get().get(stream_lock) == true) {
+				maybeStreamSemaphore->get().set(stream_lock, false);
+				maybeStreamSemaphore->get().unlock_and_notify_one(std::move(stream_lock));
+			}
 		}
 	}
 }

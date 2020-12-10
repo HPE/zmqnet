@@ -23,6 +23,7 @@
 
 #include "argv_defs.hpp"
 
+#include "libzmqnet/lrle_bitset_impl.hpp"
 #include "libzmqnet/libzmqnet.hpp"
 
 // Parse user-provided arguments
@@ -140,7 +141,8 @@ namespace workers
 
 // Process result messages; aggregate and send to local result socket
 static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
-	zmqnet::Stream::Id streamId, int num_children, std::string filterPath, std::string filterFunctionName)
+	lrle_bitset const& descendants_bitset, int num_children,
+	zmqnet::Stream::Id streamId, std::string filterPath, std::string filterFunctionName)
 {
 	int rc = -1;
 
@@ -181,8 +183,25 @@ static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
 	}
 
 	// Filter synchronization, aggregate and send results when all children have reported
-	auto in_progress_results = std::vector<zmqnet::ByteArray>{};
-	in_progress_results.reserve(num_children);
+	struct subset_progress
+	{
+		lrle_bitset target;
+		lrle_bitset current;
+		std::vector<std::shared_ptr<zmqnet::ByteArray>> contents;
+
+		subset_progress(lrle_bitset&& target_)
+			: target{std::move(target_)}
+			, current{}
+			, contents{}
+		{}
+
+		void update(unsigned char const* buf, size_t len) { current.or_eq_buf(buf, len); }
+
+		bool complete() const { return current == target; }
+	};
+	auto inProgressResults = std::unordered_map<zmqnet::Subset::Id, subset_progress>
+		{ { zmqnet::subset_ids::AllRanks, subset_progress{descendants_bitset} }
+	};
 
 	while (true) {
 
@@ -196,9 +215,30 @@ static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
 			num_children--;
 			log("commnode %d: child exited, %d remaining\n", streamId, num_children);
 
+		// If subset message, add descendants' ranks bitset
+		} else if (response.isSubset()) {
+
+			// Get subset ranks
+			auto const response_rank_bitset = response.getSubset().getRanks().asBytes();
+
+			// If any descendants match subset mask, relay to children and subscribe to subset tag
+			if (auto descendants_subset_bitset =
+				descendants_bitset.or_buf(response_rank_bitset.begin(), response_rank_bitset.size())) {
+
+				// Add descendant subset to map for subset ID
+				inProgressResults.emplace(response.getSubsetId(), std::move(descendants_subset_bitset));
+			}
+
 		} else {
 			// Check stream ID and user result
 			assert(response.isUser() && (response.getUser().getStreamId() == streamId));
+
+			// Get message ranks
+			auto const response_rank_bitset = response.getSubset().getRanks().asBytes();
+
+			// Update subset ranks
+			inProgressResults.at(response.getSubset().getSubsetId()).update(
+				response_rank_bitset.begin(), response_rank_bitset.size());
 
 			// Add content to in-progress result list
 			log("content length: '%lu'\n", response.getUser().getContent().size());
@@ -463,14 +503,21 @@ int main(int argc, char* const argv[])
 				_exit(-1);
 			}
 		}
+	}
 
-		// Wait for all children to connect and send ready
-		for (int i = 0; i < num_children; i++) {
-			log("waiting for child %d / %d\n", i + 1, num_children);
-			auto reader = net::recv_MessageReader(downstream.data_socket);
-			auto response = reader.getRoot<NetworkResponse>();
-			assert(response.isReady());
-		}
+	// Create mask of all descendants' ranks
+	auto descendants_bitset = lrle_bitset{};
+
+	// Wait for all children to connect and send ready
+	for (int i = 0; i < num_children; i++) {
+		log("waiting for child %d / %d\n", i + 1, num_children);
+		auto reader = net::recv_MessageReader(downstream.data_socket);
+		auto response = reader.getRoot<NetworkResponse>();
+		assert(response.isReady());
+
+		// Add ranks to children rank bitset
+		auto const response_rank_bitset = response.getReady().getRanks().asBytes();
+		descendants_bitset.or_eq_buf(response_rank_bitset.begin(), response_rank_bitset.size());
 	}
 
 	// Send ready to parent
@@ -513,7 +560,10 @@ int main(int argc, char* const argv[])
 		auto command = messageReader.getRoot<NetworkCommand>();
 
 		// Relay command to children
-		downstream.control_socket.send(message, zmq::send_flags::none);
+		if (!command.isSubset()) {
+			// Subset command is only relayed if descendants match subset mask
+			downstream.control_socket.send(message, zmq::send_flags::none);
+		}
 
 		// Determine if exit command was received
 		if (command.isExit()) {
@@ -534,9 +584,34 @@ int main(int argc, char* const argv[])
 
 			// Create new stream task worker
 			streamWorkerTasks.emplace_back(std::async(std::launch::async,
-				[](zmq::context_t& ctx, std::string collectorEndpoint, zmqnet::Stream::Id streamId, int num_children, std::string filterPath, std::string filterFunctionName) {
-					return workers::response_callback(ctx, std::move(collectorEndpoint), streamId, num_children, std::move(filterPath), std::move(filterFunctionName));
-				}, std::ref(ctx), collectorEndpoint, streamId, num_children, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName));
+				[](zmq::context_t& ctx, std::string collectorEndpoint,
+					lrle_bitset const& descendants_bitset, int num_children,
+					zmqnet::Stream::Id streamId, std::string filterPath, std::string filterFunctionName) {
+
+					return workers::response_callback(ctx, std::move(collectorEndpoint),
+						descendants_bitset, num_children,
+						streamId, std::move(filterPath), std::move(filterFunctionName));
+
+				}, std::ref(ctx), collectorEndpoint,
+					std::ref(descendants_bitset), num_children,
+					streamId, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName));
+
+		// Determine if new stream subset is to be registered and subscribed
+		} else if (command.isSubset()) {
+
+			// Get subset rank mask
+			auto const response_rank_bitset = command.getSubset().getRanks().asBytes();
+
+			// If any descendants match subset mask, relay to children and subscribe to subset tag
+			if (auto descendants_subset_bitset =
+				descendants_bitset.or_buf(response_rank_bitset.begin(), response_rank_bitset.size())) {
+
+				// Relay to children
+				downstream.control_socket.send(message, zmq::send_flags::none);
+
+				// Subscribe to subset tag
+				net::subscribe_to_tag(upstream, command.getSubsetId());
+			}
 
 		} else {
 			log("got user command\n");

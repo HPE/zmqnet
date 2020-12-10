@@ -71,7 +71,7 @@ public:
 
 protected:
 	Stream createStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
-	Stream createSubset(Stream::Id const& streamId, RankSet const& ranks);
+	Stream createSubset(Stream const& stream, RankSet const& ranks);
 
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void sendExit();
@@ -83,7 +83,7 @@ public:
 	using Frontend::Frontend;
 
 	Stream registerStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
-	Stream registerSubset(Stream::Id const& streamId, RankSet const& ranks);
+	Stream registerSubset(Stream const& stream, RankSet const& ranks);
 
 	ByteArray runCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void runExit();
@@ -107,7 +107,7 @@ public:
 
 	Stream registerStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
 		CallbackFunc callbackFunc);
-	Stream registerSubset(Stream::Id const& streamId, RankSet const& ranks);
+	Stream registerSubset(Stream const& stream, RankSet const& ranks);
 
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void runExit();
@@ -134,6 +134,7 @@ protected:
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::UpstreamLink> m_upstream;
 	int m_rank;
+	std::vector<unsigned char> m_rank_bitset;
 
 	void notifyReady();
 
