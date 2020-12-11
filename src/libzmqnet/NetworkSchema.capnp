@@ -19,21 +19,20 @@ struct NetworkCommand {
 
     startLeaves @1 :Void;
 
-    stream :group {
-      streamId @2 :Int32;
-      filterLibraryName @3 :Text;
-      filterFunctionName @4 :Text;
+    communicator :group {
+      communicatorId @2 :Int32;
+      ranks @3 :Data;
     }
 
-    subset :group {
-      streamId @5 :Int32;
-      subsetId @6 :Int32;
-      ranks @7 :Data;
+    stream :group {
+      streamId @4 :Int32;
+      filterLibraryName @5 :Text;
+      filterFunctionName @6 :Text;
     }
 
     user :group {
-      streamId @8 :Int32;
-      content @9 :Data;
+      streamId @7 :Int32;
+      content @8 :Data;
     }
   }
 }
@@ -46,20 +45,19 @@ struct NetworkResponse {
       ranks @1 :Data;
     }
 
-    stream :group {
-      streamId @2 :Int32;
+    communicator :group {
+      communicatorId @2 :Int32;
+      ranks @3 :Data;
     }
 
-    subset :group {
-      streamId @3 :Int32;
-      subsetId @4 :Int32;
-      ranks @5 :Data;
+    stream :group {
+      streamId @4 :Int32;
     }
 
     user :group {
-      streamId @6 :Int32;
-      ranks @7 :Data;
-      content @8 :Data;
+      streamId @5 :Int32;
+      ranks @6 :Data;
+      content @7 :Data;
     }
   }
 }

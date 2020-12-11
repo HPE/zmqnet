@@ -20,7 +20,7 @@ zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string
 	, m_rank{rank}
 	, m_rank_bitset{std::move(lrle_bitset{(size_t)m_rank}.compressed)}
 {
-	net::subscribe_to_tag(*m_upstream, net::subset_ids::AllRanks);
+	net::subscribe_to_tag(*m_upstream, net::communicator_ids::AllRanks);
 }
 
 zmqnet::Backend::~Backend()
@@ -37,13 +37,13 @@ void zmqnet::Backend::notifyReady()
 	auto ready = response.initReady();
 
 	// Set rank bitset
-	response.setRanks(kj::ArrayPtr<kj::byte const>
+	ready.setRanks(kj::ArrayPtr<kj::byte const>
 		{ (unsigned char const*)m_rank_bitset.data()
 		, m_rank_bitset.size()
 	});
 
 	// Send acknowledgement
-	net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
+	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
 }
 
 void zmqnet::Backend::sendResult(zmqnet::Stream::Id const& streamId, char const* result_buffer, size_t result_len)
@@ -64,7 +64,7 @@ void zmqnet::Backend::sendResult(zmqnet::Stream::Id const& streamId, char const*
 	});
 
 	// Send result
-	net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
+	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
 }
 
 // Synchronous Backend
@@ -82,6 +82,7 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 		// Receive next network command
 		log("rank backend %d: waiting for next command...\n", m_rank);
 		auto reader = net::recv_MessageReader(m_upstream->control_socket);
+		auto const communicatorId = reader.getTag();
 		auto command = reader.getRoot<NetworkCommand>();
 
 		// Detect exit case
@@ -93,35 +94,53 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 				auto response = builder.initRoot<NetworkResponse>();
 				response.setExit();
 
-				net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
+				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
 			}
 			m_upstream->control_socket.close();
 			m_upstream->data_socket.close();
 
 			return std::make_tuple(-1, ByteArray{});
 
-		// Acknowledge filter / subset case
-		} else if (command.isStream() || command.isSubset()) {
-			log("rank backend %d: filter / subset response\n", m_rank);
-			auto builder = capnp::MallocMessageBuilder{};
-			auto response = builder.initRoot<NetworkResponse>();
+		// Acknowledge and subscribe to communicator if rank is in rank set
+		} else if (command.isCommunicator()) {
+			log("rank backend %d: new communicator\n", m_rank);
 
-			if (command.isStream()) {
-				auto streamAck = response.initStream();
-				streamAck.setStreamId(command.getStream().getStreamId());
+			// Get communicator rank mask
+			auto const communicator_ranks = command.getCommunicator().getRanks().asBytes();
 
-			} else if (command.isSubset()) {
-				auto subsetAck = response.initSubset();
-				subsetAck.setStreamId(command.getSubset().getStreamId());
-				subsetAck.setRanks(command.getSubset().getRanks());
+			// If this rank matches, subscribe to subset tag
+			if (lrle_contains(communicator_ranks.begin(), communicator_ranks.size(), (size_t)m_rank)) {
+
+				// Subscribe to subset tag
+				net::subscribe_to_tag(*m_upstream, communicatorId);
+
+				// Create acknowledgement
+				auto builder = capnp::MallocMessageBuilder{};
+				auto response = builder.initRoot<NetworkResponse>();
+
+				auto communicatorAck = response.initCommunicator();
+				communicatorAck.setCommunicatorId(communicatorId);
+
+				// Send acknowledgement
+				net::send_MessageBuilder(m_upstream->data_socket, communicatorId, builder);
 			}
-
-			net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
 
 			continue;
 
-		} else if (command.isStartLeaves()) {
-			log("rank backend %d: unexpected: startLeaves\n", m_rank);
+		// Acknowledge stream
+		} else if (command.isStream()) {
+			log("rank backend %d: new stream\n", m_rank);
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+
+			auto const streamId = command.getStream().getStreamId();
+
+			// Create acknowledgement
+			auto streamAck = response.initStream();
+			streamAck.setStreamId(streamId);
+
+			net::send_MessageBuilder(m_upstream->data_socket, communicatorId, builder);
+
 			continue;
 
 		// Extract stream ID and user command
@@ -172,7 +191,7 @@ static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zm
 		streamAck.setStreamId(streamId);
 
 		// Relay acknowledgement to proxy
-		net::send_MessageBuilder(result_socket, net::subset_ids::AllRanks, builder);
+		net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
 	}
 
 	while (true) {
@@ -208,7 +227,7 @@ static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zm
 
 			// Send result
 			log("backend %d: sending result size %lu\n", streamId, result_size);
-			net::send_MessageBuilder(result_socket, net::subset_ids::AllRanks, builder);
+			net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
 		}
 	}
 }
@@ -270,7 +289,7 @@ void zmqnet::AsyncBackend::notifyReady()
 	response.setReady();
 
 	// Send ready acknowledgement
-	net::send_MessageBuilder(m_collectorSocket, net::subset_ids::AllRanks, builder);
+	net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllRanks, builder);
 }
 
 void zmqnet::AsyncBackend::waitForExit()
@@ -291,7 +310,7 @@ void zmqnet::AsyncBackend::waitForExit()
 		response.setExit();
 
 		// Send exit message to proxy
-		net::send_MessageBuilder(m_collectorSocket, net::subset_ids::AllRanks, builder);
+		net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllRanks, builder);
 	}
 
 	// Reacquire upstream data socket from exiting proxy
@@ -306,7 +325,7 @@ void zmqnet::AsyncBackend::waitForExit()
 		response.setExit();
 
 		// Send acknowledgement to proxy
-		net::send_MessageBuilder(m_upstream->data_socket, net::subset_ids::AllRanks, builder);
+		net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
 	}
 }
 

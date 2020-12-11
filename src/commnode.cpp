@@ -33,7 +33,6 @@ static auto parse_argv(int argc, char* const argv[])
 	auto nodeConnectionMap = std::string{};
 	auto packed_mode = false;
 	auto packed_rank = int{-1};
-	auto leaf_argv = argv + argc;
 
 	using CA = CommnodeArgv;
 	auto parsedArgv = cti::IncomingArgv<CA>{argc, argv};
@@ -68,11 +67,11 @@ static auto parse_argv(int argc, char* const argv[])
 	}
 
 	// Rest of arguments are leaf arguments
-	leaf_argv = parsedArgv.get_rest();
+	auto const [leaf_argc, leaf_argv] = parsedArgv.get_rest();
 	if (leaf_argv[0] == nullptr) {
 		throw std::runtime_error("leaf binary not provided");
 	}
-	return std::make_tuple(std::move(dealerEndpoint), std::move(nodeConnectionMap), packed_mode, packed_rank, leaf_argv);
+	return std::make_tuple(std::move(dealerEndpoint), std::move(nodeConnectionMap), packed_mode, packed_rank, leaf_argc, leaf_argv);
 }
 
 // Parse node topology and parent connection data from argument string
@@ -179,29 +178,11 @@ static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
 		response.initStream().setStreamId(streamId);
 
 		log("commnode %d: sending stream open acknowledgement\n");
-		net::send_MessageBuilder(result_socket, net::subset_ids::AllRanks, builder);
+		net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
 	}
 
 	// Filter synchronization, aggregate and send results when all children have reported
-	struct subset_progress
-	{
-		lrle_bitset target;
-		lrle_bitset current;
-		std::vector<std::shared_ptr<zmqnet::ByteArray>> contents;
-
-		subset_progress(lrle_bitset&& target_)
-			: target{std::move(target_)}
-			, current{}
-			, contents{}
-		{}
-
-		void update(unsigned char const* buf, size_t len) { current.or_eq_buf(buf, len); }
-
-		bool complete() const { return current == target; }
-	};
-	auto inProgressResults = std::unordered_map<zmqnet::Subset::Id, subset_progress>
-		{ { zmqnet::subset_ids::AllRanks, subset_progress{descendants_bitset} }
-	};
+	auto in_progress_results = std::vector<zmqnet::ByteArray>{};
 
 	while (true) {
 
@@ -215,30 +196,9 @@ static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
 			num_children--;
 			log("commnode %d: child exited, %d remaining\n", streamId, num_children);
 
-		// If subset message, add descendants' ranks bitset
-		} else if (response.isSubset()) {
-
-			// Get subset ranks
-			auto const response_rank_bitset = response.getSubset().getRanks().asBytes();
-
-			// If any descendants match subset mask, relay to children and subscribe to subset tag
-			if (auto descendants_subset_bitset =
-				descendants_bitset.or_buf(response_rank_bitset.begin(), response_rank_bitset.size())) {
-
-				// Add descendant subset to map for subset ID
-				inProgressResults.emplace(response.getSubsetId(), std::move(descendants_subset_bitset));
-			}
-
 		} else {
 			// Check stream ID and user result
 			assert(response.isUser() && (response.getUser().getStreamId() == streamId));
-
-			// Get message ranks
-			auto const response_rank_bitset = response.getSubset().getRanks().asBytes();
-
-			// Update subset ranks
-			inProgressResults.at(response.getSubset().getSubsetId()).update(
-				response_rank_bitset.begin(), response_rank_bitset.size());
 
 			// Add content to in-progress result list
 			log("content length: '%lu'\n", response.getUser().getContent().size());
@@ -265,7 +225,7 @@ static int response_callback(zmq::context_t& ctx, std::string resultEndpoint,
 
 			// Send result
 			log("sending result size %lu\n", result_size);
-			net::send_MessageBuilder(result_socket, net::subset_ids::AllRanks, builder);
+			net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
 		}
 
 		// If all children exited, end loop
@@ -304,7 +264,7 @@ static auto fcfs(zmq::context_t& ctx, net::UpstreamLink& upstream, net::TcpDowns
 		topologyRequest.setNodeDataEndpoint(dataEndpoint);
 
 		// Send this node's endpoints to topology server
-		net::send_MessageBuilder(request_socket, net::subset_ids::AllRanks, builder);
+		net::send_MessageBuilder(request_socket, net::communicator_ids::AllRanks, builder);
 		log("registered endpoints with topology server\n");
 	}
 
@@ -351,7 +311,7 @@ static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstr
 		topologyRequest.setNodeHostname(hostname);
 
 		// Send this node's endpoints to topology server
-		net::send_MessageBuilder(upstream.data_socket, net::subset_ids::AllRanks, builder);
+		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
 	}
 	log("registered with frontend. relaying child messages\n");
 
@@ -364,11 +324,10 @@ static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstr
 
 	// Wait for leaf start command from frontend and relay
 	log("children launched, waiting for rest of network to launch\n");
-	{ auto message = net::recv_message(upstream.control_socket);
-		auto reader = net::make_MessageReader(message);
+	{ auto reader = net::recv_MessageReader(upstream.control_socket);
 		auto command = reader.getRoot<NetworkCommand>();
 		assert(command.isStartLeaves());
-		downstream.control_socket.send(std::move(message), zmq::send_flags::none);
+		downstream.control_socket.send(reader.eject(), zmq::send_flags::none);
 	}
 }
 
@@ -381,11 +340,11 @@ int main(int argc, char* const argv[])
 	auto ctx = zmq::context_t{};
 
 	// Read arguments from frontend
-	auto [dealerEndpoint, nodeConnectionMap, packed_mode, packed_rank, leaf_argv] = parse_argv(argc, argv);
+	auto [dealerEndpoint, nodeConnectionMap, packed_mode, packed_rank, leaf_argc, leaf_argv] = parse_argv(argc, argv);
 
 	// Start network connection process
 	auto upstream = net::UpstreamLink{ctx};
-	net::subscribe_to_tag(upstream, net::subset_ids::AllRanks);
+	net::subscribe_to_tag(upstream, net::communicator_ids::AllRanks);
 	auto downstream = net::TcpDownstreamLink{ctx};
 	auto num_children = int{};
 
@@ -433,8 +392,8 @@ int main(int argc, char* const argv[])
 		commnodeArgv.add(cti::Argv::Argument{"-1"}); // Add seperately from option so it can be replaced via pointer
 
 		// Add provided leaf arguments
-		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
-			commnodeArgv.add(cti::Argv::Argument{*argptr});
+		for (int i = 0; i < leaf_argc; i++) {
+			commnodeArgv.add(cti::Argv::Argument{leaf_argv[i]});
 		}
 
 		// Get pointer to rank argument
@@ -477,8 +436,8 @@ int main(int argc, char* const argv[])
 		};
 
 		// Copy provided arguments
-		for (auto argptr = leaf_argv + 1; *argptr != nullptr; argptr++) {
-			completeLeafArgv.add(*argptr);
+		for (int i = 1; i < leaf_argc; i++) {
+			completeLeafArgv.add(leaf_argv[i]);
 		}
 
 		// Get pointer to rank argument
@@ -525,9 +484,15 @@ int main(int argc, char* const argv[])
 	fprintf(stderr, "%05lu: sending ready to parent\n", get_milliseconds() - start_ms);
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
-		response.setReady();
+		auto ready = response.initReady();
 
-		net::send_MessageBuilder(upstream.data_socket, net::subset_ids::AllRanks, builder);
+		// Set rank bitset
+		ready.setRanks(kj::ArrayPtr<kj::byte const>
+			{ (unsigned char const*)descendants_bitset.compressed.data()
+			, descendants_bitset.compressed.size()
+		});
+
+		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
 	}
 
 	// Proxy local worker result socket to upstream socket, return control of upstream data socket
@@ -555,15 +520,11 @@ int main(int argc, char* const argv[])
 
 		// Receive next command from parent
 		log("waiting for command from upstream\n");
-		auto message = net::recv_message(upstream.control_socket);
-		auto messageReader = net::make_MessageReader(message);
-		auto command = messageReader.getRoot<NetworkCommand>();
+		auto reader = net::recv_MessageReader(upstream.control_socket);
+		auto command = reader.getRoot<NetworkCommand>();
 
 		// Relay command to children
-		if (!command.isSubset()) {
-			// Subset command is only relayed if descendants match subset mask
-			downstream.control_socket.send(message, zmq::send_flags::none);
-		}
+		downstream.control_socket.send(reader.get(), zmq::send_flags::none);
 
 		// Determine if exit command was received
 		if (command.isExit()) {
@@ -573,6 +534,26 @@ int main(int argc, char* const argv[])
 		} else if (command.isStartLeaves()) {
 			log("unexpected: startLeaves\n");
 			continue;
+
+		// Determine if new communicator is to be registered and subscribed
+		} else if (command.isCommunicator()) {
+
+			// Get communicator rank mask
+			auto const communicator_ranks_bitset = command.getCommunicator().getRanks().asBytes();
+
+			// If any descendants match subset mask, relay to children and subscribe to subset tag
+			if (lrle_any_intersection(
+				descendants_bitset.compressed.data(), descendants_bitset.compressed.size(),
+				communicator_ranks_bitset.begin(), communicator_ranks_bitset.size())) {
+
+				auto const communicatorId = reader.getTag();
+
+				// Relay to children
+				downstream.control_socket.send(reader.eject(), zmq::send_flags::none);
+
+				// Subscribe to subset tag
+				net::subscribe_to_tag(upstream, communicatorId);
+			}
 
 		// Determine if new stream is to be registered
 		} else if (command.isStream()) {
@@ -595,23 +576,6 @@ int main(int argc, char* const argv[])
 				}, std::ref(ctx), collectorEndpoint,
 					std::ref(descendants_bitset), num_children,
 					streamId, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName));
-
-		// Determine if new stream subset is to be registered and subscribed
-		} else if (command.isSubset()) {
-
-			// Get subset rank mask
-			auto const response_rank_bitset = command.getSubset().getRanks().asBytes();
-
-			// If any descendants match subset mask, relay to children and subscribe to subset tag
-			if (auto descendants_subset_bitset =
-				descendants_bitset.or_buf(response_rank_bitset.begin(), response_rank_bitset.size())) {
-
-				// Relay to children
-				downstream.control_socket.send(message, zmq::send_flags::none);
-
-				// Subscribe to subset tag
-				net::subscribe_to_tag(upstream, command.getSubsetId());
-			}
 
 		} else {
 			log("got user command\n");
@@ -641,7 +605,7 @@ cleanup_main:
 		response.setExit();
 
 		// Send exit message to proxy
-		net::send_MessageBuilder(collector_socket, net::subset_ids::AllRanks, builder);
+		net::send_MessageBuilder(collector_socket, net::communicator_ids::AllRanks, builder);
 	}
 
 	// Wait for proxy task to complete and regain ownership of upstream data socket
@@ -668,7 +632,7 @@ cleanup_main:
 		auto response = builder.initRoot<NetworkResponse>();
 		response.setExit();
 
-		net::send_MessageBuilder(upstream.data_socket, net::subset_ids::AllRanks, builder);
+		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
 		log("frontend notified of exit\n");
 	}
 

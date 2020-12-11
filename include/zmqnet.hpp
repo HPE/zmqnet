@@ -58,6 +58,7 @@ struct Communicator
 struct Stream
 {
 	using Id = int;
+	Id communicatorId;
 	Id id;
 };
 
@@ -68,7 +69,7 @@ class Frontend
 protected:
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::TcpDownstreamLink> m_downstream;
-	Stream::Id m_next_subsetId;
+	Communicator::Id m_next_communicatorId;
 
 public:
 	Frontend(int const app_id, long int const session_id, long int const manifest_id,
@@ -76,8 +77,9 @@ public:
 	~Frontend();
 
 protected:
-	Communicator createCommunicator(Stream const& stream, RankSet const& ranks);
-	Stream createStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
+	Communicator createCommunicator(RankSet const& ranks);
+	Stream createStream(Communicator const& communicator,
+		Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
 
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void sendExit();
@@ -88,8 +90,10 @@ class SyncFrontend : public Frontend
 public:
 	using Frontend::Frontend;
 
-	Stream registerStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
-	Stream registerSubset(Stream const& stream, RankSet const& ranks);
+	Communicator getAllRanksCommunicator() const;
+	Communicator registerCommunicator(RankSet const& ranks);
+	Stream registerStream(Communicator const& communicator,
+		Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
 
 	ByteArray runCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void runExit();

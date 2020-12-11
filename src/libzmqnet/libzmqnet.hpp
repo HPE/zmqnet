@@ -201,11 +201,10 @@ static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::str
 
 // Capnp and application protocol
 
-namespace subset_ids
+namespace communicator_ids
 {
 	static constexpr auto AllRanks = int{0xff};
 };
-
 
 // Subscribe to messages starting with the given tag
 static inline void subscribe_to_tag(UpstreamLink& upstream, int tag)
@@ -260,22 +259,11 @@ static inline auto builderToTaggedMessage(int tag, capnp::MessageBuilder& builde
 	return kj::mv(result);
 }
 
-static inline void send_MessageBuilder(zmq::socket_t& socket, zmqnet::Stream::Id subsetId, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
+static inline void send_MessageBuilder(zmq::socket_t& socket, zmqnet::Communicator::Id communicatorId, capnp::MessageBuilder& builder, zmq::send_flags const sockopt = zmq::send_flags::none)
 {
-	auto messageArray = builderToTaggedMessage(subsetId, builder);
+	auto messageArray = builderToTaggedMessage(communicatorId, builder);
 	auto const messageBytes = messageArray.asBytes();
 	socket.send(zmq::message_t{messageBytes.begin(), messageBytes.size()}, sockopt);
-}
-
-static inline auto make_MessageReader(zmq::message_t& message)
-{
-	assert(message.size() % sizeof(capnp::word) == 0);
-
-	// Discard subset tag from message
-	auto const messageWords = message.data<capnp::word>() + 1;
-	auto const messageWordsLen = (message.size() / sizeof(capnp::word)) - 1;
-
-	return capnp::UnalignedFlatArrayMessageReader(kj::arrayPtr(messageWords, messageWordsLen));
 }
 
 // Store required message / Reader state in custom object to avoid dropped backing storage
@@ -284,26 +272,42 @@ class ReaderStorage
 {
 public:
 	zmq::message_t message;
-	capnp::UnalignedFlatArrayMessageReader reader;
+	std::pair<int, capnp::UnalignedFlatArrayMessageReader> tagReaderPair;
 
-	static auto make_Reader(zmq::message_t& message) {
+	static inline auto extractTagReader(zmq::message_t& message)
+	{
 		assert(message.size() % sizeof(capnp::word) == 0);
 
-		// Discard subset tag from message
+		// Extract tag from first word of message
+		auto const tag = (int)message.data<unsigned char>()[0];
+		assert((0 < tag) && (tag <= 0xff));
+
+		// Rest of message contains capnp words
 		auto const messageWords = message.data<capnp::word>() + 1;
 		auto const messageWordsLen = (message.size() / sizeof(capnp::word)) - 1;
 
 		auto messageArray = kj::arrayPtr(messageWords, messageWordsLen);
-		return capnp::UnalignedFlatArrayMessageReader(messageArray);
+		return std::make_pair(tag, capnp::UnalignedFlatArrayMessageReader(messageArray));
 	}
 
 	ReaderStorage(zmq::message_t&& message_)
 		: message{std::move(message_)}
-		, reader{make_Reader(message)}
+		, tagReaderPair{extractTagReader(message)}
 	{}
 
+	auto getTag() const { return tagReaderPair.first; }
+
 	template <typename T>
-	auto getRoot() { return reader.getRoot<T>(); }
+	auto getRoot() { return tagReaderPair.second.getRoot<T>(); }
+
+	auto& get() { return message; }
+
+	auto eject()
+	{
+		assert(tagReaderPair.first != 0x00);
+		tagReaderPair.first = 0x00;
+		return std::move(message);
+	}
 };
 
 static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
@@ -329,15 +333,15 @@ static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::
 
 	while (true) {
 		// Read next incoming local message
-		auto message = net::recv_message(collector_socket);
+		auto reader = net::recv_MessageReader(collector_socket);
 
 		// If exit message, return socket back to caller for cleanup
-		if (net::make_MessageReader(message).getRoot<NetworkResponse>().isExit()) {
+		if (reader.getRoot<NetworkResponse>().isExit()) {
 			return std::move(output_socket);
 		}
 
 		// Otherwise, relay application result response upstream
-		output_socket.send(std::move(message), zmq::send_flags::none);
+		output_socket.send(reader.eject(), zmq::send_flags::none);
 	}
 }
 
@@ -382,8 +386,7 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 	while (true) {
 		// Receive next message
 		log("distributor: receiving message...\n");
-		auto message = net::recv_message(input_socket);
-		auto reader = net::make_MessageReader(message);
+		auto reader = net::recv_MessageReader(input_socket);
 		auto content = reader.getRoot<MessageProto>();
 
 		// If exit, clean up
@@ -391,6 +394,7 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 			log("distributor: exit (%d remaining)\n", num_clients - 1);
 
 			// Relay exit message to task sockets
+			auto message = reader.eject();
 			for (auto&& [streamId, task_socket] : taskSockets) {
 				task_socket.send(message, zmq::send_flags::none);
 			}
@@ -409,14 +413,12 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 		}
 
 		// Content is either stream or user content
-		assert(content.isStream() || content.isSubset() || content.isUser());
+		assert(content.isStream() || content.isUser());
 
 		// Extract stream ID to select stream worker
 		auto const streamId = (content.isStream())
 			? content.getStream().getStreamId()
-			: (content.isSubset())
-				? content.getSubset().getStreamId()
-				: content.getUser().getStreamId();
+			: content.getUser().getStreamId();
 
 		// Get socket for given stream ID
 		auto const idSocketPair = taskSockets.find(streamId);
@@ -434,16 +436,16 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 
 			// Create task socket and store in stream task socket map
 			taskSockets.emplace_hint(idSocketPair, streamId,
-				make_task_socket(ctx, streamId, std::move(message)));
+				make_task_socket(ctx, streamId, reader.eject()));
 
 		// Relay message to task socket
 		} else {
 			log("distributor: relay message to stream %d\n", streamId);
-			idSocketPair->second.send(std::move(message), zmq::send_flags::none);
+			idSocketPair->second.send(reader.eject(), zmq::send_flags::none);
 		}
 
-		// Stream and subset messages should notify main thread, if raised
-		if ((content.isStream() || content.isSubset()) && maybeStreamSemaphore) {
+		// Stream messages should notify main thread, if raised
+		if (content.isStream() && maybeStreamSemaphore) {
 			auto stream_lock = maybeStreamSemaphore->get().acquire_lock();
 
 			log("distributor: notifying main thread that stream registration has completed\n");
