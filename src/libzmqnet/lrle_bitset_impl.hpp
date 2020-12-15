@@ -41,7 +41,7 @@ struct lrle_bitset
 	auto or_buf(unsigned char const* rhs, size_t rhs_len) const {
 		unsigned char buf[(compressed.size() + rhs_len) * CHUNK_SIZE];
 
-		auto const len = lrle_merge_default(buf, sizeof(buf),
+		auto const len = lrle_or_default(buf, sizeof(buf),
 			compressed.data(), compressed.size(), rhs, rhs_len);
 		if (len < 0) {
 			throw std::runtime_error("lrle merge failed");
@@ -63,11 +63,27 @@ struct lrle_bitset
 		return *this;
 	}
 
+	auto and_buf(unsigned char const* rhs, size_t rhs_len) const {
+		unsigned char buf[(compressed.size() + rhs_len) * CHUNK_SIZE];
+
+		auto const len = lrle_and_default(buf, sizeof(buf),
+			compressed.data(), compressed.size(), rhs, rhs_len);
+		if (len < 0) {
+			throw std::runtime_error("lrle and failed");
+		}
+
+		return lrle_bitset{buf, (size_t)len};
+	}
+
 	bool operator== (lrle_bitset const& rhs) const {
 		if (compressed.size() != rhs.compressed.size()) {
 			return false;
 		}
 		return compressed == rhs.compressed;
+	}
+
+	bool operator!= (lrle_bitset const& rhs) const {
+		return !(*this == rhs);
 	}
 
 	bool empty() const {
@@ -81,4 +97,23 @@ struct lrle_bitset
 	size_t memsize() const {
 		return compressed.size();
 	}
+
+        std::string to_string() const {
+                auto hb_to_hex = [](unsigned char const halfbyte) {
+                        if (halfbyte < 10U) {
+                                return (char)('0' + halfbyte);
+                        } else {
+                                return (char)('a' + (halfbyte - 10U));
+                        }
+                };
+
+                std::string result;
+                result.reserve(compressed.size() * 2);
+                for (size_t i = 0; i < compressed.size(); i++) {
+                        result.push_back(hb_to_hex(compressed[i] >> 4));
+                        result.push_back(hb_to_hex(compressed[i] & 0x0f));
+                        result.push_back(' ');
+                }
+                return result;
+        }
 };

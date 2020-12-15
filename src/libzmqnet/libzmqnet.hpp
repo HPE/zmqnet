@@ -207,7 +207,7 @@ namespace communicator_ids
 };
 
 // Subscribe to messages starting with the given tag
-static inline void subscribe_to_tag(UpstreamLink& upstream, int tag)
+static inline void subscribe_to_tag(zmq::socket_t& socket, int tag)
 {
 	assert((0 < tag) && (tag <= 0xff)); // TODO: pad out to the right
 
@@ -215,7 +215,7 @@ static inline void subscribe_to_tag(UpstreamLink& upstream, int tag)
 	unsigned char buf[] = {(unsigned char)tag, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, '\0'};
 
 	// Subscribe to padded tag topic
-	upstream.control_socket.set(zmq::sockopt::subscribe, (char const*)buf);
+	socket.set(zmq::sockopt::subscribe, (char const*)buf);
 }
 
 static inline auto builderToTaggedMessage(int tag, capnp::MessageBuilder& builder)
@@ -346,19 +346,16 @@ static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::
 }
 
 // Standard endpoint format for task sockets created by message distributor
-static inline std::string task_socket_endpoint(zmqnet::Stream::Id const streamId)
+static inline std::string stream_aggregator_endpoint(zmqnet::Stream const& stream)
 {
-	return "inproc://stream-" + std::to_string(streamId);
+	return "inproc://stream-" + std::to_string(stream.communicatorId) + "-" + std::to_string(stream.id);
 }
 
-namespace
-{
-
-static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream::Id const streamId, zmq::message_t&& stream_message)
+static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream const& stream, zmq::message_t&& stream_message)
 {
 	// Create task socket and bind to known endpoint format
 	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::push};
-	auto const taskEndpoint = task_socket_endpoint(streamId);
+	auto const taskEndpoint = stream_aggregator_endpoint(stream);
 	log("distributor creating new task socket %s\n", taskEndpoint.c_str());
 	task_socket.bind(taskEndpoint);
 
@@ -367,8 +364,6 @@ static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream
 
 	return std::move(task_socket);
 }
-
-} // anonymous namespace
 
 // Select stream task based on incoming message's stream ID, and send message to stream task socket
 // Stream tasks are created by main thread.

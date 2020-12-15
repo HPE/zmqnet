@@ -39,7 +39,9 @@ struct NetworkCommand {
 
 struct NetworkResponse {
   union {
-    exit @0 :Void;
+    exit :group {
+      ranks @0 :Data;
+    }
 
     ready :group {
       ranks @1 :Data;
@@ -52,12 +54,13 @@ struct NetworkResponse {
 
     stream :group {
       streamId @4 :Int32;
+      ranks @5 :Data;
     }
 
     user :group {
-      streamId @5 :Int32;
-      ranks @6 :Data;
-      content @7 :Data;
+      streamId @6 :Int32;
+      ranks @7 :Data;
+      content @8 :Data;
     }
   }
 }

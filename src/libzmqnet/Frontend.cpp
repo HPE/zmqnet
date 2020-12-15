@@ -399,6 +399,22 @@ zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int
 	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isReady());
 
+	// Create broadcast communicator
+	{ auto builder = capnp::MallocMessageBuilder{};
+		auto communicatorCommand = builder.initRoot<NetworkCommand>().initCommunicator();
+		communicatorCommand.setCommunicatorId(net::communicator_ids::AllRanks);
+
+		// Send communicator create command
+		log("registering communicator %02x\n", net::communicator_ids::AllRanks);
+		net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllRanks, builder);
+	}
+
+	// Wait for communicator acknowledgement
+	{ auto reader = net::recv_MessageReader(m_downstream->data_socket);
+		auto response = reader.getRoot<NetworkResponse>();
+		assert(response.isCommunicator() && (response.getCommunicator().getCommunicatorId() == net::communicator_ids::AllRanks));
+	}
+
 	auto const leaf_ms = get_milliseconds();
 	log("all leaves connected: %5ldms\n", leaf_ms - launch_ms);
 }
@@ -436,7 +452,7 @@ zmqnet::Communicator zmqnet::Frontend::createCommunicator(zmqnet::RankSet const&
 
 	// Send communicator create command
 	log("registering communicator %02x\n", communicatorId);
-	net::send_MessageBuilder(m_downstream->control_socket, communicatorId, builder);
+	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllRanks, builder);
 
 	// Return new communicator handle
 	return Communicator { .id = communicatorId };

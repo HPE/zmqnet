@@ -20,7 +20,7 @@ zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string
 	, m_rank{rank}
 	, m_rank_bitset{std::move(lrle_bitset{(size_t)m_rank}.compressed)}
 {
-	net::subscribe_to_tag(*m_upstream, net::communicator_ids::AllRanks);
+	net::subscribe_to_tag(m_upstream->control_socket, net::communicator_ids::AllRanks);
 }
 
 zmqnet::Backend::~Backend()
@@ -92,7 +92,13 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 			// Send exit acknowledgement to parent
 			{ auto builder = capnp::MallocMessageBuilder{};
 				auto response = builder.initRoot<NetworkResponse>();
-				response.setExit();
+				auto exit = response.initExit();
+
+				// Set rank bitset
+				exit.setRanks(kj::ArrayPtr<kj::byte const>
+					{ (unsigned char const*)m_rank_bitset.data()
+					, m_rank_bitset.size()
+				});
 
 				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
 			}
@@ -109,10 +115,11 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 			auto const communicator_ranks = command.getCommunicator().getRanks().asBytes();
 
 			// If this rank matches, subscribe to subset tag
-			if (lrle_contains(communicator_ranks.begin(), communicator_ranks.size(), (size_t)m_rank)) {
+			if ((communicatorId == net::communicator_ids::AllRanks)
+			 || lrle_contains(communicator_ranks.begin(), communicator_ranks.size(), (size_t)m_rank)) {
 
 				// Subscribe to subset tag
-				net::subscribe_to_tag(*m_upstream, communicatorId);
+				net::subscribe_to_tag(m_upstream->control_socket, communicatorId);
 
 				// Create acknowledgement
 				auto builder = capnp::MallocMessageBuilder{};
@@ -120,6 +127,12 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 
 				auto communicatorAck = response.initCommunicator();
 				communicatorAck.setCommunicatorId(communicatorId);
+
+				// Set rank bitset
+				communicatorAck.setRanks(kj::ArrayPtr<kj::byte const>
+					{ (unsigned char const*)m_rank_bitset.data()
+					, m_rank_bitset.size()
+				});
 
 				// Send acknowledgement
 				net::send_MessageBuilder(m_upstream->data_socket, communicatorId, builder);
@@ -138,6 +151,12 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 			// Create acknowledgement
 			auto streamAck = response.initStream();
 			streamAck.setStreamId(streamId);
+
+			// Set rank bitset
+			streamAck.setRanks(kj::ArrayPtr<kj::byte const>
+				{ (unsigned char const*)m_rank_bitset.data()
+				, m_rank_bitset.size()
+			});
 
 			net::send_MessageBuilder(m_upstream->data_socket, communicatorId, builder);
 

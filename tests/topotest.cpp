@@ -206,11 +206,25 @@ int main(int argc, char** argv)
 			auto const raw_leaf_argv = (const char* const*)leafArgv.get();
 			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, raw_leaf_argv, topology};
 
-			auto allRanksCommunicator = rootnode.getAllRanksCommunicator();
-			auto stream = rootnode.registerStream(allRanksCommunicator, TestStreamId, "libfilter.so", "run");
+			{ auto allRanksCommunicator = rootnode.getAllRanksCommunicator();
+				auto stream = rootnode.registerStream(allRanksCommunicator, TestStreamId, "libfilter.so", "run");
 
-			auto const result = rootnode.runCommand(stream, "send", 5);
-			fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
+				auto const result = rootnode.runCommand(stream, "send", 5);
+				fprintf(stderr, "all ranks result: '%s'\n", result.asBytes().begin());
+			}
+
+			auto const num_ranks = cti_getNumAppPEs(app_id);
+
+			{ auto even_ranks = std::set<int>{};
+				for (int i = 0; i < num_ranks; i += 2) {
+					even_ranks.insert(i);
+				}
+				auto evenRanksCommunicator = rootnode.registerCommunicator(even_ranks);
+				auto evenRanksStream = rootnode.registerStream(evenRanksCommunicator, TestStreamId, "libfilter.so", "run");
+
+				auto const result = rootnode.runCommand(evenRanksStream, "send", 5);
+				fprintf(stderr, "even ranks result: '%s'\n", result.asBytes().begin());
+			}
 
 			rootnode.runExit();
 
