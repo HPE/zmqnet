@@ -202,6 +202,16 @@ int main(int argc, char** argv)
 		auto leafArgv = cti::OutgoingArgv<TopotestArgv>{"topotest"};
 		leafArgv.add(TopotestArgv::Leaf);
 
+		auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
+			{ cti_getAppHostsPlacement(app_id)
+			, cti_destroyHostsList
+		};
+
+		auto some_nodes = std::set<std::string>{};
+		for (int i = 0; i < hostsPlacement->numHosts; i += 2) {
+			some_nodes.emplace(hostsPlacement->hosts[i].hostname);
+		}
+
 		if (synchronous_mode) {
 			leafArgv.add(TopotestArgv::Sync, "yes");
 
@@ -210,33 +220,25 @@ int main(int argc, char** argv)
 
 			auto const num_ranks = cti_getNumAppPEs(app_id);
 
-			auto allRanksCommunicator = rootnode.getAllRanksCommunicator();
+			auto allRanksCommunicator = rootnode.getAllNodesCommunicator();
 			auto stream = rootnode.registerStream(allRanksCommunicator, TestStreamId, "libfilter.so", "run");
 
-			{ auto even_ranks = std::set<int>{};
-				for (int i = 0; i < num_ranks; i += 2) {
-					even_ranks.insert(i);
-				}
-				auto evenRanksCommunicator = rootnode.registerCommunicator(even_ranks);
-				auto evenRanksStream = rootnode.registerStream(evenRanksCommunicator, TestStreamId, "libfilter.so", "run");
+			{ auto someRanksCommunicator = rootnode.registerCommunicator(some_nodes);
+				auto someRanksStream = rootnode.registerStream(someRanksCommunicator, TestStreamId, "libfilter.so", "run");
 
-				auto const result = rootnode.runCommand(evenRanksStream, "send", 5);
-				fprintf(stderr, "even ranks result: '%s'\n", result.asBytes().begin());
+				auto const result = rootnode.runCommand(someRanksStream, "send", 5);
+				fprintf(stderr, "some ranks result: '%s'\n", result.asBytes().begin());
 			}
 
 			{ auto const result = rootnode.runCommand(stream, "send", 5);
 				fprintf(stderr, "all ranks result: '%s'\n", result.asBytes().begin());
 			}
 
-			{ auto even_ranks = std::set<int>{};
-				for (int i = 0; i < num_ranks; i += 2) {
-					even_ranks.insert(i);
-				}
-				auto evenRanksCommunicator = rootnode.registerCommunicator(even_ranks);
-				auto evenRanksStream = rootnode.registerStream(evenRanksCommunicator, TestStreamId, "libfilter.so", "run");
+			{ auto someRanksCommunicator = rootnode.registerCommunicator(some_nodes);
+				auto someRanksStream = rootnode.registerStream(someRanksCommunicator, TestStreamId, "libfilter.so", "run");
 
-				auto const result = rootnode.runCommand(evenRanksStream, "send", 5);
-				fprintf(stderr, "even ranks result: '%s'\n", result.asBytes().begin());
+				auto const result = rootnode.runCommand(someRanksStream, "send", 5);
+				fprintf(stderr, "some ranks result: '%s'\n", result.asBytes().begin());
 			}
 
 			{ auto const result = rootnode.runCommand(stream, "send", 5);

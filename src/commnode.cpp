@@ -32,7 +32,7 @@ static auto parse_argv(int argc, char* const argv[])
 	auto dealerEndpoint = std::string{};
 	auto nodeConnectionMap = std::string{};
 	auto packed_mode = false;
-	auto packed_rank = int{-1};
+	auto packed_node_id = int{-1};
 
 	using CA = CommnodeArgv;
 	auto parsedArgv = cti::IncomingArgv<CA>{argc, argv};
@@ -56,8 +56,8 @@ static auto parse_argv(int argc, char* const argv[])
 			nodeConnectionMap = std::move(value);
 			break;
 
-		case CA::PackedRank.val:
-			packed_rank = std::stoi(value);
+		case CA::PackedNodeId.val:
+			packed_node_id = std::stoi(value);
 			break;
 
 		case '?':
@@ -71,12 +71,13 @@ static auto parse_argv(int argc, char* const argv[])
 	if (leaf_argv[0] == nullptr) {
 		throw std::runtime_error("leaf binary not provided");
 	}
-	return std::make_tuple(std::move(dealerEndpoint), std::move(nodeConnectionMap), packed_mode, packed_rank, leaf_argc, leaf_argv);
+	return std::make_tuple(std::move(dealerEndpoint), std::move(nodeConnectionMap), packed_mode, packed_node_id, leaf_argc, leaf_argv);
 }
 
 // Parse node topology and parent connection data from argument string
 static auto parseNodeConnectionMap(std::string&& nodeConnectionMap)
 {
+	auto node_id = int{0};
 	auto parentControlEndpoint = std::string{};
 	auto parentDataEndpoint = std::string{};
 	auto commnode_children = int{};
@@ -97,6 +98,7 @@ static auto parseNodeConnectionMap(std::string&& nodeConnectionMap)
 		while (std::getline(nodeTopologyStream, nodeTopology, ',')) {
 
 			// Split out topology data to compare hostnames
+			node_id++;
 			auto [hostname, parentNodeIndexString, numChildrenString, numSubChildrenString]
 				= cti::split::string<4>(std::move(nodeTopology), ' ');
 			if (hostname == commnodeHostname) {
@@ -113,7 +115,7 @@ static auto parseNodeConnectionMap(std::string&& nodeConnectionMap)
 		goto cleanup_parseNodeConnectionMap;
 	}
 
-	// Find connection information for parent node from index
+	// Find connection information for parent node from parent index
 	{ auto nodeConnection = std::string{};
 		auto nodeConnectionStream = std::istringstream{std::move(connectionData)};
 
@@ -132,7 +134,7 @@ static auto parseNodeConnectionMap(std::string&& nodeConnectionMap)
 	}
 
 cleanup_parseNodeConnectionMap:
-	return std::make_tuple(std::move(parentControlEndpoint), std::move(parentDataEndpoint), commnode_children, commnode_subchildren);
+	return std::make_tuple(node_id, std::move(parentControlEndpoint), std::move(parentDataEndpoint), commnode_children, commnode_subchildren);
 }
 
 namespace workers
@@ -175,8 +177,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 		assert(response.isStream() && (response.getStream().getStreamId() == stream.id));
 
 		// Add to started descendants
-		{ auto const started_ranks = response.getStream().getRanks().asBytes();
-			started_descendants.or_eq_buf(started_ranks.begin(), started_ranks.size());
+		{ auto const started_nodes = response.getStream().getNodes().asBytes();
+			started_descendants.or_eq_buf(started_nodes.begin(), started_nodes.size());
 		}
 	}
 
@@ -188,8 +190,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 		auto streamResponse = response.initStream();
 		streamResponse.setStreamId(stream.id);
 
-		// Set rank bitset
-		streamResponse.setRanks(kj::ArrayPtr<kj::byte const>
+		// Set node bitset
+		streamResponse.setNodes(kj::ArrayPtr<kj::byte const>
 			{ (unsigned char const*)descendants_bitset.compressed.data()
 			, descendants_bitset.compressed.size()
 		});
@@ -216,7 +218,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 		if (response.isExit()) {
 
 			// Add to exited descendants
-			{ auto const just_exited = response.getExit().getRanks().asBytes();
+			{ auto const just_exited = response.getExit().getNodes().asBytes();
 				auto const just_exited_descendants = descendants_bitset.and_buf(just_exited.begin(), just_exited.size());
 				exited_descendants |= just_exited_descendants;
 			}
@@ -235,8 +237,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			reported_results.emplace_back(kj::heapArray(response.getUser().getContent().asBytes()));
 
 			// Add to reported descendants
-			{ auto const reported_ranks = response.getUser().getRanks().asBytes();
-				reported_descendants.or_eq_buf(reported_ranks.begin(), reported_ranks.size());
+			{ auto const reported_nodes = response.getUser().getNodes().asBytes();
+				reported_descendants.or_eq_buf(reported_nodes.begin(), reported_nodes.size());
 			}
 
 			log("commnode %02x %d: user content length: %lu, target %s have %s\n",
@@ -265,8 +267,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			auto const result_size = result.size();
 			userResult.setContent(std::move(result));
 
-			// Set rank bitset
-			userResult.setRanks(kj::ArrayPtr<kj::byte const>
+			// Set node bitset
+			userResult.setNodes(kj::ArrayPtr<kj::byte const>
 				{ (unsigned char const*)reported_descendants.compressed.data()
 				, reported_descendants.compressed.size()
 			});
@@ -276,7 +278,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 				stream.communicatorId, stream.id, result_size);
 			net::send_MessageBuilder(result_socket, stream.communicatorId, builder);
 
-			// Reset in progress ranks
+			// Reset in progress nodes
 			reported_descendants = lrle_bitset{};
 		}
 
@@ -323,7 +325,7 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 		size_t operator() (zmqnet::Stream const& stream) const {
 			auto communicator_id_hash = std::hash<zmqnet::Communicator::Id>{}(stream.communicatorId);
 			auto stream_id_hash = std::hash<zmqnet::Stream::Id>{}(stream.id);
-			return communicator_id_hash + (net::communicator_ids::AllRanks + 1) * stream_id_hash;
+			return communicator_id_hash + (net::communicator_ids::AllNodes + 1) * stream_id_hash;
 		}
 	};
 	struct compare_Stream {
@@ -350,7 +352,7 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 		// If exit, clean up
 		if (response.isExit()) {
 			log("commnode: got exit response\n");
-			assert(reader.getTag() == net::communicator_ids::AllRanks);
+			assert(reader.getTag() == net::communicator_ids::AllNodes);
 
 			// Relay to stream workers
 			for (auto&& [stream, task_socket] : taskSockets) {
@@ -360,8 +362,8 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 			}
 
 			// Add to exited descendants
-			{ auto const exited_ranks = response.getExit().getRanks().asBytes();
-				exited_descendants.or_eq_buf(exited_ranks.begin(), exited_ranks.size());
+			{ auto const exited_nodes = response.getExit().getNodes().asBytes();
+				exited_descendants.or_eq_buf(exited_nodes.begin(), exited_nodes.size());
 			}
 
 			// Check if all descendants exited
@@ -390,14 +392,14 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 				in_progress_communicator_id = command.getCommunicator().getCommunicatorId();
 
 				// Extract communicator descendants and assign to target bitset
-				auto const communicator_descendants = command.getCommunicator().getRanks().asBytes();
+				auto const communicator_descendants = command.getCommunicator().getNodes().asBytes();
 				in_progress_communicator_descendants = lrle_bitset
 					{ communicator_descendants.begin()
 					, communicator_descendants.size()
 				};
 
 				// Add to started descendants
-				auto const started_communicator_descendants = response.getCommunicator().getRanks().asBytes();
+				auto const started_communicator_descendants = response.getCommunicator().getNodes().asBytes();
 				in_progress_communicator_started_descendants = lrle_bitset
 					{ started_communicator_descendants.begin()
 					, started_communicator_descendants.size()
@@ -419,7 +421,7 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 			} else {
 
 				// Add to started descendants
-				auto const communicator_descendants = response.getCommunicator().getRanks().asBytes();
+				auto const communicator_descendants = response.getCommunicator().getNodes().asBytes();
 					in_progress_communicator_started_descendants.or_eq_buf(
 						communicator_descendants.begin(),
 						communicator_descendants.size());
@@ -437,8 +439,8 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 				auto communicatorAck = response.initCommunicator();
 				communicatorAck.setCommunicatorId(in_progress_communicator_id);
 
-				// Set rank bitset
-				communicatorAck.setRanks(kj::ArrayPtr<kj::byte const>
+				// Set node bitset
+				communicatorAck.setNodes(kj::ArrayPtr<kj::byte const>
 					{ (unsigned char const*)in_progress_communicator_descendants.compressed.data()
 					, in_progress_communicator_descendants.compressed.size()
 				});
@@ -446,7 +448,7 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 				// Send acknowledgement
 				log("commnode: sending communicator %02x create acknowledgement\n",
 					in_progress_communicator_id);
-				net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
+				net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);
 
 				// Reset in-progress communicator bitsets
 				in_progress_communicator_id = 0x0;
@@ -514,24 +516,27 @@ static auto fcfs(zmq::context_t& ctx, net::UpstreamLink& upstream, net::TcpDowns
 	// Create topology request message
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto topologyRequest = builder.initRoot<TopologyRequest>();
+		topologyRequest.setNodeHostname(hostname);
 		topologyRequest.setNodeControlEndpoint(controlEndpoint);
 		topologyRequest.setNodeDataEndpoint(dataEndpoint);
 
 		// Send this node's endpoints to topology server
-		net::send_MessageBuilder(request_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(request_socket, net::communicator_ids::AllNodes, builder);
 		log("registered endpoints with topology server\n");
 	}
 
 	// Receive this node's topology info from topology server
 	auto reader = net::recv_MessageReader(request_socket);
 	auto topologyResponse = reader.getRoot<TopologyResponse>();
-	log("topology server reported parent %s / %s, %d children\n",
+	log("topology server reported id %d parent %s / %s, %d children\n",
+		topologyResponse.getNodeId(),
 		topologyResponse.getParentControlEndpoint().cStr(),
 		topologyResponse.getParentDataEndpoint().cStr(),
 		topologyResponse.getNumChildren());
 
 	// Apply topology information
-	int num_children = topologyResponse.getNumChildren();
+	auto const node_id = topologyResponse.getNodeId();
+	auto const num_children = topologyResponse.getNumChildren();
 
 	// Connect to parent's endpoints
 	auto const& parentControlEndpoint = topologyResponse.getParentControlEndpoint();
@@ -540,7 +545,7 @@ static auto fcfs(zmq::context_t& ctx, net::UpstreamLink& upstream, net::TcpDowns
 		parentControlEndpoint.cStr(), parentDataEndpoint.cStr());
 	upstream.connect(parentControlEndpoint, parentDataEndpoint);
 
-	return num_children;
+	return std::make_tuple(node_id, num_children);
 }
 
 static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstream,
@@ -560,12 +565,12 @@ static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstr
 	// Send endpoints to frontend
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto topologyRequest = builder.initRoot<TopologyRequest>();
+		topologyRequest.setNodeHostname(hostname);
 		topologyRequest.setNodeControlEndpoint(controlEndpoint);
 		topologyRequest.setNodeDataEndpoint(dataEndpoint);
-		topologyRequest.setNodeHostname(hostname);
 
 		// Send this node's endpoints to topology server
-		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllNodes, builder);
 	}
 	log("registered with frontend. relaying child messages\n");
 
@@ -594,23 +599,25 @@ int main(int argc, char* const argv[])
 	auto ctx = zmq::context_t{};
 
 	// Read arguments from frontend
-	auto [dealerEndpoint, nodeConnectionMap, packed_mode, packed_rank, leaf_argc, leaf_argv] = parse_argv(argc, argv);
+	auto [dealerEndpoint, nodeConnectionMap, packed_mode, packed_node_id, leaf_argc, leaf_argv] = parse_argv(argc, argv);
 
 	// Start network connection process
 	auto upstream = net::UpstreamLink{ctx};
-	net::subscribe_to_tag(upstream.control_socket, net::communicator_ids::AllRanks);
+	net::subscribe_to_tag(upstream.control_socket, net::communicator_ids::AllNodes);
 	auto downstream = net::TcpDownstreamLink{ctx};
 	auto num_children = int{};
+	auto node_id = int{};
 
 	// Use either FCFS or leveled tree launch based on arguments
 	if (!dealerEndpoint.empty()) {
 
 		// Run FCFS launch procedure
-		num_children = launch::fcfs(ctx, upstream, downstream, dealerEndpoint);
+		std::tie(node_id, num_children) = launch::fcfs(ctx, upstream, downstream, dealerEndpoint);
 
 	} else {
 		// Connect using leveled tree launch
-		auto [parentControlEndpoint, parentDataEndpoint, num_children_, num_subchildren] = parseNodeConnectionMap(std::move(nodeConnectionMap));
+		auto [node_id_, parentControlEndpoint, parentDataEndpoint, num_children_, num_subchildren] = parseNodeConnectionMap(std::move(nodeConnectionMap));
+		node_id = node_id_;
 		num_children = num_children_;
 
 		// Determine if launch should continue
@@ -627,14 +634,14 @@ int main(int argc, char* const argv[])
 	auto localChildPids = std::vector<pid_t>{};
 
 	// Determine number of local children, one per PE on node
-	auto const first_pe = (packed_rank < 0)
+	auto const first_pe = (packed_node_id < 0)
 		? cti_be_getNodeFirstPE()
-		: packed_rank;
+		: packed_node_id;
 	auto const local_pes = 1;
 	num_children += local_pes;
 
-	// If running packed mode and no rank was provided, start other packed commnodes
-	if (packed_mode && (packed_rank < 0)) {
+	// If running packed mode and no node was provided, start other packed commnodes
+	if (packed_mode && (packed_node_id < 0)) {
 		auto const packed_commnodes = cti_be_getNodePEs() - 1;
 		log("forking %d local packed commnodes\n", packed_commnodes);
 
@@ -642,7 +649,7 @@ int main(int argc, char* const argv[])
 		auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{argv[0]};
 		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
 		commnodeArgv.add(CommnodeArgv::Packed);
-		commnodeArgv.add(cti::Argv::Argument{"-r"});
+		commnodeArgv.add(cti::Argv::Argument{"-n"});
 		commnodeArgv.add(cti::Argv::Argument{"-1"}); // Add seperately from option so it can be replaced via pointer
 
 		// Add provided leaf arguments
@@ -650,9 +657,9 @@ int main(int argc, char* const argv[])
 			commnodeArgv.add(cti::Argv::Argument{leaf_argv[i]});
 		}
 
-		// Get pointer to rank argument
+		// Get pointer to node argument
 		auto commnode_argv = commnodeArgv.get();
-		auto rank_arg_ptr = (char**)&commnode_argv[4];
+		auto node_arg_ptr = (char**)&commnode_argv[4];
 
 		// Launch packed commnodes
 		for (int i = 0; i < packed_commnodes; i++) {
@@ -663,10 +670,10 @@ int main(int argc, char* const argv[])
 				localChildPids.emplace_back(forkedPid);
 
 			} else {
-				// Set rank argument
-				auto const rank = first_pe + local_pes + i;
-				auto const rankString = std::to_string(rank);
-				*rank_arg_ptr = (char*)rankString.c_str();
+				// Set node argument
+				auto const node = first_pe + local_pes + i;
+				auto const nodeString = std::to_string(node);
+				*node_arg_ptr = (char*)nodeString.c_str();
 
 				// Exec leaf binary
 				execvp(argv[0], commnode_argv);
@@ -681,7 +688,7 @@ int main(int argc, char* const argv[])
 		auto const [controlEndpoint, dataEndpoint] = net::formatEndpoints(downstream, cti_be_getNodeHostname());
 		log("forking %d local leaf processes %s\n", local_pes, leafPath.c_str());
 
-		// Prepend endpoints and rank number to provided leaf arguments
+		// Prepend endpoints and node number to provided leaf arguments
 		auto completeLeafArgv = cti::ManagedArgv
 			{ leaf_argv[0]
 			, controlEndpoint
@@ -694,21 +701,21 @@ int main(int argc, char* const argv[])
 			completeLeafArgv.add(leaf_argv[i]);
 		}
 
-		// Get pointer to rank argument
+		// Get pointer to node argument
 		auto complete_leaf_argv = completeLeafArgv.get();
-		auto rank_arg_ptr = &complete_leaf_argv[3];
+		auto node_arg_ptr = &complete_leaf_argv[3];
 
-		for (int rank = first_pe; rank < first_pe + local_pes; rank++) {
-			log("%d / %d\n", rank - first_pe + 1, local_pes);
+		for (int node = first_pe; node < first_pe + local_pes; node++) {
+			log("%d / %d\n", node - first_pe + 1, local_pes);
 
 			if (auto const forkedPid = fork()) {
 				// Add launched process to cleanup list
 				localChildPids.emplace_back(forkedPid);
 
 			} else {
-				// Set rank argument
-				auto const rankString = std::to_string(rank);
-				*rank_arg_ptr = (char*)rankString.c_str();
+				// Set node argument
+				auto const nodeString = std::to_string(node);
+				*node_arg_ptr = (char*)nodeString.c_str();
 
 				// Exec leaf binary
 				execvp(leafPath.c_str(), complete_leaf_argv);
@@ -718,9 +725,9 @@ int main(int argc, char* const argv[])
 		}
 	}
 
-	// Create mask of all descendants' ranks
+	// Create mask of all descendants' nodes
 	auto communicatorDescendants = std::unordered_map<zmqnet::Communicator::Id, lrle_bitset>
-		{ { net::communicator_ids::AllRanks, lrle_bitset{} }
+		{ { net::communicator_ids::AllNodes, lrle_bitset{} }
 	};
 
 	// Wait for all children to connect and send ready
@@ -730,11 +737,11 @@ int main(int argc, char* const argv[])
 		auto response = reader.getRoot<NetworkResponse>();
 		assert(response.isReady());
 
-		// Add ranks to children rank bitset
-		auto const response_rank_bitset = response.getReady().getRanks().asBytes();
-		communicatorDescendants.at(net::communicator_ids::AllRanks).or_eq_buf(
-			response_rank_bitset.begin(),
-			response_rank_bitset.size());
+		// Add nodes to children node bitset
+		auto const response_node_bitset = response.getReady().getNodes().asBytes();
+		communicatorDescendants.at(net::communicator_ids::AllNodes).or_eq_buf(
+			response_node_bitset.begin(),
+			response_node_bitset.size());
 	}
 
 	// Send ready to parent
@@ -743,13 +750,13 @@ int main(int argc, char* const argv[])
 		auto response = builder.initRoot<NetworkResponse>();
 		auto ready = response.initReady();
 
-		// Set rank bitset
-		ready.setRanks(kj::ArrayPtr<kj::byte const>
-			{ (unsigned char const*)communicatorDescendants.at(net::communicator_ids::AllRanks).compressed.data()
-			, communicatorDescendants.at(net::communicator_ids::AllRanks).compressed.size()
+		// Set node bitset
+		ready.setNodes(kj::ArrayPtr<kj::byte const>
+			{ (unsigned char const*)communicatorDescendants.at(net::communicator_ids::AllNodes).compressed.data()
+			, communicatorDescendants.at(net::communicator_ids::AllNodes).compressed.size()
 		});
 
-		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllNodes, builder);
 	}
 
 	// Proxy local worker result socket to upstream socket
@@ -775,7 +782,7 @@ int main(int argc, char* const argv[])
 
 			return workers::response_distributor(ctx, std::move(input_socket), std::move(resultEndpoint), std::move(communicatorCommandEndpoint), std::move(descendants_bitset));
 
-		}, std::ref(ctx), std::move(downstream.data_socket), resultEndpoint, communicatorCommandEndpoint, communicatorDescendants.at(net::communicator_ids::AllRanks));
+		}, std::ref(ctx), std::move(downstream.data_socket), resultEndpoint, communicatorCommandEndpoint, communicatorDescendants.at(net::communicator_ids::AllNodes));
 
 	// Command loop
 	auto streamAggregatorTasks = std::vector<std::thread>{};
@@ -811,22 +818,22 @@ int main(int argc, char* const argv[])
 			// Find set of descendants in the communicator subset
 			auto communicator_descendants = lrle_bitset{};
 
-			// If communicator is all ranks, use preexisting descendants bitset
-			if (communicator_id == net::communicator_ids::AllRanks) {
-				log("communicator contains all ranks\n");
-				communicator_descendants = communicatorDescendants.at(net::communicator_ids::AllRanks);
+			// If communicator is all nodes, use preexisting descendants bitset
+			if (communicator_id == net::communicator_ids::AllNodes) {
+				log("communicator contains all nodes\n");
+				communicator_descendants = communicatorDescendants.at(net::communicator_ids::AllNodes);
 
 			// Run bitset intersection
 			} else {
 
-				// Get communicator rank mask
-				auto const communicator_ranks_bitset = command.getCommunicator().getRanks().asBytes();
+				// Get communicator node mask
+				auto const communicator_nodes_bitset = command.getCommunicator().getNodes().asBytes();
 
 				// Determine if any descendants are in the communicator subset
-				auto const& all_descendants = communicatorDescendants.at(net::communicator_ids::AllRanks);
+				auto const& all_descendants = communicatorDescendants.at(net::communicator_ids::AllNodes);
 				if (!lrle_any_intersection(
 					all_descendants.compressed.data(), all_descendants.compressed.size(),
-					communicator_ranks_bitset.begin(), communicator_ranks_bitset.size())) {
+					communicator_nodes_bitset.begin(), communicator_nodes_bitset.size())) {
 
 					log("no descendants match\n");
 					continue;
@@ -834,8 +841,8 @@ int main(int argc, char* const argv[])
 
 				// Find descendants intersection
 				communicator_descendants = all_descendants.and_buf(
-					communicator_ranks_bitset.begin(),
-					communicator_ranks_bitset.size());
+					communicator_nodes_bitset.begin(),
+					communicator_nodes_bitset.size());
 
 				log("descendants match: %s\n",
 					communicator_descendants.to_string().c_str());
@@ -851,17 +858,17 @@ int main(int argc, char* const argv[])
 			auto communicatorCommand = command.initCommunicator();
 			communicatorCommand.setCommunicatorId(communicator_id);
 
-			// Set rank bitset
-			communicatorCommand.setRanks(kj::ArrayPtr<kj::byte const>
+			// Set node bitset
+			communicatorCommand.setNodes(kj::ArrayPtr<kj::byte const>
 				{ (unsigned char const*)communicator_descendants.compressed.data()
 				, communicator_descendants.compressed.size()
 			});
 
 			// Relay to response thread
-			net::send_MessageBuilder(communicator_command_socket, net::communicator_ids::AllRanks, builder);
+			net::send_MessageBuilder(communicator_command_socket, net::communicator_ids::AllNodes, builder);
 
 			// Relay to children. TODO: avoid builder copy
-			net::send_MessageBuilder(downstream.control_socket, net::communicator_ids::AllRanks, builder);
+			net::send_MessageBuilder(downstream.control_socket, net::communicator_ids::AllNodes, builder);
 
 			// Store communicator descendants bitset
 			communicatorDescendants.emplace(communicator_id, std::move(communicator_descendants));
@@ -923,7 +930,7 @@ cleanup_main:
 		auto exitResponse = response.initExit();
 
 		// Send exit message to proxy
-		net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);
 	}
 
 	// Wait for proxy task to complete and regain ownership of upstream data socket
@@ -950,15 +957,15 @@ cleanup_main:
 		auto response = builder.initRoot<NetworkResponse>();
 		auto exitAck = response.initExit();
 
-		// Set rank bitset
-		auto const& all_descendants = communicatorDescendants.at(net::communicator_ids::AllRanks);
-		exitAck.setRanks(kj::ArrayPtr<kj::byte const>
+		// Set node bitset
+		auto const& all_descendants = communicatorDescendants.at(net::communicator_ids::AllNodes);
+		exitAck.setNodes(kj::ArrayPtr<kj::byte const>
 			{ (unsigned char const*)all_descendants.compressed.data()
 			, all_descendants.compressed.size()
 		});
 
 		log("notifying parent of exit\n");
-		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllNodes, builder);
 	}
 
 	// Close all network sockets

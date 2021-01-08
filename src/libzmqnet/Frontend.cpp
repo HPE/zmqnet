@@ -32,9 +32,12 @@ namespace launch
 
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
 // tree by the frontend.
-static void fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
+// Return max node ID, assigned node ID map
+static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
 	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
+	auto nodeIdMap = std::unordered_map<std::string, int>{};
+
 	// Start topology socket to send its connection info to commnode daemon
 	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
 	dealer_socket.bind("tcp://*:*");
@@ -65,6 +68,7 @@ static void fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 	};
 	auto num_nodes = hostsPlacement.numHosts;
 	endpoints.reserve(num_nodes + 1);
+	auto next_node_id = int{0};
 	auto cursor = 0;
 
 	int level = 0;
@@ -73,9 +77,14 @@ static void fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 
 	log("waiting for %d nodes to connect...\n", num_nodes);
 	for (int seen = 0; seen < num_nodes; seen++) {
+		auto const node_id = next_node_id++;
+
 		// Receive topology request from new node
 		{ auto requestReader = net::recv_MessageReader(dealer_socket, zmq::recv_flags::none);
 			auto topologyRequest = requestReader.getRoot<TopologyRequest>();
+
+			// Assign node ID
+			nodeIdMap[topologyRequest.getNodeHostname().cStr()] = node_id;
 
 			// Register topology information
 			endpoints.emplace_back(topologyRequest.getNodeControlEndpoint().cStr(), topologyRequest.getNodeDataEndpoint().cStr());
@@ -93,12 +102,13 @@ static void fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 			auto topologyResponse = builder.initRoot<TopologyResponse>();
 
 			auto const& [parentControlEndpoint, parentDataEndpoint] = endpoints[cursor];
+			topologyResponse.setNodeId(node_id);
 			topologyResponse.setParentControlEndpoint(parentControlEndpoint);
 			topologyResponse.setParentDataEndpoint(parentDataEndpoint);
 			topologyResponse.setNumChildren(num_children);
 
 			// Send topology response
-			net::send_MessageBuilder(dealer_socket, net::communicator_ids::AllRanks, builder);
+			net::send_MessageBuilder(dealer_socket, net::communicator_ids::AllNodes, builder);
 		}
 
 		// Advance to next node
@@ -112,11 +122,23 @@ static void fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 		}
 		log("%d connected\n", seen);
 	}
+
+	if (nodeIdMap.empty()) {
+		throw std::runtime_error("no nodes in network");
+	}
+
+	assert(next_node_id > 0);
+	auto const max_node_id = next_node_id - 1;
+
+	return std::make_tuple(max_node_id, std::move(nodeIdMap));
 }
 
-static void packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
+// Return max node ID, assigned node ID map
+static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
 	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
+	auto nodeIdMap = std::unordered_map<std::string, int>{};
+
 	// Start topology socket to send its connection info to commnode daemon
 	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
 	dealer_socket.bind("tcp://*:*");
@@ -148,16 +170,22 @@ static void packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 	};
 	auto num_nodes = cti_getNumAppPEs(app_id);
 	endpoints.reserve(num_nodes + 1);
-	auto cursor = 0;
+	auto next_node_id = int{0};
+	auto cursor = int{0};
 
 	int level = 0;
 	int levelFilled = 0;
 	int levelCap = 1;
 
 	for (int seen = 0; seen < num_nodes; seen++) {
+		auto const node_id = next_node_id++;
+
 		// Receive topology request from new node
 		{ auto requestReader = net::recv_MessageReader(dealer_socket, zmq::recv_flags::none);
 			auto topologyRequest = requestReader.getRoot<TopologyRequest>();
+
+			// Assign node ID
+			nodeIdMap[topologyRequest.getNodeHostname().cStr()] = node_id;
 
 			// Register topology information
 			endpoints.emplace_back(topologyRequest.getNodeControlEndpoint().cStr(), topologyRequest.getNodeDataEndpoint().cStr());
@@ -175,12 +203,13 @@ static void packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 			auto topologyResponse = builder.initRoot<TopologyResponse>();
 
 			auto const& [parentControlEndpoint, parentDataEndpoint] = endpoints[cursor];
+			topologyResponse.setNodeId(node_id);
 			topologyResponse.setParentControlEndpoint(parentControlEndpoint);
 			topologyResponse.setParentDataEndpoint(parentDataEndpoint);
 			topologyResponse.setNumChildren(num_children);
 
 			// Send topology response
-			net::send_MessageBuilder(dealer_socket, net::communicator_ids::AllRanks, builder);
+			net::send_MessageBuilder(dealer_socket, net::communicator_ids::AllNodes, builder);
 		}
 
 		// Advance to next node
@@ -194,9 +223,19 @@ static void packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 		}
 		log("%d connected\n", seen);
 	}
+
+	if (nodeIdMap.empty()) {
+		throw std::runtime_error("no nodes in network");
+	}
+
+	assert(next_node_id > 0);
+	auto const max_node_id = next_node_id - 1;
+
+	return std::make_tuple(max_node_id, std::move(nodeIdMap));
 }
 
-static void layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
+// Return max node ID, assigned node ID map
+static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
 	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto const num_levels = (hostsPlacement.numHosts > 1)
@@ -230,9 +269,10 @@ static void layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 	nodeLevels[0].emplace_back(0);
 
 	// Build fanout tree
-	{ int num_nodes = hostsPlacement.numHosts;
-		// First level will have `fanout` nodes and node 0 as its parent
-		int cursor = 0;
+	auto const num_nodes = hostsPlacement.numHosts;
+
+	// First level will have `fanout` nodes and node 0 as its parent
+	{ int cursor = 0;
 		int level = 1;
 		size_t level_size = fanout;
 
@@ -353,8 +393,17 @@ static void layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 		auto command = builder.initRoot<NetworkCommand>();
 		command.setStartLeaves();
 
-		net::send_MessageBuilder(rootLink.control_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(rootLink.control_socket, net::communicator_ids::AllNodes, builder);
 	}
+
+	if (hostnameNodeMap.empty()) {
+		throw std::runtime_error("no nodes in network");
+	}
+
+	assert(num_nodes > 0);
+	auto const max_node_id = num_nodes - 1;
+
+	return std::make_tuple(max_node_id, std::move(hostnameNodeMap));
 }
 
 } // launch
@@ -363,7 +412,9 @@ static void layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 
 zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int const manifest_id,
 	char const* const* leaf_argv, zmqnet::Topology const& topology)
-	: m_ctx{}
+	: m_max_node_id{}
+	, m_nodeIdMap{}
+	, m_ctx{}
 	, m_downstream{std::make_unique<net::TcpDownstreamLink>(m_ctx)}
 	, m_next_communicatorId{1}
 {
@@ -383,11 +434,14 @@ zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int
 
 	// Launch tree
 	if (topology.launch == Topology::Fcfs) {
-		launch::fcfsTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
+		std::tie(m_max_node_id, m_nodeIdMap) =
+			launch::fcfsTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	} else if (topology.launch == Topology::Layered) {
-		launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
+		std::tie(m_max_node_id, m_nodeIdMap) =
+			launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	} else if (topology.launch == Topology::Packed) {
-		launch::packedTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
+		std::tie(m_max_node_id, m_nodeIdMap) =
+			launch::packedTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	}
 
 	auto const launch_ms = get_milliseconds();
@@ -402,17 +456,17 @@ zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int
 	// Create broadcast communicator
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto communicatorCommand = builder.initRoot<NetworkCommand>().initCommunicator();
-		communicatorCommand.setCommunicatorId(net::communicator_ids::AllRanks);
+		communicatorCommand.setCommunicatorId(net::communicator_ids::AllNodes);
 
 		// Send communicator create command
-		log("registering communicator %02x\n", net::communicator_ids::AllRanks);
-		net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllRanks, builder);
+		log("registering communicator %02x\n", net::communicator_ids::AllNodes);
+		net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllNodes, builder);
 	}
 
 	// Wait for communicator acknowledgement
 	{ auto reader = net::recv_MessageReader(m_downstream->data_socket);
 		auto response = reader.getRoot<NetworkResponse>();
-		assert(response.isCommunicator() && (response.getCommunicator().getCommunicatorId() == net::communicator_ids::AllRanks));
+		assert(response.isCommunicator() && (response.getCommunicator().getCommunicatorId() == net::communicator_ids::AllNodes));
 	}
 
 	auto const leaf_ms = get_milliseconds();
@@ -424,10 +478,10 @@ zmqnet::Frontend::~Frontend()
 	m_ctx.shutdown();
 }
 
-zmqnet::Communicator zmqnet::Frontend::createCommunicator(zmqnet::RankSet const& ranks)
+zmqnet::Communicator zmqnet::Frontend::createCommunicator(zmqnet::NodeSet const& nodes)
 {
-	if (ranks.empty()) {
-		throw std::runtime_error("expected non-empty rank set");
+	if (nodes.empty()) {
+		throw std::runtime_error("expected non-empty node set");
 	}
 
 	// Create subset create command message
@@ -436,23 +490,25 @@ zmqnet::Communicator zmqnet::Frontend::createCommunicator(zmqnet::RankSet const&
 	auto const communicatorId = m_next_communicatorId++;
 	communicatorCommand.setCommunicatorId(communicatorId);
 
-	// Pack rank set into bitset
-	{ auto const max_rank = (size_t)*ranks.rbegin();
-		auto unpacked_rank_set = unpacked_bitset{max_rank + 1};
-		for (auto&& rank : ranks) { unpacked_rank_set.set(rank); }
+	// Pack node set into bitset
+	{ auto unpacked_node_ids = unpacked_bitset{m_max_node_id + 1};
+		for (auto&& node : nodes) {
+			auto const node_id = m_nodeIdMap[node];
+			unpacked_node_ids.set(node_id);
+		}
 
 		// Compress bitset into lrle bitset
-		auto const lrle_rank_set = lrle_bitset{unpacked_rank_set.bytes.data(), unpacked_rank_set.bytes.size()};
+		auto const node_ids = lrle_bitset{unpacked_node_ids.bytes.data(), unpacked_node_ids.bytes.size()};
 
-		communicatorCommand.setRanks(kj::ArrayPtr<kj::byte const>
-			{ (unsigned char const*)lrle_rank_set.compressed.data()
-			, lrle_rank_set.compressed.size()
+		communicatorCommand.setNodes(kj::ArrayPtr<kj::byte const>
+			{ (unsigned char const*)node_ids.compressed.data()
+			, node_ids.compressed.size()
 		});
 	}
 
 	// Send communicator create command
 	log("registering communicator %02x\n", communicatorId);
-	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllRanks, builder);
+	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllNodes, builder);
 
 	// Return new communicator handle
 	return Communicator { .id = communicatorId };
@@ -497,22 +553,22 @@ void zmqnet::Frontend::sendExit()
 	command.setExit();
 
 	// Send exit command
-	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllRanks, builder);
+	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllNodes, builder);
 }
 
 // Synchronous frontend implementation
 
-zmqnet::Communicator zmqnet::SyncFrontend::getAllRanksCommunicator() const
+zmqnet::Communicator zmqnet::SyncFrontend::getAllNodesCommunicator() const
 {
-	return Communicator { .id = net::communicator_ids::AllRanks };
+	return Communicator { .id = net::communicator_ids::AllNodes };
 }
 
-zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(zmqnet::RankSet const& ranks)
+zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(zmqnet::NodeSet const& nodes)
 {
 	auto const start_ms = get_milliseconds();
 
 	// Send communicator create command
-	auto const communicator = createCommunicator(ranks);
+	auto const communicator = createCommunicator(nodes);
 
 	// Wait for acknowledgement
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);

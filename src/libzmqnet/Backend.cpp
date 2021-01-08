@@ -14,13 +14,13 @@
 
 #include "lrle_bitset_impl.hpp"
 
-zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
+zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 	: m_ctx{}
 	, m_upstream{std::make_unique<net::UpstreamLink>(m_ctx, upstreamControlEndpoint, upstreamDataEndpoint)}
-	, m_rank{rank}
-	, m_rank_bitset{std::move(lrle_bitset{(size_t)m_rank}.compressed)}
+	, m_node_id{node_id}
+	, m_node_bitset{std::move(lrle_bitset{(size_t)node_id}.compressed)}
 {
-	net::subscribe_to_tag(m_upstream->control_socket, net::communicator_ids::AllRanks);
+	net::subscribe_to_tag(m_upstream->control_socket, net::communicator_ids::AllNodes);
 }
 
 zmqnet::Backend::~Backend()
@@ -31,19 +31,19 @@ zmqnet::Backend::~Backend()
 void zmqnet::Backend::notifyReady()
 {
 	// Notify parent commnode that setup is completed
-	log("rank backend %d: notifying parent ready from leaf node\n", m_rank);
+	log("backend %d: notifying parent ready from leaf node\n", m_node_id);
 	auto builder = capnp::MallocMessageBuilder{};
 	auto response = builder.initRoot<NetworkResponse>();
 	auto ready = response.initReady();
 
-	// Set rank bitset
-	ready.setRanks(kj::ArrayPtr<kj::byte const>
-		{ (unsigned char const*)m_rank_bitset.data()
-		, m_rank_bitset.size()
+	// Set node bitset
+	ready.setNodes(kj::ArrayPtr<kj::byte const>
+		{ (unsigned char const*)m_node_bitset.data()
+		, m_node_bitset.size()
 	});
 
 	// Send acknowledgement
-	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
+	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
 }
 
 void zmqnet::Backend::sendResult(zmqnet::Stream const& stream, char const* result_buffer, size_t result_len)
@@ -57,10 +57,10 @@ void zmqnet::Backend::sendResult(zmqnet::Stream const& stream, char const* resul
 		user.setContent(kj::ArrayPtr<kj::byte const>{(unsigned char const*)result_buffer, result_len});
 	}
 
-	// Set rank bitset
-	user.setRanks(kj::ArrayPtr<kj::byte const>
-		{ (unsigned char const*)m_rank_bitset.data()
-		, m_rank_bitset.size()
+	// Set node bitset
+	user.setNodes(kj::ArrayPtr<kj::byte const>
+		{ (unsigned char const*)m_node_bitset.data()
+		, m_node_bitset.size()
 	});
 
 	// Send result
@@ -69,8 +69,8 @@ void zmqnet::Backend::sendResult(zmqnet::Stream const& stream, char const* resul
 
 // Synchronous Backend
 
-zmqnet::SyncBackend::SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
-	: Backend(upstreamControlEndpoint, upstreamDataEndpoint, rank)
+zmqnet::SyncBackend::SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
+	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, node_id}
 {
 	// Backend instantiated, notify network ready
 	notifyReady();
@@ -80,45 +80,45 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 {
 	while (true) {
 		// Receive next network command
-		log("rank backend %d: waiting for next command...\n", m_rank);
+		log("backend %d: waiting for next command...\n", m_node_id);
 		auto reader = net::recv_MessageReader(m_upstream->control_socket);
 		auto command = reader.getRoot<NetworkCommand>();
 
 		// Detect exit case
 		if (command.isExit()) {
-			log("rank backend %d: got exit\n", m_rank);
+			log("backend %d: got exit\n", m_node_id);
 
 			// Send exit acknowledgement to parent
 			{ auto builder = capnp::MallocMessageBuilder{};
 				auto response = builder.initRoot<NetworkResponse>();
 				auto exit = response.initExit();
 
-				// Set rank bitset
-				exit.setRanks(kj::ArrayPtr<kj::byte const>
-					{ (unsigned char const*)m_rank_bitset.data()
-					, m_rank_bitset.size()
+				// Set node bitset
+				exit.setNodes(kj::ArrayPtr<kj::byte const>
+					{ (unsigned char const*)m_node_bitset.data()
+					, m_node_bitset.size()
 				});
 
-				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
+				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
 			}
 			m_upstream->control_socket.close();
 			m_upstream->data_socket.close();
 
 			return std::make_tuple(zmqnet::Stream { .id = -1 }, ByteArray{});
 
-		// Acknowledge and subscribe to communicator if rank is in rank set
+		// Acknowledge and subscribe to communicator if node is in node set
 		} else if (command.isCommunicator()) {
 			auto const communicatorId = command.getCommunicator().getCommunicatorId();
-			log("rank backend %d: new communicator %02x\n", m_rank, communicatorId);
+			log("backend %d: new communicator %02x\n", m_node_id, communicatorId);
 
-			// Get communicator rank mask
-			auto const communicator_ranks = command.getCommunicator().getRanks().asBytes();
+			// Get communicator node mask
+			auto const communicator_nodes = command.getCommunicator().getNodes().asBytes();
 
-			// If this rank matches, subscribe to subset tag
-			if ((communicatorId == net::communicator_ids::AllRanks)
-			 || lrle_contains(communicator_ranks.begin(), communicator_ranks.size(), (size_t)m_rank)) {
+			// If this node matches, subscribe to subset tag
+			if ((communicatorId == net::communicator_ids::AllNodes)
+			 || lrle_contains(communicator_nodes.begin(), communicator_nodes.size(), (size_t)m_node_id)) {
 
-				log("rank backend %d: in communicator %02x, subscribing\n", m_rank, communicatorId);
+				log("backend %d: in communicator %02x, subscribing\n", m_node_id, communicatorId);
 
 				// Subscribe to subset tag
 				net::subscribe_to_tag(m_upstream->control_socket, communicatorId);
@@ -130,14 +130,14 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 				auto communicatorAck = response.initCommunicator();
 				communicatorAck.setCommunicatorId(communicatorId);
 
-				// Set rank bitset
-				communicatorAck.setRanks(kj::ArrayPtr<kj::byte const>
-					{ (unsigned char const*)m_rank_bitset.data()
-					, m_rank_bitset.size()
+				// Set node bitset
+				communicatorAck.setNodes(kj::ArrayPtr<kj::byte const>
+					{ (unsigned char const*)m_node_bitset.data()
+					, m_node_bitset.size()
 				});
 
 				// Send acknowledgement
-				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
+				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
 			}
 
 			continue;
@@ -147,7 +147,7 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 			auto const streamId = command.getStream().getStreamId();
 			auto const communicatorId = reader.getTag();
 
-			log("rank backend %d: new stream %d on communicator %02x\n", m_rank, streamId, communicatorId);
+			log("backend %d: new stream %d on communicator %02x\n", m_node_id, streamId, communicatorId);
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
 
@@ -155,10 +155,10 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 			auto streamAck = response.initStream();
 			streamAck.setStreamId(streamId);
 
-			// Set rank bitset
-			streamAck.setRanks(kj::ArrayPtr<kj::byte const>
-				{ (unsigned char const*)m_rank_bitset.data()
-				, m_rank_bitset.size()
+			// Set node bitset
+			streamAck.setNodes(kj::ArrayPtr<kj::byte const>
+				{ (unsigned char const*)m_node_bitset.data()
+				, m_node_bitset.size()
 			});
 
 			net::send_MessageBuilder(m_upstream->data_socket, communicatorId, builder);
@@ -175,8 +175,8 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 				, .id = command.getUser().getStreamId()
 			};
 
-			log("rank backend %d: user command on communicator %02x stream %d\n",
-				m_rank, stream.communicatorId, stream.id);
+			log("backend %d: user command on communicator %02x stream %d\n",
+				m_node_id, stream.communicatorId, stream.id);
 
 			return std::make_tuple(stream, kj::heapArray(command.getUser().getContent().asBytes()));
 		}
@@ -220,7 +220,7 @@ static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zm
 		streamAck.setStreamId(streamId);
 
 		// Relay acknowledgement to proxy
-		net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);
 	}
 
 	while (true) {
@@ -256,7 +256,7 @@ static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zm
 
 			// Send result
 			log("backend %d: sending result size %lu\n", streamId, result_size);
-			net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
+			net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);
 		}
 	}
 }
@@ -312,23 +312,23 @@ void zmqnet::AsyncBackend::registerCallback(zmqnet::Stream::Id const& streamId, 
 void zmqnet::AsyncBackend::notifyReady()
 {
 	// Notify parent commnode that setup is completed
-	log("rank backend %d: notifying parent ready from leaf node\n", m_rank);
+	log("backend %d: notifying parent ready from leaf node\n", m_node_id);
 	auto builder = capnp::MallocMessageBuilder{};
 	auto response = builder.initRoot<NetworkResponse>();
 	response.setReady();
 
 	// Send ready acknowledgement
-	net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllRanks, builder);
+	net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllNodes, builder);
 }
 
 void zmqnet::AsyncBackend::waitForExit()
 {
 	// Wait for distributor to exit after receiving network exit command, reacquiring upstream data socket
-	log("rank backend %d: waiting for distributor\n", m_rank);
+	log("backend %d: waiting for distributor\n", m_node_id);
 	m_upstream->control_socket = m_commandDistributor.get();
 
 	// Wait for stream workers
-	log("rank backend %d: waiting for stream workers\n", m_rank);
+	log("backend %d: waiting for stream workers\n", m_node_id);
 	for (auto&& [streamId, command_worker] : m_commandWorkers) {
 		(void)command_worker.get();
 	}
@@ -339,22 +339,22 @@ void zmqnet::AsyncBackend::waitForExit()
 		response.setExit();
 
 		// Send exit message to proxy
-		net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllNodes, builder);
 	}
 
 	// Reacquire upstream data socket from exiting proxy
-	log("rank backend %d: waiting for proxy\n", m_rank);
+	log("backend %d: waiting for proxy\n", m_node_id);
 	m_upstream->data_socket = m_responseCollector.get();
 	m_collectorSocket.close();
 
 	// Send exit acknowledgement
-	{ log("rank backend %d: notifying parent leaf node exiting\n", m_rank);
+	{ log("backend %d: notifying parent leaf node exiting\n", m_node_id);
 		auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
 		response.setExit();
 
 		// Send acknowledgement to proxy
-		net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
 	}
 }
 

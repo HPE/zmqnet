@@ -7,10 +7,12 @@ struct TopologyRequest {
 }
 
 struct TopologyResponse {
-  parentControlEndpoint @0 :Text;
-  parentDataEndpoint @1 :Text;
+  nodeId @0 :Int32;
 
-  numChildren @2 :Int32;
+  parentControlEndpoint @1 :Text;
+  parentDataEndpoint @2 :Text;
+
+  numChildren @3 :Int32;
 }
 
 struct NetworkCommand {
@@ -21,7 +23,7 @@ struct NetworkCommand {
 
     communicator :group {
       communicatorId @2 :Int32;
-      ranks @3 :Data;
+      nodes @3 :Data;
     }
 
     stream :group {
@@ -40,26 +42,26 @@ struct NetworkCommand {
 struct NetworkResponse {
   union {
     exit :group {
-      ranks @0 :Data;
+      nodes @0 :Data;
     }
 
     ready :group {
-      ranks @1 :Data;
+      nodes @1 :Data;
     }
 
     communicator :group {
       communicatorId @2 :Int32;
-      ranks @3 :Data;
+      nodes @3 :Data;
     }
 
     stream :group {
       streamId @4 :Int32;
-      ranks @5 :Data;
+      nodes @5 :Data;
     }
 
     user :group {
       streamId @6 :Int32;
-      ranks @7 :Data;
+      nodes @7 :Data;
       content @8 :Data;
     }
   }

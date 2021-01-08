@@ -19,7 +19,6 @@
 #include <kj/array.h>
 
 // Forward-declares
-
 namespace net
 {
 	struct shared_semaphore;
@@ -31,23 +30,15 @@ namespace net
 namespace zmqnet
 {
 
+// Command and response data is passed / provided via ByteArray
+// Extract bytes with .begin() and size with .size()
 using ByteArray = kj::Array<kj::byte>;
 
+// In asynchronous callbacks, return a ByteArray to produce a message result
 static inline auto make_ByteArray(char const* buffer, size_t buffer_len)
 {
 	return kj::heapArray((unsigned char const*)buffer, buffer_len);
 }
-
-struct Topology
-{
-	enum : int
-		{ Fcfs
-		, Layered
-		, Packed
-	} launch;
-
-	int fanout;
-};
 
 struct Communicator
 {
@@ -62,11 +53,31 @@ struct Stream
 	Id id;
 };
 
-using RankSet = std::set<int>;
+// When constructing a Frontend object, provide a topology structure to build the network
+struct Topology
+{
+	// Launch strategy
+	enum : int
+		{ Fcfs    // First-come first-served. Single launch invocation
+		, Layered // Statically assign topology. Launch the network layer-by-layer
+		, Packed  // Simulate running at higher scale by launching a commnode for each PE
+	} launch;
 
+	// Communication tree fanout. Each non-leaf commnode will have `fanout` children
+	int fanout;
+};
+
+// Communication subsets are determined by nodes contained within the set
+using NodeSet = std::set<std::string>;
+
+// Frontend construction launches the network and connects the communication tree.
+// Communicators are built from a subset of nodes.
+// Commands are issued by a Frontend
 class Frontend
 {
 protected:
+	int m_max_node_id;
+	std::unordered_map<std::string, int> m_nodeIdMap;
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::TcpDownstreamLink> m_downstream;
 	Communicator::Id m_next_communicatorId;
@@ -77,7 +88,7 @@ public:
 	~Frontend();
 
 protected:
-	Communicator createCommunicator(RankSet const& ranks);
+	Communicator createCommunicator(NodeSet const& nodes);
 	Stream createStream(Communicator const& communicator,
 		Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
 
@@ -90,8 +101,8 @@ class SyncFrontend : public Frontend
 public:
 	using Frontend::Frontend;
 
-	Communicator getAllRanksCommunicator() const;
-	Communicator registerCommunicator(RankSet const& ranks);
+	Communicator getAllNodesCommunicator() const;
+	Communicator registerCommunicator(NodeSet const& nodes);
 	Stream registerStream(Communicator const& communicator,
 		Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
 
@@ -136,7 +147,7 @@ public:
 		return std::make_tuple(
 			std::string{argv[1]}, // upstream control endpoint
 			std::string{argv[2]}, // upstream data endpoint
-			std::stoi(argv[3]),   // rank number
+			std::stoi(argv[3]),   // node ID
 			argc - 3, // 3 less arguments
 			argv + 3);
 	}
@@ -144,13 +155,13 @@ public:
 protected:
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::UpstreamLink> m_upstream;
-	int m_rank;
-	std::vector<unsigned char> m_rank_bitset;
+	int m_node_id;
+	std::vector<unsigned char> m_node_bitset;
 
 	void notifyReady();
 
 public:
-	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
+	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
 	~Backend();
 
 	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
@@ -159,7 +170,7 @@ public:
 class SyncBackend : public Backend
 {
 public:
-	SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
+	SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
 	std::tuple<Stream, ByteArray> nextCommand();
 };
 

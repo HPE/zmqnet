@@ -46,7 +46,7 @@ static inline bool debug_enabled()
 		}
 
 		return false;
-	};
+	}();
 	return _enabled;
 }
 
@@ -332,7 +332,7 @@ static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::str
 
 namespace communicator_ids
 {
-	static constexpr auto AllRanks = int{0xff};
+	static constexpr auto AllNodes = int{0xff};
 };
 
 // Subscribe to messages starting with the given tag
