@@ -216,21 +216,14 @@ public:
 		}
 	}
 
-	void close()
+	~PubSubLoggingProxy()
 	{
+		// Join proxy and capture threads
 		if (capture_enabled) {
-			// Close capture task
-			proxy_capture.close();
 			captureTask.join();
-
-			// Close proxy task
-			proxy_outgoing.close();
-			proxy_incoming.close();
 			proxyTask.join();
 		}
 	}
-
-	~PubSubLoggingProxy() { close(); }
 };
 
 class UpstreamLink
@@ -258,15 +251,6 @@ public:
 	{
 		connect(upstreamControlEndpoint, upstreamDataEndpoint);
 	}
-
-	void close()
-	{
-		data_socket.close();
-		control_socket.close();
-		loggingProxy.close();
-	}
-
-	~UpstreamLink() { close(); }
 };
 
 class DownstreamLink
@@ -288,15 +272,6 @@ public:
 		data_socket.bind(dataEndpoint_);
 		dataEndpoint = data_socket.get(zmq::sockopt::last_endpoint);
 	}
-
-	void close()
-	{
-		data_socket.close();
-		control_socket.close();
-		loggingProxy.close();
-	}
-
-	~DownstreamLink() { close(); }
 };
 
 class InprocDownstreamLink : public DownstreamLink

@@ -25,7 +25,7 @@ zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string
 
 zmqnet::Backend::~Backend()
 {
-	// Generate destructor for forward-declared net::UpstreamLink
+	m_ctx.shutdown();
 }
 
 void zmqnet::Backend::notifyReady()

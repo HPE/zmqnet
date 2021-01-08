@@ -957,15 +957,13 @@ cleanup_main:
 			, all_descendants.compressed.size()
 		});
 
+		log("notifying parent of exit\n");
 		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
-		log("parent notified of exit\n");
 	}
 
 	// Close all network sockets
-	upstream.close();
-	downstream.close();
-	log("context reset\n");
-	ctx.close();
+	log("context shutdown\n");
+	ctx.shutdown();
 
 	log("commnode cleaned up and exiting\n");
 	fprintf(stderr, "%05lu: exiting\n", get_milliseconds() - start_ms);

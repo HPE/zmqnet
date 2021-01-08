@@ -421,7 +421,7 @@ zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int
 
 zmqnet::Frontend::~Frontend()
 {
-	// Generate destructor for forward-declared net::TcpDownstreamLink
+	m_ctx.shutdown();
 }
 
 zmqnet::Communicator zmqnet::Frontend::createCommunicator(zmqnet::RankSet const& ranks)
