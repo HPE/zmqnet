@@ -38,14 +38,28 @@ static inline auto get_milliseconds()
 	return (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000;
 }
 
+static inline bool debug_enabled()
+{
+	static const auto _enabled = []() {
+		if (::getenv("CTI_DEBUG")) {
+			return true;
+		}
+
+		return false;
+	};
+	return _enabled;
+}
+
 static inline void log(const char* format, ...)
 {
-	static const auto start_ms = get_milliseconds();
-	va_list argptr;
-	va_start(argptr, format);
-	fprintf(stderr, "[%5d %6ld] ", getpid(), get_milliseconds() - start_ms);
-	vfprintf(stderr, format, argptr);
-	va_end(argptr);
+	if (debug_enabled()) {
+		static const auto start_ms = get_milliseconds();
+		va_list argptr;
+		va_start(argptr, format);
+		fprintf(stderr, "[%5d %6ld] ", getpid(), get_milliseconds() - start_ms);
+		vfprintf(stderr, format, argptr);
+		va_end(argptr);
+	}
 }
 
 namespace net
@@ -84,20 +98,157 @@ static inline std::string generate_uuid()
 	return std::string{uuid_str};
 }
 
+class PubSubLoggingProxy
+{
+public:
+	bool capture_enabled;
+	std::string proxyCaptureEndpoint;
+	zmq::socket_t proxy_incoming, proxy_outgoing, proxy_capture;
+	std::thread proxyTask, captureTask;
+
+	PubSubLoggingProxy(zmq::context_t& ctx, std::string const& logLinePrefix)
+		: capture_enabled{debug_enabled()}
+		, proxyCaptureEndpoint{"inproc://" + generate_uuid()}
+		, proxy_incoming{ctx, zmq::socket_type::xsub}
+		, proxy_outgoing{ctx, zmq::socket_type::xpub}
+		, proxy_capture{ctx, zmq::socket_type::pair}
+		, proxyTask{}
+		, captureTask{}
+	{
+		if (capture_enabled) {
+
+			// Bind to first end of capture socket
+			proxy_capture.bind(proxyCaptureEndpoint);
+
+			// Start capture task
+			captureTask = std::thread{[&](std::string logLinePrefix) {
+
+				// Connect to second end of capture socket
+				auto socket = zmq::socket_t{ctx, zmq::socket_type::pair};
+				socket.connect(proxyCaptureEndpoint);
+
+				// Receive until socket closed or context terminated
+				while (true) {
+					auto received_result = zmq::message_t{};
+					try {
+
+						// Ignore interrupted receive
+						if (!socket.recv(received_result, zmq::recv_flags::none)) {
+							continue;
+						}
+
+					// If error was not caused by termination, rethrow
+					} catch (zmq::error_t const& err) {
+						if (err.num() == ETERM) {
+							return;
+						}
+						throw;
+					}
+
+					// Log incoming message
+					log("%s: %s\n", logLinePrefix.c_str(), received_result.str().c_str());
+				}
+			}, logLinePrefix};
+
+			// Manually tell proxy socket to subscribe to all incoming messages
+			{ unsigned char const buf[] = {0x01};
+				proxy_incoming.send(buf, 1);
+			}
+
+			// Start proxy task
+			proxyTask = std::thread{[&]() {
+
+				// Proxy until socket closed or context terminated
+				try {
+					(void)zmq::proxy(zmq::socket_ref{proxy_incoming}, proxy_outgoing, proxy_capture);
+
+				// If error was not caused by termination, rethrow
+				} catch (zmq::error_t const& err) {
+					if (err.num() == ETERM) {
+						return;
+					}
+					throw;
+				}
+			}};
+
+		}
+	}
+
+	// Log messages coming from upstream into control socket
+	void logIncoming(zmq::socket_t& control_socket, std::string const& controlEndpoint)
+	{
+		if (capture_enabled) {
+			auto const proxyOutgoingEndpoint = std::string{"inproc://" + generate_uuid()};
+
+			// Messages arrive from upstream control endpoint and flow into proxy
+			proxy_incoming.connect(controlEndpoint);
+
+			// Messages leave proxy and are sent to downstream control socket
+			proxy_outgoing.bind(proxyOutgoingEndpoint);
+			control_socket.connect(proxyOutgoingEndpoint);
+
+		// Capture disabled, connect directly
+		} else {
+			control_socket.connect(controlEndpoint);
+		}
+	}
+
+	// Log messages originating from control socket downstream
+	// Return real control endpoint
+	std::string logOutgoing(zmq::socket_t& control_socket, std::string const& controlEndpoint)
+	{
+		if (capture_enabled) {
+			auto const proxyIncomingEndpoint = std::string{"inproc://" + generate_uuid()};
+
+			// Messages are sent to downstream control endpoint and flow into proxy
+			control_socket.bind(proxyIncomingEndpoint);
+			proxy_incoming.connect(proxyIncomingEndpoint);
+
+			// Messages leave proxy and are sent to downstream control endpoint
+			proxy_outgoing.bind(controlEndpoint);
+
+			return proxy_outgoing.get(zmq::sockopt::last_endpoint);
+
+		// Capture disabled, bind directly
+		} else {
+			control_socket.bind(controlEndpoint);
+			return control_socket.get(zmq::sockopt::last_endpoint);
+		}
+	}
+
+	void close()
+	{
+		if (capture_enabled) {
+			// Close capture task
+			proxy_capture.close();
+			captureTask.join();
+
+			// Close proxy task
+			proxy_outgoing.close();
+			proxy_incoming.close();
+			proxyTask.join();
+		}
+	}
+
+	~PubSubLoggingProxy() { close(); }
+};
+
 class UpstreamLink
 {
 public:
+	PubSubLoggingProxy loggingProxy;
 	zmq::socket_t control_socket, data_socket;
 
 	void connect(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
 	{
 		// Connect to upstream sockets
-		control_socket.connect(upstreamControlEndpoint);
+		loggingProxy.logIncoming(control_socket, upstreamControlEndpoint);
 		data_socket.connect(upstreamDataEndpoint);
 	}
 
 	UpstreamLink(zmq::context_t& ctx)
-		: control_socket{ctx, zmq::socket_type::sub}
+		: loggingProxy{ctx, "receiving"}
+		, control_socket{ctx, zmq::socket_type::sub}
 		, data_socket{ctx, zmq::socket_type::push}
 	{}
 
@@ -107,29 +258,45 @@ public:
 	{
 		connect(upstreamControlEndpoint, upstreamDataEndpoint);
 	}
+
+	void close()
+	{
+		data_socket.close();
+		control_socket.close();
+		loggingProxy.close();
+	}
+
+	~UpstreamLink() { close(); }
 };
 
 class DownstreamLink
 {
 public:
-	std::string controlEndpoint;
-	std::string dataEndpoint;
+	PubSubLoggingProxy loggingProxy;
 
+	std::string controlEndpoint, dataEndpoint;
 	zmq::socket_t control_socket, data_socket;
 
 	DownstreamLink(zmq::context_t& ctx,
 		std::string const& controlEndpoint_, std::string const& dataEndpoint_)
-		: control_socket{ctx, zmq::socket_type::pub}
+		: loggingProxy{ctx, "sending"}
+		, control_socket{ctx, zmq::socket_type::pub}
 		, data_socket{ctx, zmq::socket_type::pull}
 	{
-		// Bind to specified endpoints
-		control_socket.bind(controlEndpoint_);
+		// Bind to downstream endpoints and set real endpoint values
+		controlEndpoint = loggingProxy.logOutgoing(control_socket, controlEndpoint_);
 		data_socket.bind(dataEndpoint_);
-
-		// Set real endpoint values
-		controlEndpoint = control_socket.get(zmq::sockopt::last_endpoint);
 		dataEndpoint = data_socket.get(zmq::sockopt::last_endpoint);
 	}
+
+	void close()
+	{
+		data_socket.close();
+		control_socket.close();
+		loggingProxy.close();
+	}
+
+	~DownstreamLink() { close(); }
 };
 
 class InprocDownstreamLink : public DownstreamLink
@@ -168,19 +335,6 @@ public:
 	{}
 };
 
-static inline auto recv_message(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
-{
-	while (true) {
-		auto received_result = zmq::message_t{};
-		auto maybe_bytes = socket.recv(received_result, sockopt);
-		if (!maybe_bytes) {
-			continue;
-		}
-
-		return received_result;
-	}
-}
-
 static inline auto replace_endpoint_host(std::string endpoint, std::string const& hostname)
 {
 	// Extract port from generated endpoint
@@ -212,7 +366,8 @@ static inline void subscribe_to_tag(zmq::socket_t& socket, int tag)
 	assert((0 < tag) && (tag <= 0xff)); // TODO: pad out to the right
 
 	// ff-pad tag into char buffer
-	unsigned char buf[] = {(unsigned char)tag, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, '\0'};
+	//unsigned char buf[] = {(unsigned char)tag, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, '\0'};
+	unsigned char buf[] = {(unsigned char)tag, '\0'};
 
 	// Subscribe to padded tag topic
 	socket.set(zmq::sockopt::subscribe, (char const*)buf);
@@ -290,6 +445,13 @@ public:
 		return std::make_pair(tag, capnp::UnalignedFlatArrayMessageReader(messageArray));
 	}
 
+	ReaderStorage(ReaderStorage&& expiring)
+		: message{std::move(expiring.message)}
+		, tagReaderPair{extractTagReader(message)}
+	{
+		expiring.tagReaderPair.first = 0x00;
+	}
+
 	ReaderStorage(zmq::message_t&& message_)
 		: message{std::move(message_)}
 		, tagReaderPair{extractTagReader(message)}
@@ -300,8 +462,6 @@ public:
 	template <typename T>
 	auto getRoot() { return tagReaderPair.second.getRoot<T>(); }
 
-	auto& get() { return message; }
-
 	auto eject()
 	{
 		assert(tagReaderPair.first != 0x00);
@@ -310,10 +470,30 @@ public:
 	}
 };
 
+static inline void send_MessageReader_copy(zmq::socket_t& socket, ReaderStorage& reader, zmq::send_flags const sockopt = zmq::send_flags::none)
+{
+	// Messages can't be reused after sending
+	auto message = zmq::message_t{};
+	message.copy(reader.message);
+	socket.send(std::move(message), sockopt);
+}
+
+static inline void send_MessageReader(zmq::socket_t& socket, ReaderStorage&& expiring, zmq::send_flags const sockopt = zmq::send_flags::none)
+{
+	socket.send(expiring.eject(), sockopt);
+}
+
 static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
 {
-	auto message = net::recv_message(socket, sockopt);
-	return ReaderStorage{std::move(message)};
+	while (true) {
+		auto received_result = zmq::message_t{};
+		auto maybe_bytes = socket.recv(received_result, sockopt);
+		if (!maybe_bytes) {
+			continue;
+		}
+
+		return ReaderStorage{std::move(received_result)};
+	}
 }
 
 } // net
@@ -325,15 +505,15 @@ namespace async
 
 // Proxy result messages produced by local stream tasks to upstream data socket
 // Returns control of upstream data socket upon completion
-static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::string collectorEndpoint, zmq::socket_t&& output_socket)
+static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::string resultEndpoint, zmq::socket_t&& output_socket)
 {
 	// Create incoming message socket
-	auto collector_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-	collector_socket.bind(collectorEndpoint);
+	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
+	result_socket.bind(resultEndpoint);
 
 	while (true) {
 		// Read next incoming local message
-		auto reader = net::recv_MessageReader(collector_socket);
+		auto reader = net::recv_MessageReader(result_socket);
 
 		// If exit message, return socket back to caller for cleanup
 		if (reader.getRoot<NetworkResponse>().isExit()) {
@@ -341,7 +521,7 @@ static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::
 		}
 
 		// Otherwise, relay application result response upstream
-		output_socket.send(reader.eject(), zmq::send_flags::none);
+		net::send_MessageReader(output_socket, std::move(reader));
 	}
 }
 
@@ -351,16 +531,16 @@ static inline std::string stream_aggregator_endpoint(zmqnet::Stream const& strea
 	return "inproc://stream-" + std::to_string(stream.communicatorId) + "-" + std::to_string(stream.id);
 }
 
-static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream const& stream, zmq::message_t&& stream_message)
+static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream const& stream, net::ReaderStorage&& expiring)
 {
 	// Create task socket and bind to known endpoint format
 	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::push};
 	auto const taskEndpoint = stream_aggregator_endpoint(stream);
 	log("distributor creating new task socket %s\n", taskEndpoint.c_str());
-	task_socket.bind(taskEndpoint);
+	task_socket.connect(taskEndpoint);
 
 	// Relay message to new task socket
-	task_socket.send(std::move(stream_message), zmq::send_flags::none);
+	net::send_MessageReader(task_socket, std::move(expiring));
 
 	return std::move(task_socket);
 }
@@ -389,9 +569,8 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 			log("distributor: exit (%d remaining)\n", num_clients - 1);
 
 			// Relay exit message to task sockets
-			auto message = reader.eject();
 			for (auto&& [streamId, task_socket] : taskSockets) {
-				task_socket.send(message, zmq::send_flags::none);
+				net::send_MessageReader(task_socket, reader);
 			}
 
 			// One client has exited
@@ -436,7 +615,7 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 		// Relay message to task socket
 		} else {
 			log("distributor: relay message to stream %d\n", streamId);
-			idSocketPair->second.send(reader.eject(), zmq::send_flags::none);
+			net::send_MessageReader(idSocketPair->second, std::move(reader));
 		}
 
 		// Stream messages should notify main thread, if raised

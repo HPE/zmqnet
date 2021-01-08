@@ -150,7 +150,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	{ auto const taskEndpoint = async::stream_aggregator_endpoint(stream);
 		log("commnode %02x %d: connecting to task endpoint %s\n",
 			stream.communicatorId, stream.id, taskEndpoint.c_str());
-		task_socket.connect(taskEndpoint);
+		task_socket.bind(taskEndpoint);
 	}
 
 	// Open result socket to send this stream's output to upstream proxy task
@@ -181,6 +181,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	}
 
 	// Send stream open acknowledgement to parent
+	log("commnode %02x %d: sending stream create ack\n",
+		stream.communicatorId, stream.id);
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
 		auto streamResponse = response.initStream();
@@ -212,17 +214,22 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 		// If exit message, remove one child
 		if (response.isExit()) {
+
 			// Add to exited descendants
-			{ auto const exited_ranks = response.getExit().getRanks().asBytes();
-				exited_descendants.or_eq_buf(exited_ranks.begin(), exited_ranks.size());
+			{ auto const just_exited = response.getExit().getRanks().asBytes();
+				auto const just_exited_descendants = descendants_bitset.and_buf(just_exited.begin(), just_exited.size());
+				exited_descendants |= just_exited_descendants;
 			}
 
 			log("commnode %02x %d: descendant(s) exited\n",
 				stream.communicatorId, stream.id);
 			exited_update = true;
+
+		// Check stream ID and user result
 		} else {
-			// Check stream ID and user result
-			assert(response.isUser() && (response.getUser().getStreamId() == stream.id));
+			assert(reader.getTag() == stream.communicatorId);
+			assert(response.isUser());
+			assert(response.getUser().getStreamId() == stream.id);
 
 			// Add content to in-progress result list
 			reported_results.emplace_back(kj::heapArray(response.getUser().getContent().asBytes()));
@@ -267,7 +274,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			// Send result
 			log("commnode %02x %d: sending result size %lu\n",
 				stream.communicatorId, stream.id, result_size);
-			net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
+			net::send_MessageBuilder(result_socket, stream.communicatorId, builder);
 
 			// Reset in progress ranks
 			reported_descendants = lrle_bitset{};
@@ -275,7 +282,18 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 		// If all children exited, end loop
 		if (all_descendants_exited) {
+			log("commnode %02x %d: exiting (no descendants remaining)\n",
+				stream.communicatorId, stream.id);
+
 			break;
+
+		} else {
+			auto const remaining
+				= lrle_count(descendants_bitset.compressed.data(), descendants_bitset.compressed.size())
+				- lrle_count(exited_descendants.compressed.data(), exited_descendants.compressed.size());
+			log("commnode %02x %d: %zu descendants remaining\n",
+				stream.communicatorId, stream.id, remaining);
+			assert(remaining > 0);
 		}
 	}
 
@@ -284,93 +302,156 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	return rc;
 }
 
-static inline int communicator_distributor(zmq::context_t& ctx,
-	std::string const& resultEndpoint, std::string const& communicatorBroadcastEndpoint,
-	zmqnet::Communicator const& communicator,
+static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket,
+	std::string const& resultEndpoint, std::string const& communicatorCommandEndpoint,
 	lrle_bitset const& descendants_bitset)
 {
-	int rc = -1;
-
-	// Open task socket to receive this communicator's input from distributor
-	log("commnode %02x: connecting to endpoint %s\n",
-		communicator.id, communicatorBroadcastEndpoint.c_str());
-	auto input_socket = zmq::socket_t{ctx, zmq::socket_type::sub};
-	input_socket.connect(communicatorBroadcastEndpoint);
-	net::subscribe_to_tag(input_socket, net::communicator_ids::AllRanks);
-	net::subscribe_to_tag(input_socket, communicator.id);
-
 	// Open result socket to send this communicator's output to upstream proxy task
-	log("commnode %02x: connecting to task result %s\n",
-		communicator.id, resultEndpoint.c_str());
+	log("commnode: connecting to task result %s\n",
+		resultEndpoint.c_str());
 	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
 	result_socket.connect(resultEndpoint);
 
-	// Wait until all downstream children have created this communicator
-	auto started_descendants = lrle_bitset{};
-	while (started_descendants != descendants_bitset) {
-		log("commnode %02x: waiting for descendants communicator create (target %s have %s)\n",
-			communicator.id, descendants_bitset.to_string().c_str(), started_descendants.to_string().c_str());
-		auto reader = net::recv_MessageReader(input_socket);
-		auto response = reader.getRoot<NetworkResponse>();
-		assert(response.isCommunicator() && (response.getCommunicator().getCommunicatorId() == communicator.id));
-
-		// Add to started descendants
-		{ auto const started_ranks = response.getCommunicator().getRanks().asBytes();
-			started_descendants.or_eq_buf(started_ranks.begin(), started_ranks.size());
-		}
-	}
-
-	// Send communicator open acknowledgement to parent
-	{ auto builder = capnp::MallocMessageBuilder{};
-		auto response = builder.initRoot<NetworkResponse>();
-		auto communicatorResponse = response.initCommunicator();
-		communicatorResponse.setCommunicatorId(communicator.id);
-
-		// Set rank bitset
-		communicatorResponse.setRanks(kj::ArrayPtr<kj::byte const>
-			{ (unsigned char const*)descendants_bitset.compressed.data()
-			, descendants_bitset.compressed.size()
-		});
-
-		log("commnode %02x: sending communicator create acknowledgement\n",
-			communicator.id);
-		net::send_MessageBuilder(result_socket, communicator.id, builder);
-	}
+	// Open communicator command socket to receive new communicator information
+	log("commnode: connecting to communicator endpoint %s\n",
+		communicatorCommandEndpoint.c_str());
+	auto communicator_command_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
+	communicator_command_socket.connect(communicatorCommandEndpoint);
 
 	// Store stream task sockets
-	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
+	struct hash_Stream {
+		size_t operator() (zmqnet::Stream const& stream) const {
+			auto communicator_id_hash = std::hash<zmqnet::Communicator::Id>{}(stream.communicatorId);
+			auto stream_id_hash = std::hash<zmqnet::Stream::Id>{}(stream.id);
+			return communicator_id_hash + (net::communicator_ids::AllRanks + 1) * stream_id_hash;
+		}
+	};
+	struct compare_Stream {
+		bool operator() (zmqnet::Stream const& lhs, zmqnet::Stream const& rhs) const {
+			return (lhs.communicatorId == rhs.communicatorId) && (lhs.id == rhs.id);
+		}
+	};
+	auto taskSockets = std::unordered_map<zmqnet::Stream, zmq::socket_t, hash_Stream, compare_Stream>{};
 
 	// Track exited descendants
 	auto exited_descendants = lrle_bitset{};
 
+	// Track starting communicators
+	auto in_progress_communicator_id = zmqnet::Communicator::Id{0x0};
+	auto in_progress_communicator_descendants = lrle_bitset{};
+	auto in_progress_communicator_started_descendants = lrle_bitset{};
+
 	while (true) {
 		// Receive next message
-		log("commnode %02x: receiving message...\n", communicator.id);
+		log("commnode: receiving message...\n");
 		auto reader = net::recv_MessageReader(input_socket);
 		auto response = reader.getRoot<NetworkResponse>();
 
 		// If exit, clean up
 		if (response.isExit()) {
-			log("commnode %02x: got exit response\n", communicator.id);
+			log("commnode: got exit response\n");
 			assert(reader.getTag() == net::communicator_ids::AllRanks);
+
+			// Relay to stream workers
+			for (auto&& [stream, task_socket] : taskSockets) {
+				log("commnode: relay exit message to stream %d in communicator %02x\n",
+					stream.id, stream.communicatorId);
+				net::send_MessageReader_copy(task_socket, reader);
+			}
 
 			// Add to exited descendants
 			{ auto const exited_ranks = response.getExit().getRanks().asBytes();
 				exited_descendants.or_eq_buf(exited_ranks.begin(), exited_ranks.size());
 			}
 
-			// Relay exit message to task sockets
-			auto message = reader.eject();
-			for (auto&& [streamId, task_socket] : taskSockets) {
-				task_socket.send(message, zmq::send_flags::none);
-			}
-
-			// One child has exited, check if all descendants exited
+			// Check if all descendants exited
 			if (exited_descendants == descendants_bitset) {
-				log("commnode %02x: exiting (none remaining)\n", communicator.id);
+				log("commnode: exiting (none remaining)\n");
 
 				// All clients have exited, run cleanup
 				break;
+			}
+
+			continue;
+
+		// If communicator, add to in-progress communicator
+		} else if (response.isCommunicator()) {
+
+			// New communicator?
+			if (in_progress_communicator_id == 0x0) {
+
+				// Read new communicator command
+				auto communicator_reader = net::recv_MessageReader(communicator_command_socket);
+				auto command = communicator_reader.getRoot<NetworkCommand>();
+				assert(command.isCommunicator());
+
+				// Get new communicator ID
+				assert(command.getCommunicator().getCommunicatorId() != 0x0);
+				in_progress_communicator_id = command.getCommunicator().getCommunicatorId();
+
+				// Extract communicator descendants and assign to target bitset
+				auto const communicator_descendants = command.getCommunicator().getRanks().asBytes();
+				in_progress_communicator_descendants = lrle_bitset
+					{ communicator_descendants.begin()
+					, communicator_descendants.size()
+				};
+
+				// Add to started descendants
+				auto const started_communicator_descendants = response.getCommunicator().getRanks().asBytes();
+				in_progress_communicator_started_descendants = lrle_bitset
+					{ started_communicator_descendants.begin()
+					, started_communicator_descendants.size()
+				};
+
+				log("commnode: starting communicator %02x create (target %s have %s)\n",
+					in_progress_communicator_id,
+					in_progress_communicator_descendants.to_string().c_str(),
+					in_progress_communicator_started_descendants.to_string().c_str());
+
+			// Mismatching communicator startup?
+			} else if (response.getCommunicator().getCommunicatorId() != in_progress_communicator_id) {
+				throw std::runtime_error("communicator "
+					+ std::to_string(in_progress_communicator_id)
+					+ " is starting, but received communicator response "
+					+ std::to_string(response.getCommunicator().getCommunicatorId()));
+
+			// Continue communicator startup
+			} else {
+
+				// Add to started descendants
+				auto const communicator_descendants = response.getCommunicator().getRanks().asBytes();
+					in_progress_communicator_started_descendants.or_eq_buf(
+						communicator_descendants.begin(),
+						communicator_descendants.size());
+
+				log("commnode: continue communicator %02x create (target %s have %s)\n",
+					in_progress_communicator_id,
+					in_progress_communicator_descendants.to_string().c_str(),
+					in_progress_communicator_started_descendants.to_string().c_str());
+			}
+
+			// If complete, send communicator open acknowledgement to parent
+			if (in_progress_communicator_descendants == in_progress_communicator_started_descendants) {
+				auto builder = capnp::MallocMessageBuilder{};
+				auto response = builder.initRoot<NetworkResponse>();
+				auto communicatorAck = response.initCommunicator();
+				communicatorAck.setCommunicatorId(in_progress_communicator_id);
+
+				// Set rank bitset
+				communicatorAck.setRanks(kj::ArrayPtr<kj::byte const>
+					{ (unsigned char const*)in_progress_communicator_descendants.compressed.data()
+					, in_progress_communicator_descendants.compressed.size()
+				});
+
+				// Send acknowledgement
+				log("commnode: sending communicator %02x create acknowledgement\n",
+					in_progress_communicator_id);
+				net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
+
+				// Reset in-progress communicator bitsets
+				in_progress_communicator_id = 0x0;
+				in_progress_communicator_descendants = lrle_bitset{};
+				in_progress_communicator_started_descendants = lrle_bitset{};
 			}
 
 			continue;
@@ -384,84 +465,27 @@ static inline int communicator_distributor(zmq::context_t& ctx,
 			? response.getStream().getStreamId()
 			: response.getUser().getStreamId();
 
-		// Get socket for given stream ID
-		auto const idSocketPair = taskSockets.find(streamId);
-
 		// Reconstitute stream object
 		auto const stream = zmqnet::Stream { .communicatorId = reader.getTag(), .id = streamId };
 
+		// Get socket for given communicator & stream ID
+		auto const streamSocketPair = taskSockets.find(stream);
+
 		// Create new stream task connection with known endpoint format, if needed
-		if (idSocketPair == taskSockets.end()) {
-			log("commnode %02x: new stream %d\n", communicator.id, stream.id);
+		if (streamSocketPair == taskSockets.end()) {
+			log("commnode: new stream %d on communicator %02x\n",
+				stream.id, stream.communicatorId);
 			assert(response.isStream());
 
 			// Create task socket and store in stream task socket map
-			taskSockets.emplace_hint(idSocketPair, stream.id,
-				async::make_task_socket(ctx, stream, reader.eject()));
+			taskSockets.emplace_hint(streamSocketPair, stream,
+				async::make_task_socket(ctx, stream, std::move(reader)));
 
 		// Relay message to task socket
 		} else {
-			log("commnode %02x: relay message to stream %d\n", communicator.id, streamId);
-			idSocketPair->second.send(reader.eject(), zmq::send_flags::none);
-		}
-	}
-
-	rc = 0;
-
-	return rc;
-}
-
-static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket,
-	std::string const& resultEndpoint, std::string const& communicatorBroadcastEndpoint,
-	int const num_children)
-{
-	// Open result socket to send this communicator's output to upstream proxy task
-	log("commnode: connecting to task result %s\n",
-		resultEndpoint.c_str());
-	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
-	result_socket.connect(resultEndpoint);
-
-	// Open communicator broadcast socket
-	log("commnode: binding to communicator endpoint %s\n",
-		communicatorBroadcastEndpoint.c_str());
-	auto communicator_broadcast_socket = zmq::socket_t{ctx, zmq::socket_type::pub};
-	communicator_broadcast_socket.bind(communicatorBroadcastEndpoint);
-
-	// Track exited descendants
-	auto exited_descendants = lrle_bitset{};
-
-	while (true) {
-		// Receive next message
-		log("commnode: receiving message...\n");
-		auto reader = net::recv_MessageReader(input_socket);
-		auto response = reader.getRoot<NetworkResponse>();
-
-		// If exit, clean up
-		if (response.isExit()) {
-			log("commnode: got exit response\n");
-			assert(reader.getTag() == net::communicator_ids::AllRanks);
-
-			// Add to exited descendants
-			{ auto const exited_ranks = response.getExit().getRanks().asBytes();
-				exited_descendants.or_eq_buf(exited_ranks.begin(), exited_ranks.size());
-			}
-
-			// Relay exit message to communicators
-			communicator_broadcast_socket.send(reader.eject(), zmq::send_flags::none);
-
-			// One child has exited, check if all descendants exited
-			if (lrle_full(exited_descendants.compressed.data(), exited_descendants.compressed.size()) == (size_t)num_children) {
-				log("commnode: exiting (none remaining)\n");
-
-				// All clients have exited, run cleanup
-				break;
-			}
-
-		} else {
-			// Relay message to communicators
-			log("commnode: relay message to communicators\n");
-			sleep(1);
-			communicator_broadcast_socket.send(reader.eject(), zmq::send_flags::none);
+			log("commnode: relay message to stream %d on communicator %02x\n",
+				streamId, stream.communicatorId);
+			net::send_MessageReader(streamSocketPair->second, std::move(reader));
 		}
 	}
 
@@ -547,9 +571,9 @@ static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstr
 
 	// Receive and relay all future levels of connection messages
 	for (int i = 0; i < num_subchildren; i++) {
-		auto message = net::recv_message(downstream.data_socket);
+		auto reader = net::recv_MessageReader(downstream.data_socket);
 		log("subchild %d/%d connection\n", i + 1, num_subchildren);
-		upstream.data_socket.send(std::move(message), zmq::send_flags::none);
+		net::send_MessageReader(upstream.data_socket, std::move(reader));
 	}
 
 	// Wait for leaf start command from frontend and relay
@@ -557,7 +581,7 @@ static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstr
 	{ auto reader = net::recv_MessageReader(upstream.control_socket);
 		auto command = reader.getRoot<NetworkCommand>();
 		assert(command.isStartLeaves());
-		downstream.control_socket.send(reader.eject(), zmq::send_flags::none);
+		net::send_MessageReader(downstream.control_socket, std::move(reader));
 	}
 }
 
@@ -695,7 +719,9 @@ int main(int argc, char* const argv[])
 	}
 
 	// Create mask of all descendants' ranks
-	auto descendants_bitset = lrle_bitset{};
+	auto communicatorDescendants = std::unordered_map<zmqnet::Communicator::Id, lrle_bitset>
+		{ { net::communicator_ids::AllRanks, lrle_bitset{} }
+	};
 
 	// Wait for all children to connect and send ready
 	for (int i = 0; i < num_children; i++) {
@@ -706,47 +732,53 @@ int main(int argc, char* const argv[])
 
 		// Add ranks to children rank bitset
 		auto const response_rank_bitset = response.getReady().getRanks().asBytes();
-		descendants_bitset.or_eq_buf(response_rank_bitset.begin(), response_rank_bitset.size());
+		communicatorDescendants.at(net::communicator_ids::AllRanks).or_eq_buf(
+			response_rank_bitset.begin(),
+			response_rank_bitset.size());
 	}
 
 	// Send ready to parent
 	log("sending ready to parent\n");
-	fprintf(stderr, "%05lu: sending ready to parent\n", get_milliseconds() - start_ms);
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
 		auto ready = response.initReady();
 
 		// Set rank bitset
 		ready.setRanks(kj::ArrayPtr<kj::byte const>
-			{ (unsigned char const*)descendants_bitset.compressed.data()
-			, descendants_bitset.compressed.size()
+			{ (unsigned char const*)communicatorDescendants.at(net::communicator_ids::AllRanks).compressed.data()
+			, communicatorDescendants.at(net::communicator_ids::AllRanks).compressed.size()
 		});
 
 		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
 	}
 
-	// Proxy local worker result socket to upstream socket, return control of upstream data socket
+	// Proxy local worker result socket to upstream socket
 	auto const resultEndpoint = "inproc://result";
-	auto collector_socket = zmq::socket_t{ctx, zmq::socket_type::push};
+	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
+	result_socket.connect(resultEndpoint);
+
+	// Create worker thread to deliver results upstream, return control of upstream data socket
 	auto responseCollector = std::async(std::launch::async,
 		[](zmq::context_t& ctx, std::string resultEndpoint, zmq::socket_t&& output_socket) {
 			return async::collect_network_responses(ctx, std::move(resultEndpoint), std::move(output_socket));
 		}, std::ref(ctx), resultEndpoint, std::move(upstream.data_socket));
 
-	// Connect for message injection by main thread
-	collector_socket.connect(resultEndpoint);
+	// Connect for communicator create commands
+	auto const communicatorCommandEndpoint = "inproc://communicator-command";
+	auto communicator_command_socket = zmq::socket_t{ctx, zmq::socket_type::push};
+	communicator_command_socket.bind(communicatorCommandEndpoint);
 
 	// Receive incoming stream data messages and distribute to respective stream task,
 	// return control of downstream data socket
-	auto const communicatorBroadcastEndpoint = "inproc://communicator-broadcast";
 	auto responseDistributor = std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, std::string resultEndpoint, std::string communicatorBroadcastEndpoint, lrle_bitset descendants_bitset) {
-			return workers::response_distributor(ctx, std::move(input_socket), std::move(resultEndpoint), std::move(communicatorBroadcastEndpoint), std::move(descendants_bitset));
-		}, std::ref(ctx), std::move(downstream.data_socket), resultEndpoint, communicatorBroadcastEndpoint, descendants_bitset);
+		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, std::string resultEndpoint, std::string communicatorCommandEndpoint, lrle_bitset descendants_bitset) {
+
+			return workers::response_distributor(ctx, std::move(input_socket), std::move(resultEndpoint), std::move(communicatorCommandEndpoint), std::move(descendants_bitset));
+
+		}, std::ref(ctx), std::move(downstream.data_socket), resultEndpoint, communicatorCommandEndpoint, communicatorDescendants.at(net::communicator_ids::AllRanks));
 
 	// Command loop
-	auto streamAggregatorTasks = std::vector<std::future<int>>{};
-	auto communicatorDistributorTasks = std::vector<std::future<int>>{};
+	auto streamAggregatorTasks = std::vector<std::thread>{};
 	auto const filterBasePath = std::string{cti_be_getLibDir()};
 
 	while (true) {
@@ -756,12 +788,13 @@ int main(int argc, char* const argv[])
 		auto reader = net::recv_MessageReader(upstream.control_socket);
 		auto command = reader.getRoot<NetworkCommand>();
 
-		// Relay command to children
-		downstream.control_socket.send(reader.get(), zmq::send_flags::none);
-
 		// Determine if exit command was received
 		if (command.isExit()) {
 			log("got exit command\n");
+
+			// Relay command to children
+			net::send_MessageReader(downstream.control_socket, std::move(reader));
+
 			break;
 
 		} else if (command.isStartLeaves()) {
@@ -770,50 +803,71 @@ int main(int argc, char* const argv[])
 
 		// Determine if new communicator is to be registered and subscribed
 		} else if (command.isCommunicator()) {
-			// Reconstitute communicator object
-			auto const communicator = zmqnet::Communicator { .id = reader.getTag() };
+			log("got new communicator command\n");
 
-			// Get communicator rank mask
-			auto const communicator_ranks_bitset = command.getCommunicator().getRanks().asBytes();
+			// Extract communicator ID
+			auto const communicator_id = command.getCommunicator().getCommunicatorId();
 
-			// If all ranks, subscribe
+			// Find set of descendants in the communicator subset
 			auto communicator_descendants = lrle_bitset{};
-			if (communicator.id == net::communicator_ids::AllRanks) {
-				communicator_descendants = descendants_bitset;
 
-			// If any descendants match subset mask, relay to children and subscribe to subset tag
-			} else if (lrle_any_intersection(
-				descendants_bitset.compressed.data(), descendants_bitset.compressed.size(),
-				communicator_ranks_bitset.begin(), communicator_ranks_bitset.size())) {
+			// If communicator is all ranks, use preexisting descendants bitset
+			if (communicator_id == net::communicator_ids::AllRanks) {
+				log("communicator contains all ranks\n");
+				communicator_descendants = communicatorDescendants.at(net::communicator_ids::AllRanks);
+
+			// Run bitset intersection
+			} else {
+
+				// Get communicator rank mask
+				auto const communicator_ranks_bitset = command.getCommunicator().getRanks().asBytes();
+
+				// Determine if any descendants are in the communicator subset
+				auto const& all_descendants = communicatorDescendants.at(net::communicator_ids::AllRanks);
+				if (!lrle_any_intersection(
+					all_descendants.compressed.data(), all_descendants.compressed.size(),
+					communicator_ranks_bitset.begin(), communicator_ranks_bitset.size())) {
+
+					log("no descendants match\n");
+					continue;
+				}
 
 				// Find descendants intersection
-				communicator_descendants = descendants_bitset.and_buf(communicator_ranks_bitset.begin(), communicator_ranks_bitset.size());
+				communicator_descendants = all_descendants.and_buf(
+					communicator_ranks_bitset.begin(),
+					communicator_ranks_bitset.size());
+
+				log("descendants match: %s\n",
+					communicator_descendants.to_string().c_str());
 			}
 
-			if (!communicator_descendants.empty()) {
-				// Create new communicator result worker
-				communicatorDistributorTasks.emplace_back(std::async(std::launch::async,
-					[](zmq::context_t& ctx, std::string resultEndpoint,
-						std::string communicatorBroadcastEndpoint, zmqnet::Communicator communicator,
-						lrle_bitset communicator_descendants) {
+			// Subscribe to subset tag
+			log("subscribing to communicator %02x\n", communicator_id);
+			net::subscribe_to_tag(upstream.control_socket, communicator_id);
 
-						return workers::communicator_distributor(ctx, std::move(resultEndpoint),
-							std::move(communicatorBroadcastEndpoint),
-							communicator, std::move(communicator_descendants));
+			// Send communicator create command to response worker
+			auto builder = capnp::MallocMessageBuilder{};
+			auto command = builder.initRoot<NetworkCommand>();
+			auto communicatorCommand = command.initCommunicator();
+			communicatorCommand.setCommunicatorId(communicator_id);
 
-					}, std::ref(ctx), resultEndpoint,
-						"inproc://communicator-broadcast", communicator, std::move(communicator_descendants)));
+			// Set rank bitset
+			communicatorCommand.setRanks(kj::ArrayPtr<kj::byte const>
+				{ (unsigned char const*)communicator_descendants.compressed.data()
+				, communicator_descendants.compressed.size()
+			});
 
-				// Relay to children
-				downstream.control_socket.send(reader.eject(), zmq::send_flags::none);
+			// Relay to response thread
+			net::send_MessageBuilder(communicator_command_socket, net::communicator_ids::AllRanks, builder);
 
-				// Subscribe to subset tag
-				net::subscribe_to_tag(upstream.control_socket, communicator.id);
-			}
+			// Relay to children. TODO: avoid builder copy
+			net::send_MessageBuilder(downstream.control_socket, net::communicator_ids::AllRanks, builder);
+
+			// Store communicator descendants bitset
+			communicatorDescendants.emplace(communicator_id, std::move(communicator_descendants));
 
 		// Determine if new stream is to be registered
 		} else if (command.isStream()) {
-			log("got new stream command\n");
 			auto const newStreamCommand = command.getStream();
 			auto const streamId = newStreamCommand.getStreamId();
 			auto const filterLibraryName = newStreamCommand.getFilterLibraryName();
@@ -821,23 +875,32 @@ int main(int argc, char* const argv[])
 
 			// Reconstitute stream object
 			auto const stream = zmqnet::Stream { .communicatorId = reader.getTag(), .id = streamId };
+			log("got new stream %d command on communicator %02x\n",
+				stream.id, stream.communicatorId);
+
+			// Relay to children
+			net::send_MessageReader(downstream.control_socket, std::move(reader));
 
 			// Create new stream task worker
-			streamAggregatorTasks.emplace_back(std::async(std::launch::async,
+			streamAggregatorTasks.emplace_back(
 				[](zmq::context_t& ctx, std::string resultEndpoint,
 					zmqnet::Stream stream, std::string filterPath, std::string filterFunctionName,
-					lrle_bitset const& descendants_bitset) {
+					lrle_bitset descendants_bitset) {
 
-					return workers::stream_aggregator(ctx, std::move(resultEndpoint),
+					(void)workers::stream_aggregator(ctx, std::move(resultEndpoint),
 						stream, std::move(filterPath), std::move(filterFunctionName),
-						descendants_bitset);
+						std::move(descendants_bitset));
 
 				}, std::ref(ctx), resultEndpoint,
 					stream, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName,
-					std::ref(descendants_bitset)));
+					communicatorDescendants.at(stream.communicatorId));
 
 		} else {
-			log("got user command\n");
+			log("got user command on stream %d communicator %02x\n",
+				reader.getTag(), command.getUser().getStreamId());
+
+			// Relay command to children
+			net::send_MessageReader(downstream.control_socket, std::move(reader));
 		}
 	}
 
@@ -851,21 +914,7 @@ cleanup_main:
 	// Wait on stream worker threads
 	log("waiting for stream worker threads\n");
 	for (auto&& stream_aggregator_task : streamAggregatorTasks) {
-		auto const stream_rc = stream_aggregator_task.get();
-		if (stream_rc) {
-			log("stream worker failed with code %d\n", stream_rc);
-			rc = -1;
-		}
-	}
-
-	// Wait on stream worker threads
-	log("waiting for communicator worker threads\n");
-	for (auto&& communicator_distributor_task : communicatorDistributorTasks) {
-		auto const communicator_rc = communicator_distributor_task.get();
-		if (communicator_rc) {
-			log("communicator worker failed with code %d\n", communicator_rc);
-			rc = -1;
-		}
+		stream_aggregator_task.join();
 	}
 
 	// Construct exit message for proxy
@@ -874,7 +923,7 @@ cleanup_main:
 		auto exitResponse = response.initExit();
 
 		// Send exit message to proxy
-		net::send_MessageBuilder(collector_socket, net::communicator_ids::AllRanks, builder);
+		net::send_MessageBuilder(result_socket, net::communicator_ids::AllRanks, builder);
 	}
 
 	// Wait for proxy task to complete and regain ownership of upstream data socket
@@ -882,8 +931,8 @@ cleanup_main:
 	upstream.data_socket = responseCollector.get();
 
 	// Clean up local child PIDs
-	log("waiting for child pids\n");
 	for (auto&& pid : localChildPids) {
+		log("waiting for child pid: %d\n", pid);
 
 		// Wait for exit
 		int status;
@@ -902,20 +951,19 @@ cleanup_main:
 		auto exitAck = response.initExit();
 
 		// Set rank bitset
+		auto const& all_descendants = communicatorDescendants.at(net::communicator_ids::AllRanks);
 		exitAck.setRanks(kj::ArrayPtr<kj::byte const>
-			{ (unsigned char const*)descendants_bitset.compressed.data()
-			, descendants_bitset.compressed.size()
+			{ (unsigned char const*)all_descendants.compressed.data()
+			, all_descendants.compressed.size()
 		});
 
 		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllRanks, builder);
-		log("frontend notified of exit\n");
+		log("parent notified of exit\n");
 	}
 
 	// Close all network sockets
-	upstream.control_socket.close();
-	upstream.data_socket.close();
-	downstream.control_socket.close();
-	downstream.data_socket.close();
+	upstream.close();
+	downstream.close();
 	log("context reset\n");
 	ctx.close();
 

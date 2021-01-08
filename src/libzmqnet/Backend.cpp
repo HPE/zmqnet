@@ -46,13 +46,13 @@ void zmqnet::Backend::notifyReady()
 	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
 }
 
-void zmqnet::Backend::sendResult(zmqnet::Stream::Id const& streamId, char const* result_buffer, size_t result_len)
+void zmqnet::Backend::sendResult(zmqnet::Stream const& stream, char const* result_buffer, size_t result_len)
 {
 	// Notify parent commnode of result
 	auto builder = capnp::MallocMessageBuilder{};
 	auto response = builder.initRoot<NetworkResponse>();
 	auto user = response.initUser();
-	user.setStreamId(streamId);
+	user.setStreamId(stream.id);
 	if (result_len > 0) {
 		user.setContent(kj::ArrayPtr<kj::byte const>{(unsigned char const*)result_buffer, result_len});
 	}
@@ -64,7 +64,7 @@ void zmqnet::Backend::sendResult(zmqnet::Stream::Id const& streamId, char const*
 	});
 
 	// Send result
-	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
+	net::send_MessageBuilder(m_upstream->data_socket, stream.communicatorId, builder);
 }
 
 // Synchronous Backend
@@ -76,13 +76,12 @@ zmqnet::SyncBackend::SyncBackend(std::string const& upstreamControlEndpoint, std
 	notifyReady();
 }
 
-std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
+std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 {
 	while (true) {
 		// Receive next network command
 		log("rank backend %d: waiting for next command...\n", m_rank);
 		auto reader = net::recv_MessageReader(m_upstream->control_socket);
-		auto const communicatorId = reader.getTag();
 		auto command = reader.getRoot<NetworkCommand>();
 
 		// Detect exit case
@@ -105,11 +104,12 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 			m_upstream->control_socket.close();
 			m_upstream->data_socket.close();
 
-			return std::make_tuple(-1, ByteArray{});
+			return std::make_tuple(zmqnet::Stream { .id = -1 }, ByteArray{});
 
 		// Acknowledge and subscribe to communicator if rank is in rank set
 		} else if (command.isCommunicator()) {
-			log("rank backend %d: new communicator\n", m_rank);
+			auto const communicatorId = command.getCommunicator().getCommunicatorId();
+			log("rank backend %d: new communicator %02x\n", m_rank, communicatorId);
 
 			// Get communicator rank mask
 			auto const communicator_ranks = command.getCommunicator().getRanks().asBytes();
@@ -117,6 +117,8 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 			// If this rank matches, subscribe to subset tag
 			if ((communicatorId == net::communicator_ids::AllRanks)
 			 || lrle_contains(communicator_ranks.begin(), communicator_ranks.size(), (size_t)m_rank)) {
+
+				log("rank backend %d: in communicator %02x, subscribing\n", m_rank, communicatorId);
 
 				// Subscribe to subset tag
 				net::subscribe_to_tag(m_upstream->control_socket, communicatorId);
@@ -135,18 +137,19 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 				});
 
 				// Send acknowledgement
-				net::send_MessageBuilder(m_upstream->data_socket, communicatorId, builder);
+				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllRanks, builder);
 			}
 
 			continue;
 
 		// Acknowledge stream
 		} else if (command.isStream()) {
-			log("rank backend %d: new stream\n", m_rank);
+			auto const streamId = command.getStream().getStreamId();
+			auto const communicatorId = reader.getTag();
+
+			log("rank backend %d: new stream %d on communicator %02x\n", m_rank, streamId, communicatorId);
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
-
-			auto const streamId = command.getStream().getStreamId();
 
 			// Create acknowledgement
 			auto streamAck = response.initStream();
@@ -164,10 +167,18 @@ std::tuple<zmqnet::Stream::Id, zmqnet::ByteArray> zmqnet::SyncBackend::nextComma
 
 		// Extract stream ID and user command
 		} else {
-			log("rank backend %d: user command\n", m_rank);
 			assert(command.isUser());
-			auto userCommand = command.getUser();
-			return std::make_tuple(userCommand.getStreamId(), kj::heapArray(userCommand.getContent().asBytes()));
+
+			// Reconstitute stream object
+			auto const stream = zmqnet::Stream
+				{ .communicatorId = reader.getTag()
+				, .id = command.getUser().getStreamId()
+			};
+
+			log("rank backend %d: user command on communicator %02x stream %d\n",
+				m_rank, stream.communicatorId, stream.id);
+
+			return std::make_tuple(stream, kj::heapArray(command.getUser().getContent().asBytes()));
 		}
 	}
 }
@@ -196,8 +207,7 @@ static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zm
 
 	// Wait for stream create command relayed from main thread and acknowledge to proxy
 	log("backend %d: waiting for stream create command\n", streamId);
-	{ auto result = net::recv_message(task_socket);
-		auto reader = net::make_MessageReader(result);
+	{ auto reader = net::recv_MessageReader(task_socket);
 		auto command = reader.getRoot<NetworkCommand>();
 		assert(command.isStream() && (command.getStream().getStreamId() == streamId));
 	}

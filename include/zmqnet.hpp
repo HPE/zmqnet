@@ -153,14 +153,14 @@ public:
 	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
 	~Backend();
 
-	void sendResult(Stream::Id const& streamId, char const* result_buffer, size_t result_len);
+	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
 };
 
 class SyncBackend : public Backend
 {
 public:
 	SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
-	std::tuple<Stream::Id, ByteArray> nextCommand();
+	std::tuple<Stream, ByteArray> nextCommand();
 };
 
 #if 0
