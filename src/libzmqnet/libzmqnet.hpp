@@ -489,9 +489,10 @@ static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::
 	while (true) {
 		// Read next incoming local message
 		auto reader = net::recv_MessageReader(result_socket);
+		auto response = reader.getRoot<NetworkResponse>();
 
 		// If exit message, return socket back to caller for cleanup
-		if (reader.getRoot<NetworkResponse>().isExit()) {
+		if (response.isExit()) {
 			return std::move(output_socket);
 		}
 
@@ -500,8 +501,8 @@ static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::
 	}
 }
 
-// Standard endpoint format for task sockets created by message distributor
-static inline std::string stream_aggregator_endpoint(zmqnet::Stream const& stream)
+// Standard endpoint format for task sockets created by message distributors
+static inline std::string stream_endpoint(zmqnet::Stream const& stream)
 {
 	return "inproc://stream-" + std::to_string(stream.communicatorId) + "-" + std::to_string(stream.id);
 }
@@ -510,8 +511,7 @@ static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream
 {
 	// Create task socket and bind to known endpoint format
 	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::push};
-	auto const taskEndpoint = stream_aggregator_endpoint(stream);
-	log("distributor creating new task socket %s\n", taskEndpoint.c_str());
+	auto const taskEndpoint = stream_endpoint(stream);
 	task_socket.connect(taskEndpoint);
 
 	// Relay message to new task socket
@@ -522,14 +522,12 @@ static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream
 
 // Select stream task based on incoming message's stream ID, and send message to stream task socket
 // Stream tasks are created by main thread.
-// Completed when received `num_clients` exit messages.
+// Completed when received an exit message.
 // Returns control of input socket upon completion.
-static constexpr auto BackendClient = int{1}; // Frontends and backends have only one client
-static constexpr auto FrontendClient = int{1};
 using MaybeSemaphore = std::optional<std::reference_wrapper<net::shared_semaphore>>;
 using MaybeLock = std::optional<std::unique_lock<std::mutex>>;
 template <typename MessageProto>
-static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket_t&& input_socket, int num_clients, MaybeSemaphore maybeStreamSemaphore = std::nullopt)
+static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket_t&& input_socket, MaybeSemaphore maybeStreamSemaphore = std::nullopt)
 {
 	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
 
@@ -541,24 +539,15 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 
 		// If exit, clean up
 		if (content.isExit()) {
-			log("distributor: exit (%d remaining)\n", num_clients - 1);
+			log("distributor: exit\n");
 
 			// Relay exit message to task sockets
 			for (auto&& [streamId, task_socket] : taskSockets) {
 				net::send_MessageReader(task_socket, reader);
 			}
 
-			// One client has exited
-			num_clients--;
-
-			// If all clients have exited, run cleanup
-			if (num_clients == 0) {
-
-				// Return control of the upstream control socket back to main thread
-				return std::move(input_socket);
-			}
-
-			continue;
+			// Return control of the upstream control socket back to main thread
+			return std::move(input_socket);
 		}
 
 		// Content is either stream or user content

@@ -39,11 +39,11 @@ struct TopotestArgv : public cti::Argv {
 
 static constexpr auto TestStreamId = zmqnet::Stream::Id{1};
 
-int run_sync_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
+int run_sync_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 {
-	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
+	fprintf(stderr, "running leafnode node %d, connect parent %s %s\n", node_id, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
-	auto leafnode = zmqnet::SyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, rank};
+	auto leafnode = zmqnet::SyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, node_id};
 
 	while (true) {
 		auto const [stream, command] = leafnode.nextCommand();
@@ -52,25 +52,24 @@ int run_sync_leafnode(std::string const& upstreamControlEndpoint, std::string co
 			return 0;
 
 		} else {
-			fprintf(stderr, "%d got command %s from stream %d\n", rank, command.begin(), stream.id);
+			fprintf(stderr, "%d got command %s from stream %d\n", node_id, command.begin(), stream.id);
 			assert(stream.id == TestStreamId);
-			auto const result = std::to_string(rank);
+			auto const result = std::to_string(node_id);
 			leafnode.sendResult(stream, result.c_str(), result.length() + 1);
 		}
 	}
 }
 
-#if 0
-int run_async_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
+int run_async_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 {
-	fprintf(stderr, "running leafnode rank %d, connect parent %s %s\n", rank, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
+	fprintf(stderr, "running leafnode node %d, connect parent %s %s\n", node_id, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
-	auto leafnode = zmqnet::AsyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, rank};
+	auto leafnode = zmqnet::AsyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, node_id};
 
-	leafnode.registerCallback(TestStreamId, [rank](zmqnet::Stream::Id const& streamId, zmqnet::ByteArray command) {
-		fprintf(stderr, "%d got command %s from stream %d\n", rank, command.begin(), streamId);
+	leafnode.registerCallback(TestStreamId, [node_id](zmqnet::Stream::Id const& streamId, zmqnet::ByteArray command) {
+		fprintf(stderr, "%d got command %s from stream %d\n", node_id, command.begin(), streamId);
 		assert(streamId == TestStreamId);
-		auto const result = std::to_string(rank);
+		auto const result = std::to_string(node_id);
 		return zmqnet::make_ByteArray(result.c_str(), result.length() + 1);
 	});
 
@@ -80,7 +79,6 @@ int run_async_leafnode(std::string const& upstreamControlEndpoint, std::string c
 
 	return 0;
 }
-#endif
 
 // Parse user-provided arguments
 static auto parse_argv(int argc, char* const argv[])
@@ -141,7 +139,7 @@ int main(int argc, char** argv)
 	if (on_backend) {
 		fprintf(stderr, "topotest: leaf mode\n");
 
-		auto const [upstreamControlEndpoint, upstreamDataEndpoint, rank,
+		auto const [upstreamControlEndpoint, upstreamDataEndpoint, node_id,
 			leaf_argc, leaf_argv] = zmqnet::Backend::getParams(argc, argv);
 
 		auto const [leaf_mode, launchType, fanout, synchronous_mode, binary_argc, binary_argv] = parse_argv(leaf_argc, leaf_argv);
@@ -150,13 +148,9 @@ int main(int argc, char** argv)
 		assert((binary_argc == 0) && (binary_argv[0] == nullptr));
 
 		if (synchronous_mode) {
-			rc = run_sync_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, rank);
+			rc = run_sync_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
 		} else {
-#if 0
-			rc = run_async_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, rank);
-#else
-			assert(false);
-#endif
+			rc = run_async_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
 		}
 
 		goto cleanup_main;
@@ -218,31 +212,29 @@ int main(int argc, char** argv)
 			auto const raw_leaf_argv = (const char* const*)leafArgv.get();
 			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, topology, raw_leaf_argv};
 
-			auto const num_ranks = cti_getNumAppPEs(app_id);
+			auto allNodesCommunicator = rootnode.getAllNodesCommunicator();
+			auto stream = rootnode.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
 
-			auto allRanksCommunicator = rootnode.getAllNodesCommunicator();
-			auto stream = rootnode.registerStream(allRanksCommunicator, TestStreamId, "libfilter.so", "run");
+			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
 
-			{ auto someRanksCommunicator = rootnode.registerCommunicator(some_nodes);
-				auto someRanksStream = rootnode.registerStream(someRanksCommunicator, TestStreamId, "libfilter.so", "run");
-
-				auto const result = rootnode.runCommand(someRanksStream, "send", 5);
-				fprintf(stderr, "some ranks result: '%s'\n", result.asBytes().begin());
+				auto const result = rootnode.runCommand(someNodesStream, "send", 5);
+				fprintf(stderr, "some nodes result: '%s'\n", result.asBytes().begin());
 			}
 
 			{ auto const result = rootnode.runCommand(stream, "send", 5);
-				fprintf(stderr, "all ranks result: '%s'\n", result.asBytes().begin());
+				fprintf(stderr, "all nodes result: '%s'\n", result.asBytes().begin());
 			}
 
-			{ auto someRanksCommunicator = rootnode.registerCommunicator(some_nodes);
-				auto someRanksStream = rootnode.registerStream(someRanksCommunicator, TestStreamId, "libfilter.so", "run");
+			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
 
-				auto const result = rootnode.runCommand(someRanksStream, "send", 5);
-				fprintf(stderr, "some ranks result: '%s'\n", result.asBytes().begin());
+				auto const result = rootnode.runCommand(someNodesStream, "send", 5);
+				fprintf(stderr, "some nodes result: '%s'\n", result.asBytes().begin());
 			}
 
 			{ auto const result = rootnode.runCommand(stream, "send", 5);
-				fprintf(stderr, "all ranks result: '%s'\n", result.asBytes().begin());
+				fprintf(stderr, "all nodes result: '%s'\n", result.asBytes().begin());
 			}
 
 			rootnode.runExit();
@@ -274,7 +266,37 @@ int main(int argc, char** argv)
 
 			rootnode.runExit();
 #else
-			assert(false);
+			leafArgv.add(TopotestArgv::Sync, "no");
+
+			auto const raw_leaf_argv = (const char* const*)leafArgv.get();
+			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, topology, raw_leaf_argv};
+
+			auto allNodesCommunicator = rootnode.getAllNodesCommunicator();
+			auto stream = rootnode.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+				auto const result = rootnode.runCommand(someNodesStream, "send", 5);
+				fprintf(stderr, "some nodes result: '%s'\n", result.asBytes().begin());
+			}
+
+			{ auto const result = rootnode.runCommand(stream, "send", 5);
+				fprintf(stderr, "all nodes result: '%s'\n", result.asBytes().begin());
+			}
+
+			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+				auto const result = rootnode.runCommand(someNodesStream, "send", 5);
+				fprintf(stderr, "some nodes result: '%s'\n", result.asBytes().begin());
+			}
+
+			{ auto const result = rootnode.runCommand(stream, "send", 5);
+				fprintf(stderr, "all nodes result: '%s'\n", result.asBytes().begin());
+			}
+
+			rootnode.runExit();
 #endif
 		}
 

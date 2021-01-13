@@ -101,8 +101,9 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 
 				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
 			}
-			m_upstream->control_socket.close();
-			m_upstream->data_socket.close();
+
+			// Shut down all sockets
+			m_ctx.shutdown();
 
 			return std::make_tuple(zmqnet::Stream { .id = -1 }, ByteArray{});
 
@@ -188,41 +189,45 @@ void zmqnet::SyncBackend::sendResult(zmqnet::Stream const& stream, char const* r
 	Backend::sendResult(stream, result_buffer, result_len);
 }
 
-#if 0
-
 // Asynchronous Backend
 
 // Static asynchronous backend functions to be run in own threads
 namespace workers
 {
 
-static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zmqnet::Stream::Id streamId, zmqnet::AsyncBackend::CallbackFunc&& callbackFunc)
+static void callback_processor(zmq::context_t& ctx, std::string resultEndpoint, int node_id, std::vector<unsigned char> const& node_bitset, zmqnet::Stream const& stream, zmqnet::AsyncBackend::CallbackFunc&& callbackFunc)
 {
 	// Open task socket to receive this stream's command from upstream control task
 	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-	{ auto const taskEndpoint = async::task_socket_endpoint(streamId);
-		log("backend %d: connecting to task endpoint %s\n", streamId, taskEndpoint.c_str());
-		task_socket.connect(taskEndpoint);
+	{ auto const taskEndpoint = async::stream_endpoint(stream);
+		log("backend %d %d: connecting to task endpoint %s\n", node_id, stream.id, taskEndpoint.c_str());
+		task_socket.bind(taskEndpoint);
 	}
 
 	// Open result socket to send packets upstream
-	log("backend %d: connecting to upstream proxy %s\n", streamId, resultEndpoint.c_str());
+	log("backend %d %d: connecting to upstream proxy %s\n", node_id, stream.id, resultEndpoint.c_str());
 	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
 	result_socket.connect(resultEndpoint);
 
 	// Wait for stream create command relayed from main thread and acknowledge to proxy
-	log("backend %d: waiting for stream create command\n", streamId);
+	log("backend %d %d: waiting for stream create command\n", node_id, stream.id);
 	{ auto reader = net::recv_MessageReader(task_socket);
 		auto command = reader.getRoot<NetworkCommand>();
-		assert(command.isStream() && (command.getStream().getStreamId() == streamId));
+		assert(command.isStream() && (command.getStream().getStreamId() == stream.id));
 	}
 
 	// Create acknowledgement
-	log("backend %d: sending stream ack\n", streamId);
+	log("backend %d %d: sending stream ack\n", node_id, stream.id);
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
 		auto streamAck = response.initStream();
-		streamAck.setStreamId(streamId);
+		streamAck.setStreamId(stream.id);
+
+		// Set node bitset
+		streamAck.setNodes(kj::ArrayPtr<kj::byte const>
+			{ (unsigned char const*)node_bitset.data()
+			, node_bitset.size()
+		});
 
 		// Relay acknowledgement to proxy
 		net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);
@@ -231,68 +236,189 @@ static bool command_callback(zmq::context_t& ctx, std::string resultEndpoint, zm
 	while (true) {
 
 		// Receive result from task socket
-		log("backend %d: waiting for command from task socket\n", streamId);
+		log("backend %d %d: waiting for command from task socket\n", node_id, stream.id);
 		auto reader = net::recv_MessageReader(task_socket);
 		auto command = reader.getRoot<NetworkCommand>();
+		auto const communicatorId = reader.getTag();
 
 		// If exit command, return
 		if (command.isExit()) {
-			log("backend %d: exiting\n", streamId);
-			return true;
+			log("backend %d %d: exiting\n", node_id, stream.id);
+			return;
+
+		// If stream command, send acknowledgement
+		} else if (command.isStream()) {
+			auto const streamId = command.getStream().getStreamId();
+			log("backend %d: existing stream %d on new communicator %02x\n", node_id, streamId, communicatorId);
+
+			// Create acknowledgement
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+			auto streamAck = response.initStream();
+			streamAck.setStreamId(streamId);
+
+			// Set node bitset
+			streamAck.setNodes(kj::ArrayPtr<kj::byte const>
+				{ (unsigned char const*)node_bitset.data()
+				, node_bitset.size()
+			});
+
+			net::send_MessageBuilder(result_socket, communicatorId, builder);
+
+			continue;
 		}
 
 		// Command is user command
-		assert(!command.isStream() && command.isUser());
+		assert(command.isUser());
 
 		// Check stream ID and user result
-		assert(command.getUser().getStreamId() == streamId);
+		assert(command.getUser().getStreamId() == stream.id);
 
 		// Run user-provided callback. TODO: pass ArrayPtr instead of new heap array
-		auto result = callbackFunc(streamId, kj::heapArray(command.getUser().getContent().asBytes()));
+		auto result = callbackFunc(stream.id, kj::heapArray(command.getUser().getContent().asBytes()));
 
 		// Create outgoing result message
 		if (result.size() > 0) {
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
-			auto user = response.initUser();
-			user.setStreamId(streamId);
+			auto userResponse = response.initUser();
+			userResponse.setStreamId(stream.id);
 			auto const result_size = result.size();
-			user.setContent(std::move(result));
+			userResponse.setContent(std::move(result));
+
+			// Set node bitset
+			userResponse.setNodes(kj::ArrayPtr<kj::byte const>
+				{ (unsigned char const*)node_bitset.data()
+				, node_bitset.size()
+			});
 
 			// Send result
-			log("backend %d: sending result size %lu\n", streamId, result_size);
-			net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);
+			log("backend %d %d: sending result size %lu\n", node_id, stream.id, result_size);
+			net::send_MessageBuilder(result_socket, communicatorId, builder);
 		}
 	}
 }
 
-} // async
+static inline zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket,
+	std::string resultEndpoint, int node_id,
+	std::vector<unsigned char> const& node_bitset)
+{
+	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
 
-zmqnet::AsyncBackend::AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank)
-	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, rank}
+	// Open result socket to send acknowledgements to upstream proxy task
+	log("backend %d: connecting to task result %s\n",
+		node_id, resultEndpoint.c_str());
+	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
+	result_socket.connect(resultEndpoint);
+
+	while (true) {
+		// Receive next message
+		log("backend %d: receiving message...\n", node_id);
+		auto reader = net::recv_MessageReader(input_socket);
+		auto command = reader.getRoot<NetworkCommand>();
+
+		// If exit, clean up
+		if (command.isExit()) {
+			log("backend %d: exit\n", node_id);
+
+			// Relay exit message to task sockets
+			for (auto&& [streamId, task_socket] : taskSockets) {
+				net::send_MessageReader_copy(task_socket, reader);
+			}
+
+			// Return control of the upstream control socket back to main thread
+			return std::move(input_socket);
+
+		// Acknowledge and subscribe to communicator if node is in node set
+		} else if (command.isCommunicator()) {
+			auto const communicatorId = command.getCommunicator().getCommunicatorId();
+			log("backend %d: new communicator %02x\n", node_id, communicatorId);
+
+			// Get communicator node mask
+			auto const communicator_nodes = command.getCommunicator().getNodes().asBytes();
+
+			// If this node matches, subscribe to subset tag
+			if ((communicatorId == net::communicator_ids::AllNodes)
+			 || lrle_contains(communicator_nodes.begin(), communicator_nodes.size(), (size_t)node_id)) {
+
+				log("backend %d: in communicator %02x, subscribing\n", node_id, communicatorId);
+
+				// Subscribe to subset tag
+				net::subscribe_to_tag(input_socket, communicatorId);
+
+				// Create acknowledgement
+				auto builder = capnp::MallocMessageBuilder{};
+				auto response = builder.initRoot<NetworkResponse>();
+
+				auto communicatorAck = response.initCommunicator();
+				communicatorAck.setCommunicatorId(communicatorId);
+
+				// Set node bitset
+				communicatorAck.setNodes(kj::ArrayPtr<kj::byte const>
+					{ (unsigned char const*)node_bitset.data()
+					, node_bitset.size()
+				});
+
+				// Send acknowledgement
+				net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);
+			}
+
+			continue;
+		}
+
+		assert(command.isStream() || command.isUser());
+
+		// Extract stream ID to select stream worker
+		auto const communicatorId = reader.getTag();
+		auto const streamId = (command.isStream())
+			? command.getStream().getStreamId()
+			: command.getUser().getStreamId();
+
+		// Get socket for given stream ID
+		auto const idSocketPair = taskSockets.find(streamId);
+
+		// Create new stream task connection with known endpoint format, if needed
+		if (idSocketPair == taskSockets.end()) {
+			assert(command.isStream());
+			log("backend %d: new stream %d on communicator %02x\n", node_id, streamId, communicatorId);
+
+			// Reconstitute stream object
+			auto const stream = zmqnet::Stream { .communicatorId = net::communicator_ids::AllNodes, .id = streamId };
+
+			// Create task socket and store in stream task socket map
+			taskSockets.emplace_hint(idSocketPair, streamId,
+				async::make_task_socket(ctx, stream, std::move(reader)));
+
+		// Relay to socket for given stream ID
+		} else {
+			log("backend %d: relay message to stream %d\n", node_id, streamId);
+			net::send_MessageReader(taskSockets.at(streamId), std::move(reader));
+		}
+	}
+}
+
+} // workers
+
+zmqnet::AsyncBackend::AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
+	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, node_id}
 	, m_ctx{}
 
 	, m_collectorEndpoint{"inproc://" + net::generate_uuid()}
 	, m_collectorSocket{m_ctx, zmq::socket_type::push}
 	, m_responseCollector{}
 
-	, m_commandWorkers{}
+	, m_callbackProcessors{}
 	, m_commandDistributor{}
 {
-	// Launch response collector, moving control of upstream data socket
-	m_responseCollector = std::async(std::launch::async,
-		[](zmq::context_t& ctx, std::string collectorEndpoint, zmq::socket_t&& output_socket) {
-			return async::collect_network_responses(ctx, std::move(collectorEndpoint), std::move(output_socket));
-		}, std::ref(m_ctx), m_collectorEndpoint, std::move(m_upstream->data_socket));
-
 	// Connect for message injection by main thread
 	m_collectorSocket.connect(m_collectorEndpoint);
 
 	// Launch response distributor task, moving control of upstream control socket
 	m_commandDistributor = std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmq::socket_t&& input_socket) {
-			return async::distribute_messages<NetworkCommand>(ctx, std::move(input_socket), async::BackendClient);
-		}, std::ref(m_ctx), std::move(m_upstream->control_socket));
+		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, std::string resultEndpoint, int node_id, std::vector<unsigned char> const& node_bitset) {
+			return workers::command_distributor(ctx, std::move(input_socket), std::move(resultEndpoint), node_id, node_bitset);
+		}, std::ref(m_ctx), std::move(m_upstream->control_socket), m_collectorEndpoint, m_node_id,
+			m_node_bitset);
 }
 
 zmqnet::AsyncBackend::~AsyncBackend()
@@ -303,27 +429,30 @@ zmqnet::AsyncBackend::~AsyncBackend()
 void zmqnet::AsyncBackend::registerCallback(zmqnet::Stream::Id const& streamId, zmqnet::AsyncBackend::CallbackFunc callbackFunc)
 {
 	// Ensure stream not registered
-	if (m_commandWorkers.find(streamId) != m_commandWorkers.end()) {
+	if (m_callbackProcessors.find(streamId) != m_callbackProcessors.end()) {
 		throw std::runtime_error("asynchronous callback already registered for stream ID " + std::to_string(streamId));
 	}
 
+	// Reconstitute stream object
+	auto const stream = zmqnet::Stream { .communicatorId = net::communicator_ids::AllNodes, .id = streamId };
+
 	// Launch worker thread
-	m_commandWorkers.emplace(streamId, std::async(std::launch::async,
-		[](zmq::context_t& ctx, std::string collectorEndpoint, zmqnet::Stream::Id streamId, CallbackFunc&& callbackFunc) {
-			return workers::command_callback(ctx, std::move(collectorEndpoint), streamId, std::move(callbackFunc));
-		}, std::ref(m_ctx), m_collectorEndpoint, streamId, std::move(callbackFunc)));
+	m_callbackProcessors.emplace(streamId, std::async(std::launch::async,
+		[](zmq::context_t& ctx, std::string collectorEndpoint, int node_id, std::vector<unsigned char> const& node_bitset, zmqnet::Stream const& stream, CallbackFunc&& callbackFunc) {
+			return workers::callback_processor(ctx, std::move(collectorEndpoint), node_id, node_bitset, stream, std::move(callbackFunc));
+		}, std::ref(m_ctx), m_collectorEndpoint, m_node_id, m_node_bitset, stream, std::move(callbackFunc)));
 }
 
 void zmqnet::AsyncBackend::notifyReady()
 {
 	// Notify parent commnode that setup is completed
-	log("backend %d: notifying parent ready from leaf node\n", m_node_id);
-	auto builder = capnp::MallocMessageBuilder{};
-	auto response = builder.initRoot<NetworkResponse>();
-	response.setReady();
+	Backend::notifyReady();
 
-	// Send ready acknowledgement
-	net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllNodes, builder);
+	// Launch response collector, moving control of upstream data socket
+	m_responseCollector = std::async(std::launch::async,
+		[](zmq::context_t& ctx, std::string collectorEndpoint, zmq::socket_t&& output_socket) {
+			return async::collect_network_responses(ctx, std::move(collectorEndpoint), std::move(output_socket));
+		}, std::ref(m_ctx), m_collectorEndpoint, std::move(m_upstream->data_socket));
 }
 
 void zmqnet::AsyncBackend::waitForExit()
@@ -334,33 +463,32 @@ void zmqnet::AsyncBackend::waitForExit()
 
 	// Wait for stream workers
 	log("backend %d: waiting for stream workers\n", m_node_id);
-	for (auto&& [streamId, command_worker] : m_commandWorkers) {
-		(void)command_worker.get();
+	for (auto&& [streamId, callback_processor] : m_callbackProcessors) {
+		(void)callback_processor.get();
 	}
 
-	// Construct exit message for proxy
-	{ auto builder = capnp::MallocMessageBuilder{};
-		auto response = builder.initRoot<NetworkResponse>();
-		response.setExit();
+	// Send exit acknowledgement to parent
+	auto builder = capnp::MallocMessageBuilder{};
+	auto response = builder.initRoot<NetworkResponse>();
+	auto exit = response.initExit();
 
-		// Send exit message to proxy
-		net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllNodes, builder);
-	}
+	// Set node bitset
+	exit.setNodes(kj::ArrayPtr<kj::byte const>
+		{ (unsigned char const*)m_node_bitset.data()
+		, m_node_bitset.size()
+	});
+
+	// Send exit message to proxy
+	net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllNodes, builder);
 
 	// Reacquire upstream data socket from exiting proxy
 	log("backend %d: waiting for proxy\n", m_node_id);
 	m_upstream->data_socket = m_responseCollector.get();
-	m_collectorSocket.close();
 
-	// Send exit acknowledgement
-	{ log("backend %d: notifying parent leaf node exiting\n", m_node_id);
-		auto builder = capnp::MallocMessageBuilder{};
-		auto response = builder.initRoot<NetworkResponse>();
-		response.setExit();
+	// Send exit acknowledgement to parent
+	log("backend %d: notifying parent of exit\n", m_node_id);
+	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
 
-		// Send acknowledgement to proxy
-		net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
-	}
+	// Shut down all sockets
+	m_ctx.shutdown();
 }
-
-#endif

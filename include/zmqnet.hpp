@@ -227,10 +227,17 @@ public:
 	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
 };
 
-#if 0
+// Asynchronous Backends register callbacks for each handled Stream that will be provided with
+// the contents of every incoming message for that stream.
+// The main thread of the process running an asynchronous Backend is expected to call the blocking
+// function `waitForExit` that returns when an exit command is received.
 class AsyncBackend : public Backend
 {
 public:
+
+	// Command callbacks take a pair of Stream ID and ByteArray, where the Stream ID corresponds
+	// to the stream on which the incoming command is received, and the ByteArray is the raw
+	// contents of the command.
 	using CallbackFunc = std::function<ByteArray(Stream::Id const&, ByteArray)>;
 
 private:
@@ -240,17 +247,25 @@ private:
 	zmq::socket_t m_collectorSocket;
 	std::future<zmq::socket_t> m_responseCollector;
 
-	std::unordered_map<Stream::Id, std::future<bool>> m_commandWorkers;
+	std::unordered_map<Stream::Id, std::future<void>> m_callbackProcessors;
 	std::future<zmq::socket_t> m_commandDistributor;
 
 public:
-	AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int rank);
+
+	// The constructor takes the same network parameters as the synchronous variant, as extracted
+	// from the leaf binary arguments by zmqnet::Backend::getParams.
+	AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
 	~AsyncBackend();
 
+	// Before initialization of the async. backend can complete, callbacks must be registered for
+	// all possible incoming stream IDs.
 	void registerCallback(Stream::Id const& streamId, CallbackFunc callbackFunc);
+
+	// After all callbacks are registered, send a "setup complete" message with `notifyReady`.
 	void notifyReady();
+
+	// Blocks and waits for an incoming exit message to be received.
 	void waitForExit();
 };
-#endif
 
 } // zmqnet

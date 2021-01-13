@@ -149,7 +149,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 	// Open task socket to receive this stream's input from downstream data task
 	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-	{ auto const taskEndpoint = async::stream_aggregator_endpoint(stream);
+	{ auto const taskEndpoint = async::stream_endpoint(stream);
 		log("commnode %02x %d: connecting to task endpoint %s\n",
 			stream.communicatorId, stream.id, taskEndpoint.c_str());
 		task_socket.bind(taskEndpoint);
@@ -174,6 +174,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			stream.communicatorId, stream.id, descendants_bitset.to_string().c_str(), started_descendants.to_string().c_str());
 		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
+		assert(reader.getTag() == stream.communicatorId);
 		assert(response.isStream() && (response.getStream().getStreamId() == stream.id));
 
 		// Add to started descendants
