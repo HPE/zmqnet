@@ -411,7 +411,7 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 // Common frontend implementation
 
 zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int const manifest_id,
-	char const* const* leaf_argv, zmqnet::Topology const& topology)
+	zmqnet::Topology const& topology, char const* const* leaf_argv)
 	: m_max_node_id{}
 	, m_nodeIdMap{}
 	, m_ctx{}
@@ -557,6 +557,11 @@ void zmqnet::Frontend::sendExit()
 }
 
 // Synchronous frontend implementation
+
+zmqnet::SyncFrontend::SyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
+	zmqnet::Topology const& topology, char const* const* leaf_argv)
+	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv}
+{}
 
 zmqnet::Communicator zmqnet::SyncFrontend::getAllNodesCommunicator() const
 {

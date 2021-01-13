@@ -216,7 +216,7 @@ int main(int argc, char** argv)
 			leafArgv.add(TopotestArgv::Sync, "yes");
 
 			auto const raw_leaf_argv = (const char* const*)leafArgv.get();
-			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, raw_leaf_argv, topology};
+			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, topology, raw_leaf_argv};
 
 			auto const num_ranks = cti_getNumAppPEs(app_id);
 

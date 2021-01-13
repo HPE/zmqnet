@@ -183,6 +183,11 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 	}
 }
 
+void zmqnet::SyncBackend::sendResult(zmqnet::Stream const& stream, char const* result_buffer, size_t result_len)
+{
+	Backend::sendResult(stream, result_buffer, result_len);
+}
+
 #if 0
 
 // Asynchronous Backend

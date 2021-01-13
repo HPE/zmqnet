@@ -40,12 +40,15 @@ static inline auto make_ByteArray(char const* buffer, size_t buffer_len)
 	return kj::heapArray((unsigned char const*)buffer, buffer_len);
 }
 
+// Communicators are subsets of job nodes to which commands can be targeted. Can include all nodes.
+using NodeSet = std::set<std::string>;
 struct Communicator
 {
 	using Id = int;
 	Id id;
 };
 
+// Streams are owned by Communicators, and run user-provided filtering code to transform results.
 struct Stream
 {
 	using Id = int;
@@ -67,12 +70,6 @@ struct Topology
 	int fanout;
 };
 
-// Communication subsets are determined by nodes contained within the set
-using NodeSet = std::set<std::string>;
-
-// Frontend construction launches the network and connects the communication tree.
-// Communicators are built from a subset of nodes.
-// Commands are issued by a Frontend
 class Frontend
 {
 protected:
@@ -82,9 +79,9 @@ protected:
 	std::unique_ptr<net::TcpDownstreamLink> m_downstream;
 	Communicator::Id m_next_communicatorId;
 
-public:
+protected:
 	Frontend(int const app_id, long int const session_id, long int const manifest_id,
-		char const* const* leaf_argv, Topology const& topology);
+		Topology const& topology, char const* const* leaf_argv);
 	~Frontend();
 
 protected:
@@ -96,17 +93,41 @@ protected:
 	void sendExit();
 };
 
+// Synchronous Frontends send a command and receive results synchronously.
+// This is useful for non-interactive programs that do not need to issue commands in response to
+// user input.
 class SyncFrontend : public Frontend
 {
 public:
-	using Frontend::Frontend;
+	// Frontend construction launches the network and connects the communication tree.
+	// The Frontend constructor is used to build a communication tree on a running application.
+	// Any filter libraries required by the application should be added to the CTI Manifest
+	// specified by `manifest_id` before construction.
+	// `leaf_argv` are any additional arguments to be passed to the user's leaf binary,
+	// with `leaf_argv[0]` being the path to the leaf binary. This is the binary that will
+	// instantiate the Backend object to connect to the network and respond to network commands.
+	SyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
+		Topology const& topology, char const* const* leaf_argv);
 
+	// Get the default communicator to send a message to all nodes
 	Communicator getAllNodesCommunicator() const;
-	Communicator registerCommunicator(NodeSet const& nodes);
-	Stream registerStream(Communicator const& communicator,
-		Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
 
+	// Create a new communicator targeting the nodes with hostnames specified in `nodes`
+	Communicator registerCommunicator(NodeSet const& nodes);
+
+	// Create a new stream in the provided communicator. Stream IDs are determined by the user.
+	// Provide a filter library and filter function name.
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName);
+
+	// Once a Stream is created, send send commands by providing a buffer of command data.
+	// Results from the Backend instances are aggregated according to the filter function
+	// specified during construction of the Stream, and returned to the caller in a ByteArray
+	// object.
 	ByteArray runCommand(Stream const& stream, char const* command_buffer, size_t command_len);
+
+	// Notify all Backend instances that the network should exit. Returns once all Backend instances
+	// have exited.
 	void runExit();
 };
 
@@ -135,9 +156,21 @@ public:
 	void runExit();
 };
 #endif
+
 class Backend
 {
 public:
+
+	// Network connection arguments are prepended to the argument array for the user-provided
+	// leaf binary. Extract these arguments using `getParams` to obtain the following:
+	// Upstream control endpoint
+	// Upstream data endpoint
+	// Node ID
+	// Remaining argument count and arguments provided by the user during Frontend construction
+	// Example usage:
+	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
+	//     = zmqnet::Backend::getParams(argc, argv);
+	// auto backend = zmqnet::Backend(controlEndpoint, dataEndpoint, node_id);
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv)
 	{
@@ -145,11 +178,11 @@ public:
 			throw std::runtime_error("expected 3 network param arguments");
 		}
 		return std::make_tuple(
-			std::string{argv[1]}, // upstream control endpoint
-			std::string{argv[2]}, // upstream data endpoint
-			std::stoi(argv[3]),   // node ID
-			argc - 3, // 3 less arguments
-			argv + 3);
+			std::string{argv[1]}, // Upstream control endpoint
+			std::string{argv[2]}, // Upstream data endpoint
+			std::stoi(argv[3]),   // Node ID
+			argc - 3,             // Leaf binary argc
+			argv + 3);            // Leaf binary argv
 	}
 
 protected:
@@ -160,18 +193,38 @@ protected:
 
 	void notifyReady();
 
-public:
+protected:
 	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
 	~Backend();
 
 	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
 };
 
+// Backend nodes are automatically launched by intermediate commnode instances during network
+// startup.
+// Synchronous backends follow a simple command loop, where the next command is received blocking
+// and returned to the caller with the referenced Stream object, and the ByteArray contents of the
+// Command.
 class SyncBackend : public Backend
 {
 public:
+
+	// Connect to the communication tree using network parameters extracted by
+	// zmqnet::Backend::getParams(argc, argv) where argc and argv are the actual arguments provided
+	// to the user binary calling SyncBackend.
 	SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
+
+	// Block and wait for the next incoming command. The Stream on which this command was received
+	// is provided, containing the user-provided Stream ID that was used when creating the Stream
+	// on the Frontend object.
+	// When an exit command is received, the result will have a Stream with an ID of -1. The leaf
+	// binary is expected to exit in response to this command, after any necessary cleanup.
+	// The Backend object destructor will send the exit confirmation up the communication tree.
 	std::tuple<Stream, ByteArray> nextCommand();
+
+	// Send result data up the communication tree on the given Stream to be aggregated by the
+	// Stream's filter function.
+	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
 };
 
 #if 0
