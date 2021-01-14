@@ -240,28 +240,53 @@ int main(int argc, char** argv)
 			rootnode.runExit();
 
 		} else {
-#if 0
-			leaf_argv[2] = "async";
+#if 1
+			leafArgv.add(TopotestArgv::Sync, "no");
 
 			auto result_mutex = std::mutex{};
 			auto result_cv = std::condition_variable{};
-			auto result_received = std::atomic<bool>{false};
+			auto results_received = std::atomic<int>{0};
+			auto expected_results = int{0};
 
-			auto rootnode = zmqnet::AsyncFrontend{app_id, session_id, manifest_id, leaf_argv, topology};
-			auto stream = rootnode.registerStream(TestStreamId, "libfilter.so", "run",
-				[&result_received, &result_cv](zmqnet::Stream::Id const& streamId, kj::Array<kj::byte> result) {
-					assert(streamId == TestStreamId);
-					fprintf(stderr, "result: '%s'\n", result.asBytes().begin());
+			auto const raw_leaf_argv = (const char* const*)leafArgv.get();
+			auto rootnode = zmqnet::AsyncFrontend{app_id, session_id, manifest_id, topology, raw_leaf_argv};
 
-					result_received = true;
-					result_cv.notify_one();
-				});
+			auto print_callback = [&results_received, &result_cv](zmqnet::Stream::Id const& streamId, zmqnet::ByteArrayPtr result) {
+				assert(streamId == TestStreamId);
+				fprintf(stderr, "result: '%s'\n", result.begin());
+
+				results_received++;
+				result_cv.notify_one();
+			};
+
+			auto allNodesCommunicator = rootnode.getAllNodesCommunicator();
+			rootnode.registerStreamCallback(TestStreamId, print_callback);
+			auto stream = rootnode.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+				rootnode.sendCommand(someNodesStream, "send", 5);
+				expected_results++;
+			}
 
 			rootnode.sendCommand(stream, "send", 5);
+			expected_results++;
+
+			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+				rootnode.sendCommand(someNodesStream, "send", 5);
+				expected_results++;
+			}
+
+			rootnode.sendCommand(stream, "send", 5);
+			expected_results++;
 
 			{ auto result_lock = std::unique_lock<std::mutex>{result_mutex};
-				result_cv.wait(result_lock,
-					[&result_received] { return result_received.load(); });
+				result_cv.wait(result_lock, [&results_received, expected_results]() {
+					return results_received.load() == expected_results;
+				});
 			}
 
 			rootnode.runExit();

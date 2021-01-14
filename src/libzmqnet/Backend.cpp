@@ -209,8 +209,8 @@ static void callback_processor(zmq::context_t& ctx, std::string resultEndpoint, 
 	auto result_socket = zmq::socket_t{ctx, zmq::socket_type::push};
 	result_socket.connect(resultEndpoint);
 
-	// Wait for stream create command relayed from main thread and acknowledge to proxy
-	log("backend %d %d: waiting for stream create command\n", node_id, stream.id);
+	// Wait for stream create acknowledgement and acknowledge to proxy
+	log("backend %d %d: waiting for stream create ack\n", node_id, stream.id);
 	{ auto reader = net::recv_MessageReader(task_socket);
 		auto command = reader.getRoot<NetworkCommand>();
 		assert(command.isStream() && (command.getStream().getStreamId() == stream.id));
@@ -299,7 +299,7 @@ static void callback_processor(zmq::context_t& ctx, std::string resultEndpoint, 
 	}
 }
 
-static inline zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket,
+static zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket,
 	std::string resultEndpoint, int node_id,
 	std::vector<unsigned char> const& node_bitset)
 {

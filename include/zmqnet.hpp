@@ -30,9 +30,13 @@ namespace net
 namespace zmqnet
 {
 
-// Command and response data is passed / provided via ByteArray
+// Command data is provided via ByteArray
 // Extract bytes with .begin() and size with .size()
 using ByteArray = kj::Array<kj::byte>;
+
+// Response data is provided via ByteArrayPtr
+// Extract bytes with .begin() and size with .size()
+using ByteArrayPtr = kj::ArrayPtr<kj::byte const>;
 
 // In asynchronous callbacks, return a ByteArray to produce a message result
 static inline auto make_ByteArray(char const* buffer, size_t buffer_len)
@@ -131,31 +135,50 @@ public:
 	void runExit();
 };
 
-#if 0
+// Asynchronous Frontend register callbacks for each handled Stream that will receive
+// the contents of every incoming message for that stream.
 class AsyncFrontend : public Frontend
 {
 public:
-	using CallbackFunc = std::function<void(Stream::Id const&, ByteArray)>;
+	using CallbackFunc = std::function<void(Stream::Id const&, ByteArrayPtr)>;
 
 private:
 	zmq::context_t m_ctx;
-	std::unordered_map<Stream::Id, std::future<bool>> m_callbackWorkers;
-	std::unique_ptr<net::shared_semaphore> m_stream_registering;
+	std::unordered_map<Stream::Id, std::future<void>> m_callbackProcessors;
+	std::unique_ptr<net::shared_semaphore> m_blocking_registration;
 	std::future<zmq::socket_t> m_responseDistributor;
 
 public:
+	// See zmqnet::SyncFrontend for description
 	AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-		char const* const* leaf_argv, Topology const& topology);
+		Topology const& topology, char const* const* leaf_argv);
 	~AsyncFrontend();
 
-	Stream registerStream(Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
-		CallbackFunc callbackFunc);
-	Stream registerSubset(Stream const& stream, RankSet const& ranks);
+	// Get the default communicator to send a message to all nodes
+	Communicator getAllNodesCommunicator() const;
 
+	// Create a new communicator targeting the nodes with hostnames specified in `nodes`
+	Communicator registerCommunicator(NodeSet const& nodes);
+
+	// Create a new callback processor for the given stream ID. After the callback is registered,
+	// the actual Stream can be registered with the network
+	void registerStreamCallback(Stream::Id const& streamId, CallbackFunc callbackFunc);
+
+	// Create a new stream in the provided communicator. Stream IDs are determined by the user.
+	// Provide a filter library and filter function name.
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName);
+
+	// Once a Stream is created, send send commands by providing a buffer of command data.
+	// Results from the Backend instances are aggregated according to the filter function
+	// specified during construction of the Stream, and passed to the Stream callback registered
+	// previously.
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
+
+	// Notify all Backend instances that the network should exit. Returns once all Backend instances
+	// have exited.
 	void runExit();
 };
-#endif
 
 class Backend
 {
