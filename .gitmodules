@@ -10,3 +10,6 @@
 [submodule "external/capnproto"]
 	path = external/capnproto
 	url = ssh://git@stash.us.cray.com:7999/pe-cdst/capnproto.git
+[submodule "external/lrle_bitset"]
+	path = external/lrle_bitset
+	url = ssh://git@stash.us.cray.com:7999/pe-cdst/lrle_bitset.git

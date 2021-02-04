@@ -20,57 +20,147 @@
 namespace workers
 {
 
-static bool response_callback(zmq::context_t& ctx, zmqnet::Stream::Id streamId, zmqnet::AsyncFrontend::CallbackFunc&& callbackFunc)
+static void callback_processor(zmq::context_t& ctx, zmqnet::Stream const& stream, zmqnet::AsyncFrontend::CallbackFunc&& callbackFunc)
 {
 	// Open task socket to receive this stream's input from downstream data task
-	auto callback_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
-	{ auto const callbackEndpoint = async::task_socket_endpoint(streamId);
-		log("%d: connecting to callback endpoint %s\n", streamId, callbackEndpoint.c_str());
-		callback_socket.connect(callbackEndpoint);
+	auto task_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
+	{ auto const taskEndpoint = async::stream_endpoint(stream);
+		log("%d: connecting to task endpoint %s\n", stream.id, taskEndpoint.c_str());
+		task_socket.bind(taskEndpoint);
 	}
 
-	// Get forwarded stream create acknowledgement
-	{ log("%d: waiting for stream create ack\n", streamId);
-		auto reader = net::recv_MessageReader(callback_socket);
+	// Wait for stream create acknowledgement
+	{ log("%d: waiting for stream create ack\n", stream.id);
+		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
-		assert(response.isStream() && (response.getStream().getStreamId() == streamId));
+		assert(response.isStream() && (response.getStream().getStreamId() == stream.id));
 	}
 
 	while (true) {
 
 		// Receive result from task socket
-		log("%d: waiting for result from callback socket\n", streamId);
-		auto reader = net::recv_MessageReader(callback_socket);
+		log("%d: waiting for result from task socket\n", stream.id);
+		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
+		auto const communicatorId = reader.getTag();
 
 		// If exit message, return
 		if (response.isExit()) {
-			return true;
+			log("%d: exiting\n", stream.id);
+			return;
+
+		// If existing stream response, ignore
+		} else if (response.isStream()) {
+			auto const streamId = response.getStream().getStreamId();
+			assert(streamId == stream.id);
+			log("%d: existing stream on new communicator %02x\n", stream.id, communicatorId);
+
+			continue;
 		}
 
 		// Check stream ID and user result
-		assert(response.isUser() && (response.getUser().getStreamId() == streamId));
+		assert(response.isUser() && (response.getUser().getStreamId() == stream.id));
 
 		// Run user-provided callback. TODO: pass ArrayPtr instead of new heap array
-		callbackFunc(streamId, kj::heapArray(response.getUser().getContent().asBytes()));
+		callbackFunc(stream.id, zmqnet::ByteArrayPtr{response.getUser().getContent().asBytes()});
+	}
+}
+
+// Select stream task based on incoming message's stream ID, and send message to stream task socket
+// Stream tasks are created by main thread.
+// Completed when received an exit message.
+// Returns control of input socket upon completion.
+static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket, net::shared_semaphore& blocking_registration)
+{
+	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
+
+	while (true) {
+		// Receive next message
+		log("distributor: receiving message...\n");
+		auto reader = net::recv_MessageReader(input_socket);
+		auto response = reader.getRoot<NetworkResponse>();
+		auto const communicatorId = reader.getTag();
+
+		// If exit, clean up
+		if (response.isExit()) {
+			log("distributor: exit\n");
+
+			// Relay exit message to task sockets
+			for (auto&& [streamId, task_socket] : taskSockets) {
+				net::send_MessageReader_copy(task_socket, reader);
+			}
+
+			// Return control of the upstream control socket back to main thread
+			return std::move(input_socket);
+		}
+
+		// Stream / communicator messages come from a blocking registration command and should notify main thread
+		if (response.isStream() || response.isCommunicator()) {
+
+			// Lock registration flag shared with main thread
+			auto registration_lock = blocking_registration.acquire_lock();
+			assert(blocking_registration.get(registration_lock) == true);
+		}
+
+		// Stream / user messages are relayed to the corresponding stream callback processor
+		if (response.isStream() || response.isUser()) {
+
+			// Extract stream ID to select stream worker
+			auto const streamId = (response.isStream())
+				? response.getStream().getStreamId()
+				: response.getUser().getStreamId();
+
+			// Get socket for given stream ID
+			auto const idSocketPair = taskSockets.find(streamId);
+
+			// Create new stream task connection with known endpoint format, if needed
+			if (idSocketPair == taskSockets.end()) {
+				log("distributor: new stream %d\n", streamId);
+				assert(response.isStream());
+
+				// Reconstitute stream object
+				auto const stream = zmqnet::Stream { .communicatorId = communicatorId, .id = streamId };
+
+				// Create task socket and store in stream task socket map
+				taskSockets.emplace_hint(idSocketPair, streamId,
+					async::make_task_socket(ctx, stream, std::move(reader)));
+
+			// Relay message to task socket
+			} else {
+				log("distributor: relay message to stream %d\n", streamId);
+				net::send_MessageReader(idSocketPair->second, std::move(reader));
+			}
+		}
+
+		// Stream / communicator messages come from a blocking registration command and should notify main thread
+		if (response.isStream() || response.isCommunicator()) {
+			auto registration_lock = blocking_registration.acquire_lock();
+
+			log("distributor: notifying main thread that registration has completed\n");
+			if (blocking_registration.get(registration_lock) == true) {
+				blocking_registration.set(registration_lock, false);
+				blocking_registration.unlock_and_notify_one(std::move(registration_lock));
+			}
+		}
 	}
 }
 
 } // async
 
 zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-	char const* const* leaf_argv, zmqnet::Topology const& topology)
-	: Frontend{app_id, session_id, manifest_id, leaf_argv, topology}
+	Topology const& topology, char const* const* leaf_argv)
+
+	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv}
 	, m_ctx{}
-	, m_callbackWorkers{}
-	, m_stream_registering{std::make_unique<net::shared_semaphore>(false)}
+	, m_callbackProcessors{}
+	, m_blocking_registration{std::make_unique<net::shared_semaphore>(false)}
 	, m_responseDistributor{}
 {
 	// Launch callback distributor task
 	m_responseDistributor = std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, async::MaybeSemaphore maybeStreamSemaphore) {
-			return async::distribute_messages<NetworkResponse>(ctx, std::move(input_socket), async::FrontendClient, std::move(maybeStreamSemaphore));
-		}, std::ref(m_ctx), std::move(m_downstream->data_socket), async::MaybeSemaphore{*m_stream_registering});
+		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, net::shared_semaphore& blocking_registration) {
+			return workers::response_distributor(ctx, std::move(input_socket), blocking_registration);
+		}, std::ref(m_ctx), std::move(m_downstream->data_socket), std::ref(*m_blocking_registration));
 }
 
 zmqnet::AsyncFrontend::~AsyncFrontend()
@@ -78,44 +168,82 @@ zmqnet::AsyncFrontend::~AsyncFrontend()
 	// Generate destructor for forward-declared net::shared_semaphore
 }
 
-zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
-	zmqnet::AsyncFrontend::CallbackFunc callbackFunc)
+zmqnet::Communicator zmqnet::AsyncFrontend::getAllNodesCommunicator() const
 {
-	// Ensure stream not registered
-	if (m_callbackWorkers.find(streamId) != m_callbackWorkers.end()) {
+	return Communicator { .id = net::communicator_ids::AllNodes };
+}
+
+zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(zmqnet::NodeSet const& nodes)
+{
+	// Lock blocking registration flag shared with distributor task
+	log("starting communicator registration\n");
+	auto registration_lock = m_blocking_registration->acquire_lock();
+
+	// Set registration flag
+	assert(m_blocking_registration->get(registration_lock) == false);
+	m_blocking_registration->set(registration_lock, true);
+
+	// Send communicator create command
+	auto const communicator = createCommunicator(nodes);
+
+	// Wait for distributor to clear registration flag (registration flag is unlocked during wait)
+	log("waiting for communicator %02x registration to complete\n", communicator.id);
+	m_blocking_registration->unlock_and_wait_until(std::move(registration_lock), false);
+	log("communicator %02x registration completed\n", communicator.id);
+
+	// Return new communicator handle
+	return communicator;
+}
+
+
+void zmqnet::AsyncFrontend::registerStreamCallback(Stream::Id const& streamId, zmqnet::AsyncFrontend::CallbackFunc callbackFunc)
+{
+	// Ensure stream callback not registered
+	if (m_callbackProcessors.find(streamId) != m_callbackProcessors.end()) {
 		throw std::runtime_error("asynchronous callback already registered for stream ID " + std::to_string(streamId));
 	}
 
+	// Reconstitute stream object
+	auto const stream = zmqnet::Stream { .communicatorId = net::communicator_ids::AllNodes, .id = streamId };
+
 	// Launch worker thread
-	m_callbackWorkers.emplace(streamId, std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmqnet::Stream::Id streamId, CallbackFunc&& callbackFunc) {
-			return workers::response_callback(ctx, streamId, std::move(callbackFunc));
-		}, std::ref(m_ctx), streamId, std::move(callbackFunc)));
+	m_callbackProcessors.emplace(streamId, std::async(std::launch::async,
+		[](zmq::context_t& ctx, zmqnet::Stream const& stream, CallbackFunc&& callbackFunc) {
+			return workers::callback_processor(ctx, stream, std::move(callbackFunc));
+		}, std::ref(m_ctx), stream, std::move(callbackFunc)));
+}
 
-	// Lock stream registration flag shared with callback distributor task
+zmqnet::Stream zmqnet::AsyncFrontend::registerStream(Communicator const& communicator, Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
+{
+	// Ensure stream callback registered
+	if (m_callbackProcessors.find(streamId) == m_callbackProcessors.end()) {
+		throw std::runtime_error("asynchronous callback not registered for stream ID " + std::to_string(streamId));
+	}
+
+	// Lock blocking registration flag shared with distributor task
 	log("starting stream %d registration\n", streamId);
-	auto stream_lock = m_stream_registering->acquire_lock();
+	auto registration_lock = m_blocking_registration->acquire_lock();
 
-	// Set stream registration flag
-	assert(m_stream_registering->get(stream_lock) == false);
-	m_stream_registering->set(stream_lock, true);
+	// Set registration flag
+	assert(m_blocking_registration->get(registration_lock) == false);
+	m_blocking_registration->set(registration_lock, true);
 
 	// Send filter create command
-	createStream(streamId, filterLibraryName, filterFunctionName);
+	auto const result = createStream(communicator, streamId, filterLibraryName, filterFunctionName);
 
-	// Wait for distributor to clear stream registration flag (registration flag is unlocked during wait)
+	// Wait for distributor to clear registration flag (registration flag is unlocked during wait)
 	log("waiting for stream %d registration to complete\n", streamId);
-	m_stream_registering->unlock_and_wait_until(std::move(stream_lock), false);
+	m_blocking_registration->unlock_and_wait_until(std::move(registration_lock), false);
 	log("stream %d registration completed\n", streamId);
 
 	// Return new stream handle
-	return Stream { .id = streamId };
+	return result;
 }
 
 void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
 {
 	// Ensure stream registered
-	if (m_callbackWorkers.find(stream.id) == m_callbackWorkers.end()) {
+	if (m_callbackProcessors.find(stream.id) == m_callbackProcessors.end()) {
 		throw std::runtime_error("no asynchronous callback registered for stream ID " + std::to_string(stream.id));
 	}
 
@@ -125,22 +253,19 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const
 
 void zmqnet::AsyncFrontend::runExit()
 {
-	auto const start_ms = get_milliseconds();
-	log("sending exit command\n");
-
 	// Send exit command
 	sendExit();
 
 	// Wait for stream workers
-	for (auto&& [streamId, callbackWorker] : m_callbackWorkers) {
+	for (auto&& [streamId, callbackWorker] : m_callbackProcessors) {
 		(void)callbackWorker.get();
 	}
 
 	// Reacquire downstream data socket from exiting callback processor
 	m_downstream->data_socket = m_responseDistributor.get();
 
-	log("exit completed\n");
+	// Shut down all sockets
+	m_ctx.shutdown();
 
-	auto const exit_ms = get_milliseconds();
-	log("exit RT: %5ldms\n", exit_ms - start_ms);
+	log("exit completed\n");
 }

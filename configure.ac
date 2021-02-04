@@ -34,6 +34,7 @@ LT_INIT
 #
 PKG_CHECK_MODULES([LIBZMQ], [libzmq])
 PKG_CHECK_MODULES([CAPNP], [capnp])
+PKG_CHECK_MODULES([LRLE_BITSET], [libLrleBitset])
 PKG_CHECK_MODULES([COMMON_TOOLS_FE], [common_tools_fe])
 PKG_CHECK_MODULES([COMMON_TOOLS_BE], [common_tools_be])
 

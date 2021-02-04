@@ -150,8 +150,8 @@ public:
         return std::make_pair(c, optarg);
     }
 
-    char* const* get_rest() {
-        return m_argv + m_optind;
+    auto get_rest() const {
+        return std::make_tuple(m_argc - m_optind, m_argv + m_optind);
     }
 };
 

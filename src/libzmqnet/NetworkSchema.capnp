@@ -7,44 +7,62 @@ struct TopologyRequest {
 }
 
 struct TopologyResponse {
-  parentControlEndpoint @0 :Text;
-  parentDataEndpoint @1 :Text;
+  nodeId @0 :Int32;
 
-  numChildren @2 :Int32;
+  parentControlEndpoint @1 :Text;
+  parentDataEndpoint @2 :Text;
+
+  numChildren @3 :Int32;
 }
 
 struct NetworkCommand {
   union {
     exit @0 :Void;
 
-    startLeaves @5 :Void;
+    startLeaves @1 :Void;
+
+    communicator :group {
+      communicatorId @2 :Int32;
+      nodes @3 :Data;
+    }
 
     stream :group {
-      streamId @1 :Int32;
-      filterLibraryName @2 :Text;
+      streamId @4 :Int32;
+      filterLibraryName @5 :Text;
       filterFunctionName @6 :Text;
     }
 
     user :group {
-      streamId @3 :Int32;
-      content @4 :Data;
+      streamId @7 :Int32;
+      content @8 :Data;
     }
   }
 }
 
 struct NetworkResponse {
   union {
-    exit @0 :Void;
+    exit :group {
+      nodes @0 :Data;
+    }
 
-    ready @1 :Void;
+    ready :group {
+      nodes @1 :Data;
+    }
+
+    communicator :group {
+      communicatorId @2 :Int32;
+      nodes @3 :Data;
+    }
 
     stream :group {
-      streamId @2 :Int32;
+      streamId @4 :Int32;
+      nodes @5 :Data;
     }
 
     user :group {
-      streamId @3 :Int32;
-      content @4 :Data;
+      streamId @6 :Int32;
+      nodes @7 :Data;
+      content @8 :Data;
     }
   }
 }
