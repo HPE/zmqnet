@@ -4,6 +4,7 @@
 #include <cstring>
 #include <utility>
 #include <vector>
+#include <set>
 
 #include "lrle_bitset.h"
 
@@ -36,6 +37,33 @@ struct lrle_bitset
 		}
 
 		compressed = std::vector<unsigned char>{buf, buf + len};
+	}
+
+	lrle_bitset(std::set<size_t> const& ranks)
+		: compressed{}
+	{
+		for (auto&& rank : ranks) {
+			// Create buffer for bitset containing one rank
+			auto const rhs_cap = lrle_single_bit_size(rank);
+			unsigned char rhs[rhs_cap];
+
+			// Encode single rank bitset
+			auto const rhs_len = lrle_encode_single_bit(rank, rhs, rhs_cap);
+			if (rhs_len < 0) {
+				throw std::runtime_error("lrle single bit encode failed");
+			}
+
+			// Create buffer for result and add single rank into bitset
+			unsigned char lhs[(compressed.size() + rhs_len) * CHUNK_SIZE];
+			auto const lhs_len = lrle_or_default(lhs, sizeof(lhs),
+				compressed.data(), compressed.size(), rhs, rhs_len);
+			if (lhs_len < 0) {
+				throw std::runtime_error("lrle merge failed");
+			}
+
+			// Move result into bitset
+			compressed = std::vector<unsigned char>{lhs, lhs + lhs_len};
+		}
 	}
 
 	auto or_buf(unsigned char const* rhs, size_t rhs_len) const {
@@ -98,22 +126,21 @@ struct lrle_bitset
 		return compressed.size();
 	}
 
-        std::string to_string() const {
-                auto hb_to_hex = [](unsigned char const halfbyte) {
-                        if (halfbyte < 10U) {
-                                return (char)('0' + halfbyte);
-                        } else {
-                                return (char)('a' + (halfbyte - 10U));
-                        }
-                };
-
-                std::string result;
-                result.reserve(compressed.size() * 2);
-                for (size_t i = 0; i < compressed.size(); i++) {
-                        result.push_back(hb_to_hex(compressed[i] >> 4));
-                        result.push_back(hb_to_hex(compressed[i] & 0x0f));
-                        result.push_back(' ');
-                }
-                return result;
-        }
+	std::string to_string() const {
+		auto hb_to_hex = [](unsigned char const halfbyte) {
+			if (halfbyte < 10U) {
+				return (char)('0' + halfbyte);
+			} else {
+				return (char)('a' + (halfbyte - 10U));
+			}
+		};
+		std::string result;
+		result.reserve(compressed.size() * 2);
+		for (size_t i = 0; i < compressed.size(); i++) {
+			result.push_back(hb_to_hex(compressed[i] >> 4));
+			result.push_back(hb_to_hex(compressed[i] & 0x0f));
+			result.push_back(' ');
+		}
+		return result;
+	}
 };

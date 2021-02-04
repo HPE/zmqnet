@@ -814,13 +814,13 @@ int main(int argc, char* const argv[])
 			log("got new communicator command\n");
 
 			// Extract communicator ID
-			auto const communicator_id = command.getCommunicator().getCommunicatorId();
+			auto const communicatorId = command.getCommunicator().getCommunicatorId();
 
 			// Find set of descendants in the communicator subset
 			auto communicator_descendants = lrle_bitset{};
 
 			// If communicator is all nodes, use preexisting descendants bitset
-			if (communicator_id == net::communicator_ids::AllNodes) {
+			if (communicatorId == net::communicator_ids::AllNodes) {
 				log("communicator contains all nodes\n");
 				communicator_descendants = communicatorDescendants.at(net::communicator_ids::AllNodes);
 
@@ -850,14 +850,14 @@ int main(int argc, char* const argv[])
 			}
 
 			// Subscribe to subset tag
-			log("subscribing to communicator %02x\n", communicator_id);
-			net::subscribe_to_tag(upstream.control_socket, communicator_id);
+			log("subscribing to communicator %02x\n", communicatorId);
+			net::subscribe_to_tag(upstream.control_socket, communicatorId);
 
 			// Send communicator create command to response worker
 			auto builder = capnp::MallocMessageBuilder{};
 			auto command = builder.initRoot<NetworkCommand>();
 			auto communicatorCommand = command.initCommunicator();
-			communicatorCommand.setCommunicatorId(communicator_id);
+			communicatorCommand.setCommunicatorId(communicatorId);
 
 			// Set node bitset
 			communicatorCommand.setNodes(kj::ArrayPtr<kj::byte const>
@@ -872,7 +872,7 @@ int main(int argc, char* const argv[])
 			net::send_MessageBuilder(downstream.control_socket, net::communicator_ids::AllNodes, builder);
 
 			// Store communicator descendants bitset
-			communicatorDescendants.emplace(communicator_id, std::move(communicator_descendants));
+			communicatorDescendants.emplace(communicatorId, std::move(communicator_descendants));
 
 		// Determine if new stream is to be registered
 		} else if (command.isStream()) {
@@ -885,9 +885,6 @@ int main(int argc, char* const argv[])
 			auto const stream = zmqnet::Stream { .communicatorId = reader.getTag(), .id = streamId };
 			log("got new stream %d command on communicator %02x\n",
 				stream.id, stream.communicatorId);
-
-			// Relay to children
-			net::send_MessageReader(downstream.control_socket, std::move(reader));
 
 			// Create new stream task worker
 			streamAggregatorTasks.emplace_back(
@@ -902,6 +899,9 @@ int main(int argc, char* const argv[])
 				}, std::ref(ctx), resultEndpoint,
 					stream, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName,
 					communicatorDescendants.at(stream.communicatorId));
+
+			// Relay to children
+			net::send_MessageReader(downstream.control_socket, std::move(reader));
 
 		} else {
 			log("got user command on stream %d communicator %02x\n",

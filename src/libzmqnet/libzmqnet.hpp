@@ -115,52 +115,29 @@ public:
 		, proxyTask{}
 		, captureTask{}
 	{
-		if (capture_enabled) {
+		if (!capture_enabled) {
+			return;
+		}
 
-			// Bind to first end of capture socket
-			proxy_capture.bind(proxyCaptureEndpoint);
+		// Bind to first end of capture socket
+		proxy_capture.bind(proxyCaptureEndpoint);
 
-			// Start capture task
-			captureTask = std::thread{[&](std::string logLinePrefix) {
+		// Start capture task
+		captureTask = std::thread{[&](std::string logLinePrefix) {
 
-				// Connect to second end of capture socket
-				auto socket = zmq::socket_t{ctx, zmq::socket_type::pair};
-				socket.connect(proxyCaptureEndpoint);
+			// Connect to second end of capture socket
+			auto socket = zmq::socket_t{ctx, zmq::socket_type::pair};
+			socket.connect(proxyCaptureEndpoint);
 
-				// Receive until socket closed or context terminated
-				while (true) {
-					auto received_result = zmq::message_t{};
-					try {
-
-						// Ignore interrupted receive
-						if (!socket.recv(received_result, zmq::recv_flags::none)) {
-							continue;
-						}
-
-					// If error was not caused by termination, rethrow
-					} catch (zmq::error_t const& err) {
-						if (err.num() == ETERM) {
-							return;
-						}
-						throw;
-					}
-
-					// Log incoming message
-					log("%s: %s\n", logLinePrefix.c_str(), received_result.str().c_str());
-				}
-			}, logLinePrefix};
-
-			// Manually tell proxy socket to subscribe to all incoming messages
-			{ unsigned char const buf[] = {0x01};
-				proxy_incoming.send(buf, 1);
-			}
-
-			// Start proxy task
-			proxyTask = std::thread{[&]() {
-
-				// Proxy until socket closed or context terminated
+			// Receive until socket closed or context terminated
+			while (true) {
+				auto received_result = zmq::message_t{};
 				try {
-					(void)zmq::proxy(zmq::socket_ref{proxy_incoming}, proxy_outgoing, proxy_capture);
+
+					// Ignore interrupted receive
+					if (!socket.recv(received_result, zmq::recv_flags::none)) {
+						continue;
+					}
 
 				// If error was not caused by termination, rethrow
 				} catch (zmq::error_t const& err) {
@@ -169,9 +146,33 @@ public:
 					}
 					throw;
 				}
-			}};
 
+				// Log incoming message
+				log("%s: %s\n", logLinePrefix.c_str(), received_result.str().c_str());
+			}
+		}, logLinePrefix};
+
+		// Manually tell proxy socket to subscribe to all incoming messages
+		{ unsigned char const buf[] = {0x01};
+			proxy_incoming.send(zmq::const_buffer{buf, 1}, zmq::send_flags::none);
 		}
+
+		// Start proxy task
+		proxyTask = std::thread{[&]() {
+
+			// Proxy until socket closed or context terminated
+			try {
+				(void)zmq::proxy(zmq::socket_ref{proxy_incoming}, proxy_outgoing, proxy_capture);
+
+			// If error was not caused by termination, rethrow
+			} catch (zmq::error_t const& err) {
+				if (err.num() == ETERM) {
+					return;
+				}
+				throw;
+			}
+		}};
+
 	}
 
 	// Log messages coming from upstream into control socket
@@ -340,11 +341,8 @@ static inline void subscribe_to_tag(zmq::socket_t& socket, int tag)
 {
 	assert((0 < tag) && (tag <= 0xff)); // TODO: pad out to the right
 
-	// ff-pad tag into char buffer
-	//unsigned char buf[] = {(unsigned char)tag, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, '\0'};
+	// Subscribe to tag topic
 	unsigned char buf[] = {(unsigned char)tag, '\0'};
-
-	// Subscribe to padded tag topic
 	socket.set(zmq::sockopt::subscribe, (char const*)buf);
 }
 
@@ -462,12 +460,9 @@ static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags con
 {
 	while (true) {
 		auto received_result = zmq::message_t{};
-		auto maybe_bytes = socket.recv(received_result, sockopt);
-		if (!maybe_bytes) {
-			continue;
+		if (socket.recv(received_result, sockopt)) {
+			return ReaderStorage{std::move(received_result)};
 		}
-
-		return ReaderStorage{std::move(received_result)};
 	}
 }
 

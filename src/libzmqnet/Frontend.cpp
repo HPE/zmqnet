@@ -12,7 +12,6 @@
 #include <unordered_map>
 #include <set>
 
-#include "bitset.hpp"
 #include "lrle_bitset_impl.hpp"
 
 #include "common_tools_fe.h"
@@ -491,18 +490,17 @@ zmqnet::Communicator zmqnet::Frontend::createCommunicator(zmqnet::NodeSet const&
 	communicatorCommand.setCommunicatorId(communicatorId);
 
 	// Pack node set into bitset
-	{ auto unpacked_node_ids = unpacked_bitset{m_max_node_id + 1};
+	{ auto node_ids = std::set<size_t>{};
 		for (auto&& node : nodes) {
-			auto const node_id = m_nodeIdMap[node];
-			unpacked_node_ids.set(node_id);
+			node_ids.insert(m_nodeIdMap.at(node));
 		}
 
 		// Compress bitset into lrle bitset
-		auto const node_ids = lrle_bitset{unpacked_node_ids.bytes.data(), unpacked_node_ids.bytes.size()};
+		auto const node_ids_bitset = lrle_bitset{node_ids};
 
 		communicatorCommand.setNodes(kj::ArrayPtr<kj::byte const>
-			{ (unsigned char const*)node_ids.compressed.data()
-			, node_ids.compressed.size()
+			{ (unsigned char const*)node_ids_bitset.compressed.data()
+			, node_ids_bitset.compressed.size()
 		});
 	}
 
