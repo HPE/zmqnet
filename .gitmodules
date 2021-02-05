@@ -13,3 +13,6 @@
 [submodule "external/lrle_bitset"]
 	path = external/lrle_bitset
 	url = ssh://git@stash.us.cray.com:7999/pe-cdst/lrle_bitset.git
+[submodule "tests/googletest"]
+	path = tests/googletest
+	url = ssh://git@stash.us.cray.com:7999/pe-cdst/googletest.git

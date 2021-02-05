@@ -124,7 +124,7 @@ public:
 	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
 		std::string const& filterLibraryName, std::string const& filterFunctionName);
 
-	// Once a Stream is created, send send commands by providing a buffer of command data.
+	// Once a Stream is created, send commands by providing a buffer of command data.
 	// Results from the Backend instances are aggregated according to the filter function
 	// specified during construction of the Stream, and returned to the caller in a ByteArray
 	// object.

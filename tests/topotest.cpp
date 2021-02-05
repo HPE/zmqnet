@@ -240,7 +240,6 @@ int main(int argc, char** argv)
 			rootnode.runExit();
 
 		} else {
-#if 1
 			leafArgv.add(TopotestArgv::Sync, "no");
 
 			auto result_mutex = std::mutex{};
@@ -290,39 +289,6 @@ int main(int argc, char** argv)
 			}
 
 			rootnode.runExit();
-#else
-			leafArgv.add(TopotestArgv::Sync, "no");
-
-			auto const raw_leaf_argv = (const char* const*)leafArgv.get();
-			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, topology, raw_leaf_argv};
-
-			auto allNodesCommunicator = rootnode.getAllNodesCommunicator();
-			auto stream = rootnode.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
-
-			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
-				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
-
-				auto const result = rootnode.runCommand(someNodesStream, "send", 5);
-				fprintf(stderr, "some nodes result: '%s'\n", result.asBytes().begin());
-			}
-
-			{ auto const result = rootnode.runCommand(stream, "send", 5);
-				fprintf(stderr, "all nodes result: '%s'\n", result.asBytes().begin());
-			}
-
-			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
-				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
-
-				auto const result = rootnode.runCommand(someNodesStream, "send", 5);
-				fprintf(stderr, "some nodes result: '%s'\n", result.asBytes().begin());
-			}
-
-			{ auto const result = rootnode.runCommand(stream, "send", 5);
-				fprintf(stderr, "all nodes result: '%s'\n", result.asBytes().begin());
-			}
-
-			rootnode.runExit();
-#endif
 		}
 
 		rc = 0;
