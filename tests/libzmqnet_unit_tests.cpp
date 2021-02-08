@@ -8,6 +8,11 @@
  * in any form.
  */
 
+#include <string>
+#include <vector>
+#include <set>
+#include <algorithm>
+
 #include "gtest/gtest.h"
 
 #include "src/cti_argv.hpp"
@@ -26,6 +31,8 @@ struct BackendArgv : public cti::Argv {
 		long_options_done
 	};
 };
+
+static constexpr auto TestStreamId = zmqnet::Stream::Id{1};
 
 class ZmqnetUnitTest : public ::testing::Test
 {
@@ -124,6 +131,24 @@ protected:
 	}
 };
 
+static std::set<int> parseNodeIds(std::string networkResult)
+{
+	auto result = std::set<int>{};
+
+	// Remove brackets
+	networkResult.erase(std::remove(networkResult.begin(), networkResult.end(), '{'), networkResult.end());
+	networkResult.erase(std::remove(networkResult.begin(), networkResult.end(), '}'), networkResult.end());
+
+	// Parse all node IDs
+	auto resultStream = std::stringstream{networkResult};
+	auto node_id = int{};
+	while (resultStream >> node_id) {
+		result.insert(node_id);
+	}
+
+	return result;
+}
+
 TEST_F(ZmqnetFunctionTest, LaunchExitTest)
 {
 	// Launch network with one node
@@ -132,6 +157,73 @@ TEST_F(ZmqnetFunctionTest, LaunchExitTest)
 
 	// Exit network
 	network.runExit();
+}
+
+TEST_F(ZmqnetFunctionTest, SingleNodeLaunchTest)
+{
+	// Launch network with one node
+	auto network = launchSyncNetwork(1, 1,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 });
+
+	// Exit network
+	network.runExit();
+}
+
+TEST_F(ZmqnetFunctionTest, SingleNodeStreamTest)
+{
+	// Launch network with one node
+	auto network = launchSyncNetwork(1, 1,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 });
+
+	// Create stream
+	auto allNodesCommunicator = network.getAllNodesCommunicator();
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+	// Exit network
+	network.runExit();
+}
+
+TEST_F(ZmqnetFunctionTest, SingleNodeCommandTest)
+{
+	// Launch network with one node
+	auto network = launchSyncNetwork(1, 1,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 });
+
+	// Create stream
+	auto allNodesCommunicator = network.getAllNodesCommunicator();
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+	// Send command and get result
+	auto const result = network.runCommand(stream, "send", 5);
+
+	// Exit network
+	network.runExit();
+
+	// Check result
+	auto const nodeIds = parseNodeIds((char const*)result.asBytes().begin());
+	ASSERT_EQ(nodeIds.size(), size_t{1});
+}
+
+
+TEST_F(ZmqnetFunctionTest, MultiNodeCommandTest)
+{
+	// Launch network with one node
+	auto network = launchSyncNetwork(4, 4,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 2 });
+
+	// Create stream
+	auto allNodesCommunicator = network.getAllNodesCommunicator();
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+	// Send command and get result
+	auto const result = network.runCommand(stream, "send", 5);
+
+	// Exit network
+	network.runExit();
+
+	// Check result
+	auto const nodeIds = parseNodeIds((char const*)result.asBytes().begin());
+	ASSERT_EQ(nodeIds.size(), size_t{4});
 }
 
 int main(int argc, char **argv)

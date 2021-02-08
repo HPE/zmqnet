@@ -4,7 +4,7 @@ SRC = $(top_srcdir)/src
 AM_CXXFLAGS = -Wl,-E -Wl,-rpath,$(prefix)/lib
 AM_CPPFLAGS = -I$(top_srcdir)/tests
 
-TESTS = libzmqnet_unit_tests
+#TESTS = libzmqnet_unit_tests
 check_PROGRAMS = topotest stop libzmqnet_unit_tests test_backend
 
 ZMQNET_LIBS = `PKG_CONFIG_PATH=$(prefix)/lib/pkgconfig pkg-config libzmqnet --libs`
