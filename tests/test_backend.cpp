@@ -21,7 +21,7 @@ struct BackendArgv : public cti::Argv {
 	using Option    = cti::Argv::Option;
 	using Parameter = cti::Argv::Parameter;
 
-	static constexpr Parameter Sync { "sync",        's' };
+	static constexpr Parameter Sync { "sync", 's' };
 
 	static constexpr GNUOption long_options[] = {
 		Sync,

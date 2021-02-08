@@ -29,5 +29,5 @@ test_backend_CXXFLAGS = $(AM_CXXFLAGS) $(ZMQNET_CFLAGS)
 test_backend_LDFLAGS = $(AM_LDFLAGS) $(ZMQNET_LIBS)
 
 libzmqnet_unit_tests_SOURCES = libzmqnet_unit_tests.cpp googletest/googletest/src/gtest-all.cc libfilter.so
-libzmqnet_unit_tests_CXXFLAGS = $(AM_CXXFLAGS) $(GTEST_CFLAGS) $(ZMQNET_CFLAGS)
-libzmqnet_unit_tests_LDFLAGS = $(AM_LDFLAGS) $(GTEST_LIBS) $(ZMQNET_LIBS) $(BREAKPAD_LIBS)
+libzmqnet_unit_tests_CXXFLAGS = $(AM_CXXFLAGS) $(GTEST_CFLAGS) $(COMMON_TOOLS_FE_CFLAGS) $(ZMQNET_CFLAGS)
+libzmqnet_unit_tests_LDFLAGS = $(AM_LDFLAGS) $(GTEST_LIBS) $(COMMON_TOOLS_FE_LIBS) $(ZMQNET_LIBS)
