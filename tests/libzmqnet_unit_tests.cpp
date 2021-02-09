@@ -22,8 +22,67 @@ protected:
 	{}
 };
 
-TEST_F(ZmqnetUnitTest, EmptyTest)
-{}
+TEST_F(ZmqnetUnitTest, ByteArrayTest)
+{
+	// Test byte array from C string
+	{ auto const c_string = "zmqnet";
+		auto const c_string_len = ::strlen(c_string) + 1;
+
+		auto const c_string_array = zmqnet::make_ByteArray(c_string, c_string_len);
+
+		EXPECT_EQ(c_string_len, c_string_array.size());
+		EXPECT_EQ(::strncmp(c_string, (char const*)c_string_array.begin(), c_string_len), 0);
+	}
+
+	// Test byte array from byte buffer
+	{ unsigned char buf[] = {0x00, 0xff, 0x00};
+		auto const buf_len = sizeof(buf);
+
+		auto const buf_array = zmqnet::make_ByteArray(buf, buf_len);
+
+		EXPECT_EQ(buf_len, buf_array.size());
+		EXPECT_EQ(::memcmp(buf, buf_array.begin(), buf_len), 0);
+	}
+}
+
+TEST_F(ZmqnetUnitTest, SyncBackendParamsTest)
+{
+	// Test no additional backend parameters
+	{ char const* backend_argv[] = { "argv0", "controlEndpoint", "dataEndpoint", "1",
+		nullptr };
+		auto const backend_argc = (sizeof(backend_argv) / sizeof(backend_argv[0])) - 1;
+
+		auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv] =
+			zmqnet::SyncBackend::getParams(backend_argc, backend_argv);
+
+		EXPECT_EQ(controlEndpoint, "controlEndpoint");
+		EXPECT_EQ(dataEndpoint, "dataEndpoint");
+		EXPECT_EQ(node_id, 1);
+
+		EXPECT_EQ(rest_argc, 1);
+		EXPECT_NE(rest_argv[0], nullptr);
+		EXPECT_EQ(rest_argv[1], nullptr);
+	}
+
+	// Test additional backend parameters
+	{ char const* backend_argv[] = { "argv0", "controlEndpoint", "dataEndpoint", "1",
+		"argv1", "argv2", nullptr };
+		auto const backend_argc = (sizeof(backend_argv) / sizeof(backend_argv[0])) - 1;
+
+		auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv] =
+			zmqnet::SyncBackend::getParams(backend_argc, backend_argv);
+
+		EXPECT_EQ(controlEndpoint, "controlEndpoint");
+		EXPECT_EQ(dataEndpoint, "dataEndpoint");
+		EXPECT_EQ(node_id, 1);
+
+		EXPECT_EQ(rest_argc, 3);
+		EXPECT_NE(rest_argv[0], nullptr);
+		EXPECT_EQ(rest_argv[1], "argv1");
+		EXPECT_EQ(rest_argv[2], "argv2");
+		EXPECT_EQ(rest_argv[3], nullptr);
+	}
+}
 
 int main(int argc, char **argv)
 {

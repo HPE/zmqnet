@@ -43,6 +43,10 @@ static inline auto make_ByteArray(char const* buffer, size_t buffer_len)
 {
 	return kj::heapArray((unsigned char const*)buffer, buffer_len);
 }
+static inline auto make_ByteArray(unsigned char const* buffer, size_t buffer_len)
+{
+	return kj::heapArray(buffer, buffer_len);
+}
 
 // Communicators are subsets of job nodes to which commands can be targeted. Can include all nodes.
 using NodeSet = std::set<std::string>;
@@ -233,10 +237,16 @@ public:
 	// Upstream data endpoint
 	// Node ID
 	// Remaining argument count and arguments provided by the user during Frontend construction
+
 	// Example usage:
 	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
 	//     = zmqnet::SyncBackend::getParams(argc, argv);
 	// auto backend = zmqnet::SyncBackend(controlEndpoint, dataEndpoint, node_id);
+
+	// Note: the remaining arguments rest_argc, rest_argv are one index before the arguments for
+	// the user-provided leaf binary. So while rest_argv[0] will not be equal to argv[0], you can
+	// pass these values of rest_argc, rest_argv to `getopt` and parse the program options directly,
+	// without having to copy or otherwise manipulate the argument array.
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv) { return detail::Backend::getParams(argc, argv); }
 
@@ -289,10 +299,16 @@ public:
 	// Upstream data endpoint
 	// Node ID
 	// Remaining argument count and arguments provided by the user during Frontend construction
+
 	// Example usage:
 	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
-	//     = zmqnet::Backend::getParams(argc, argv);
-	// auto backend = zmqnet::Backend(controlEndpoint, dataEndpoint, node_id);
+	//     = zmqnet::SyncBackend::getParams(argc, argv);
+	// auto backend = zmqnet::SyncBackend(controlEndpoint, dataEndpoint, node_id);
+
+	// Note: the remaining arguments rest_argc, rest_argv are one index before the arguments for
+	// the user-provided leaf binary. So while rest_argv[0] will not be equal to argv[0], you can
+	// pass these values of rest_argc, rest_argv to `getopt` and parse the program options directly,
+	// without having to copy or otherwise manipulate the argument array.
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv) { return detail::Backend::getParams(argc, argv); }
 
