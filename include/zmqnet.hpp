@@ -74,6 +74,10 @@ struct Topology
 	int fanout;
 };
 
+// Internal base Frontend and Backend objects
+namespace detail
+{
+
 class Frontend
 {
 protected:
@@ -97,10 +101,44 @@ protected:
 	void sendExit();
 };
 
+class Backend
+{
+public:
+	template <typename CharPtr>
+	static auto getParams(int argc, CharPtr argv)
+	{
+		if (argc < 4) {
+			throw std::runtime_error("expected 3 network param arguments");
+		}
+		return std::make_tuple(
+			std::string{argv[1]}, // Upstream control endpoint
+			std::string{argv[2]}, // Upstream data endpoint
+			std::stoi(argv[3]),   // Node ID
+			argc - 3,             // Leaf binary argc
+			argv + 3);            // Leaf binary argv
+	}
+
+protected:
+	zmq::context_t m_ctx;
+	std::unique_ptr<net::UpstreamLink> m_upstream;
+	int m_node_id;
+	std::vector<unsigned char> m_node_bitset;
+
+	void notifyReady();
+
+protected:
+	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
+	~Backend();
+
+	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
+};
+
+} // detail
+
 // Synchronous Frontends send a command and receive results synchronously.
 // This is useful for non-interactive programs that do not need to issue commands in response to
 // user input.
-class SyncFrontend : public Frontend
+class SyncFrontend : public detail::Frontend
 {
 public:
 	// Frontend construction launches the network and connects the communication tree.
@@ -137,7 +175,7 @@ public:
 
 // Asynchronous Frontend register callbacks for each handled Stream that will receive
 // the contents of every incoming message for that stream.
-class AsyncFrontend : public Frontend
+class AsyncFrontend : public detail::Frontend
 {
 public:
 	using CallbackFunc = std::function<void(Stream::Id const&, ByteArrayPtr)>;
@@ -180,7 +218,12 @@ public:
 	void runExit();
 };
 
-class Backend
+// Backend nodes are automatically launched by intermediate commnode instances during network
+// startup.
+// Synchronous backends follow a simple command loop, where the next command is received blocking
+// and returned to the caller with the referenced Stream object, and the ByteArray contents of the
+// Command.
+class SyncBackend : public detail::Backend
 {
 public:
 
@@ -192,45 +235,10 @@ public:
 	// Remaining argument count and arguments provided by the user during Frontend construction
 	// Example usage:
 	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
-	//     = zmqnet::Backend::getParams(argc, argv);
-	// auto backend = zmqnet::Backend(controlEndpoint, dataEndpoint, node_id);
+	//     = zmqnet::SyncBackend::getParams(argc, argv);
+	// auto backend = zmqnet::SyncBackend(controlEndpoint, dataEndpoint, node_id);
 	template <typename CharPtr>
-	static auto getParams(int argc, CharPtr argv)
-	{
-		if (argc < 4) {
-			throw std::runtime_error("expected 3 network param arguments");
-		}
-		return std::make_tuple(
-			std::string{argv[1]}, // Upstream control endpoint
-			std::string{argv[2]}, // Upstream data endpoint
-			std::stoi(argv[3]),   // Node ID
-			argc - 3,             // Leaf binary argc
-			argv + 3);            // Leaf binary argv
-	}
-
-protected:
-	zmq::context_t m_ctx;
-	std::unique_ptr<net::UpstreamLink> m_upstream;
-	int m_node_id;
-	std::vector<unsigned char> m_node_bitset;
-
-	void notifyReady();
-
-protected:
-	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
-	~Backend();
-
-	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
-};
-
-// Backend nodes are automatically launched by intermediate commnode instances during network
-// startup.
-// Synchronous backends follow a simple command loop, where the next command is received blocking
-// and returned to the caller with the referenced Stream object, and the ByteArray contents of the
-// Command.
-class SyncBackend : public Backend
-{
-public:
+	static auto getParams(int argc, CharPtr argv) { return detail::Backend::getParams(argc, argv); }
 
 	// Connect to the communication tree using network parameters extracted by
 	// zmqnet::Backend::getParams(argc, argv) where argc and argv are the actual arguments provided
@@ -254,7 +262,7 @@ public:
 // the contents of every incoming message for that stream.
 // The main thread of the process running an asynchronous Backend is expected to call the blocking
 // function `waitForExit` that returns when an exit command is received.
-class AsyncBackend : public Backend
+class AsyncBackend : public detail::Backend
 {
 public:
 
@@ -274,6 +282,19 @@ private:
 	std::future<zmq::socket_t> m_commandDistributor;
 
 public:
+
+	// Network connection arguments are prepended to the argument array for the user-provided
+	// leaf binary. Extract these arguments using `getParams` to obtain the following:
+	// Upstream control endpoint
+	// Upstream data endpoint
+	// Node ID
+	// Remaining argument count and arguments provided by the user during Frontend construction
+	// Example usage:
+	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
+	//     = zmqnet::Backend::getParams(argc, argv);
+	// auto backend = zmqnet::Backend(controlEndpoint, dataEndpoint, node_id);
+	template <typename CharPtr>
+	static auto getParams(int argc, CharPtr argv) { return detail::Backend::getParams(argc, argv); }
 
 	// The constructor takes the same network parameters as the synchronous variant, as extracted
 	// from the leaf binary arguments by zmqnet::Backend::getParams.

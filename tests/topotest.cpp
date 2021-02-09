@@ -140,7 +140,7 @@ int main(int argc, char** argv)
 		fprintf(stderr, "topotest: leaf mode\n");
 
 		auto const [upstreamControlEndpoint, upstreamDataEndpoint, node_id,
-			leaf_argc, leaf_argv] = zmqnet::Backend::getParams(argc, argv);
+			leaf_argc, leaf_argv] = zmqnet::SyncBackend::getParams(argc, argv);
 
 		auto const [leaf_mode, launchType, fanout, synchronous_mode, binary_argc, binary_argv] = parse_argv(leaf_argc, leaf_argv);
 

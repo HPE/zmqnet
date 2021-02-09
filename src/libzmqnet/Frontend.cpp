@@ -409,7 +409,7 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 
 // Common frontend implementation
 
-zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int const manifest_id,
+zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, long int const manifest_id,
 	zmqnet::Topology const& topology, char const* const* leaf_argv)
 	: m_max_node_id{}
 	, m_nodeIdMap{}
@@ -472,12 +472,12 @@ zmqnet::Frontend::Frontend(int const app_id, long int const session_id, long int
 	log("all leaves connected: %5ldms\n", leaf_ms - launch_ms);
 }
 
-zmqnet::Frontend::~Frontend()
+zmqnet::detail::Frontend::~Frontend()
 {
 	m_ctx.shutdown();
 }
 
-zmqnet::Communicator zmqnet::Frontend::createCommunicator(zmqnet::NodeSet const& nodes)
+zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmqnet::NodeSet const& nodes)
 {
 	if (nodes.empty()) {
 		throw std::runtime_error("expected non-empty node set");
@@ -512,7 +512,7 @@ zmqnet::Communicator zmqnet::Frontend::createCommunicator(zmqnet::NodeSet const&
 	return Communicator { .id = communicatorId };
 }
 
-zmqnet::Stream zmqnet::Frontend::createStream(zmqnet::Communicator const& communicator,
+zmqnet::Stream zmqnet::detail::Frontend::createStream(zmqnet::Communicator const& communicator,
  	Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
 {
 	// Create stream create command message
@@ -530,7 +530,7 @@ zmqnet::Stream zmqnet::Frontend::createStream(zmqnet::Communicator const& commun
 	return Stream { .communicatorId = communicator.id, .id = streamId };
 }
 
-void zmqnet::Frontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
+void zmqnet::detail::Frontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
 {
 	// Create user command
 	auto builder = capnp::MallocMessageBuilder{};
@@ -543,7 +543,7 @@ void zmqnet::Frontend::sendCommand(zmqnet::Stream const& stream, char const* com
 	net::send_MessageBuilder(m_downstream->control_socket, stream.communicatorId, builder);
 }
 
-void zmqnet::Frontend::sendExit()
+void zmqnet::detail::Frontend::sendExit()
 {
 	// Create exit command
 	auto builder = capnp::MallocMessageBuilder{};

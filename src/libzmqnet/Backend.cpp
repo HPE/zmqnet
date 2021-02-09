@@ -14,7 +14,7 @@
 
 #include "lrle_bitset_impl.hpp"
 
-zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
+zmqnet::detail::Backend::Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 	: m_ctx{}
 	, m_upstream{std::make_unique<net::UpstreamLink>(m_ctx, upstreamControlEndpoint, upstreamDataEndpoint)}
 	, m_node_id{node_id}
@@ -23,12 +23,12 @@ zmqnet::Backend::Backend(std::string const& upstreamControlEndpoint, std::string
 	net::subscribe_to_tag(m_upstream->control_socket, net::communicator_ids::AllNodes);
 }
 
-zmqnet::Backend::~Backend()
+zmqnet::detail::Backend::~Backend()
 {
 	m_ctx.shutdown();
 }
 
-void zmqnet::Backend::notifyReady()
+void zmqnet::detail::Backend::notifyReady()
 {
 	// Notify parent commnode that setup is completed
 	log("backend %d: notifying parent ready from leaf node\n", m_node_id);
@@ -46,7 +46,7 @@ void zmqnet::Backend::notifyReady()
 	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
 }
 
-void zmqnet::Backend::sendResult(zmqnet::Stream const& stream, char const* result_buffer, size_t result_len)
+void zmqnet::detail::Backend::sendResult(zmqnet::Stream const& stream, char const* result_buffer, size_t result_len)
 {
 	// Notify parent commnode of result
 	auto builder = capnp::MallocMessageBuilder{};
