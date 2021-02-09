@@ -54,6 +54,8 @@ protected:
 	virtual void SetUp()
 	{}
 
+	// Launch a stopped application with CTI, so that the network can be launched alongside it.
+	// Application ID is stored and cleaned up upon test teardown.
 	void launchCtiApp(int num_procs, int num_nodes)
 	{
 		// Determine WLM type for launcher arguments
@@ -82,6 +84,7 @@ protected:
 		}
 	}
 
+	// Launch a synchronous ZMQNet network using CTI
 	auto launchSyncNetwork(int num_procs, int num_nodes, zmqnet::Topology const& topology)
 	{
 		// Launch app and save app ID
@@ -102,6 +105,7 @@ protected:
 		return zmqnet::SyncFrontend{app_id, session_id, manifest_id, topology, raw_backend_argv};
 	}
 
+	// Launch an asynchronous ZMQNet network using CTI
 	auto launchAsyncNetwork(int num_procs, int num_nodes, zmqnet::Topology const& topology)
 	{
 		// Launch app and save app ID
@@ -122,6 +126,7 @@ protected:
 		return zmqnet::AsyncFrontend{app_id, session_id, manifest_id, topology, raw_backend_argv};
 	}
 
+	// Clean up launched test application
 	virtual void TearDown()
 	{
 		if (app_id > 0) {
@@ -131,6 +136,7 @@ protected:
 	}
 };
 
+// Get the list of node IDs as produced by the test aggregation filter defined in libfilter.cpp
 static std::set<int> parseNodeIds(std::string networkResult)
 {
 	auto result = std::set<int>{};
@@ -149,6 +155,7 @@ static std::set<int> parseNodeIds(std::string networkResult)
 	return result;
 }
 
+// Test synchronous network instantiation
 TEST_F(ZmqnetFunctionTest, LaunchExitTest)
 {
 	// Launch network with one node
@@ -159,6 +166,7 @@ TEST_F(ZmqnetFunctionTest, LaunchExitTest)
 	network.runExit();
 }
 
+// Test launching a single node
 TEST_F(ZmqnetFunctionTest, SingleNodeLaunchTest)
 {
 	// Launch network with one node
@@ -169,6 +177,7 @@ TEST_F(ZmqnetFunctionTest, SingleNodeLaunchTest)
 	network.runExit();
 }
 
+// Test creating a stream with a single node
 TEST_F(ZmqnetFunctionTest, SingleNodeStreamTest)
 {
 	// Launch network with one node
@@ -183,6 +192,7 @@ TEST_F(ZmqnetFunctionTest, SingleNodeStreamTest)
 	network.runExit();
 }
 
+// Test sending command to a single node, check result
 TEST_F(ZmqnetFunctionTest, SingleNodeCommandTest)
 {
 	// Launch network with one node
@@ -204,6 +214,7 @@ TEST_F(ZmqnetFunctionTest, SingleNodeCommandTest)
 	network.runExit();
 }
 
+// Test sending an asynchronous command to a single node, check result
 TEST_F(ZmqnetFunctionTest, SingleNodeCommandTestAsync)
 {
 	auto result_mutex = std::mutex{};
@@ -246,6 +257,7 @@ TEST_F(ZmqnetFunctionTest, SingleNodeCommandTestAsync)
 	network.runExit();
 }
 
+// Test sending command to multiple nodes, check result
 TEST_F(ZmqnetFunctionTest, MultiNodeCommandTest)
 {
 	// Launch network with four nodes
@@ -267,6 +279,7 @@ TEST_F(ZmqnetFunctionTest, MultiNodeCommandTest)
 	network.runExit();
 }
 
+// Test sending asynchronous command to multiple nodes, check result
 TEST_F(ZmqnetFunctionTest, MultiNodeCommandTestAsync)
 {
 	auto result_mutex = std::mutex{};
@@ -309,6 +322,7 @@ TEST_F(ZmqnetFunctionTest, MultiNodeCommandTestAsync)
 	network.runExit();
 }
 
+// Test creating a stream subset across multiple nodes
 TEST_F(ZmqnetFunctionTest, SubsetCreationTest)
 {
 	// Launch network with four nodes
@@ -335,6 +349,7 @@ TEST_F(ZmqnetFunctionTest, SubsetCreationTest)
 	network.runExit();
 }
 
+// Test sending command to a stream subset across multiple nodes, check result
 TEST_F(ZmqnetFunctionTest, SubsetCommandTest)
 {
 	// Launch network with four nodes
@@ -368,6 +383,7 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTest)
 	network.runExit();
 }
 
+// Test creating an asynchronous stream subset across multiple nodes
 TEST_F(ZmqnetFunctionTest, SubsetCreationTestAsync)
 {
 	// Launch network with four nodes
@@ -400,7 +416,7 @@ TEST_F(ZmqnetFunctionTest, SubsetCreationTestAsync)
 	network.runExit();
 }
 
-
+// Test sending an asynchronous command to a stream subset across multiple nodes, check result
 TEST_F(ZmqnetFunctionTest, SubsetCommandTestAsync)
 {
 	auto result_mutex = std::mutex{};
