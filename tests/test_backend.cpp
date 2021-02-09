@@ -13,23 +13,7 @@
 #include <unordered_map>
 #include <thread>
 
-#include "zmqnet.hpp"
-
-#include "src/cti_argv.hpp"
-
-struct BackendArgv : public cti::Argv {
-	using Option    = cti::Argv::Option;
-	using Parameter = cti::Argv::Parameter;
-
-	static constexpr Parameter Sync { "sync", 's' };
-
-	static constexpr GNUOption long_options[] = {
-		Sync,
-		long_options_done
-	};
-};
-
-static constexpr auto TestStreamId = zmqnet::Stream::Id{1};
+#include "libzmqnet_tests.hpp"
 
 int run_sync_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 {
