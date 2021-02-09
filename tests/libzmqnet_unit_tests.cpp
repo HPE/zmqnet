@@ -248,7 +248,7 @@ TEST_F(ZmqnetFunctionTest, SingleNodeCommandTestAsync)
 
 TEST_F(ZmqnetFunctionTest, MultiNodeCommandTest)
 {
-	// Launch network with one node
+	// Launch network with four nodes
 	auto network = launchSyncNetwork(4, 4,
 		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 2 });
 
@@ -273,7 +273,7 @@ TEST_F(ZmqnetFunctionTest, MultiNodeCommandTestAsync)
 	auto result_cv = std::condition_variable{};
 	auto results_received = std::atomic<size_t>{0};
 
-	// Launch network with one node
+	// Launch network with four nodes
 	auto network = launchAsyncNetwork(4, 4,
 		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 });
 
@@ -308,6 +308,153 @@ TEST_F(ZmqnetFunctionTest, MultiNodeCommandTestAsync)
 	// Exit network
 	network.runExit();
 }
+
+TEST_F(ZmqnetFunctionTest, SubsetCreationTest)
+{
+	// Launch network with four nodes
+	auto network = launchSyncNetwork(4, 4,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 2 });
+
+	// Create node subset
+	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
+		{ cti_getAppHostsPlacement(app_id)
+		, cti_destroyHostsList
+	};
+
+	// Add nodes with even IDs to subset
+	auto some_nodes = std::set<std::string>{};
+	for (int i = 0; i < hostsPlacement->numHosts; i += 2) {
+		some_nodes.emplace(hostsPlacement->hosts[i].hostname);
+	}
+
+	// Create subset stream
+	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
+	(void)network.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+	// Exit network
+	network.runExit();
+}
+
+TEST_F(ZmqnetFunctionTest, SubsetCommandTest)
+{
+	// Launch network with four nodes
+	auto network = launchSyncNetwork(4, 4,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 2 });
+
+	// Create node subset
+	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
+		{ cti_getAppHostsPlacement(app_id)
+		, cti_destroyHostsList
+	};
+
+	// Add nodes with even IDs to subset
+	auto some_nodes = std::set<std::string>{};
+	for (int i = 0; i < hostsPlacement->numHosts; i += 2) {
+		some_nodes.emplace(hostsPlacement->hosts[i].hostname);
+	}
+
+	// Create subset stream
+	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
+	auto someNodesStream = network.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+	// Send command and get result
+	auto const result = network.runCommand(someNodesStream, "send", 5);
+
+	// Check result
+	auto const nodeIds = parseNodeIds((char const*)result.asBytes().begin());
+	EXPECT_EQ(nodeIds.size(), size_t{2});
+
+	// Exit network
+	network.runExit();
+}
+
+TEST_F(ZmqnetFunctionTest, SubsetCreationTestAsync)
+{
+	// Launch network with four nodes
+	auto network = launchAsyncNetwork(4, 4,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 });
+
+	// Create callback
+	auto send_callback = [&](zmqnet::Stream::Id const& streamId, zmqnet::ByteArrayPtr result) {
+		ASSERT_EQ(streamId, TestStreamId);
+	};
+
+	// Create node subset
+	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
+		{ cti_getAppHostsPlacement(app_id)
+		, cti_destroyHostsList
+	};
+
+	// Add nodes with even IDs to subset
+	auto some_nodes = std::set<std::string>{};
+	for (int i = 0; i < hostsPlacement->numHosts; i += 2) {
+		some_nodes.emplace(hostsPlacement->hosts[i].hostname);
+	}
+
+	// Register callback and create subset stream
+	network.registerStreamCallback(TestStreamId, send_callback);
+	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
+	(void)network.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+	// Exit network
+	network.runExit();
+}
+
+
+TEST_F(ZmqnetFunctionTest, SubsetCommandTestAsync)
+{
+	auto result_mutex = std::mutex{};
+	auto result_cv = std::condition_variable{};
+	auto results_received = std::atomic<size_t>{0};
+
+	// Launch network with four nodes
+	auto network = launchAsyncNetwork(4, 4,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 });
+
+	// Create callback
+	auto send_callback = [&](zmqnet::Stream::Id const& streamId, zmqnet::ByteArrayPtr result) {
+		ASSERT_EQ(streamId, TestStreamId);
+
+		// Parse result
+		auto const nodeIds = parseNodeIds((char const*)result.asBytes().begin());
+		results_received = nodeIds.size();
+		result_cv.notify_one();
+	};
+
+	// Create node subset
+	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
+		{ cti_getAppHostsPlacement(app_id)
+		, cti_destroyHostsList
+	};
+
+	// Add nodes with even IDs to subset
+	auto some_nodes = std::set<std::string>{};
+	for (int i = 0; i < hostsPlacement->numHosts; i += 2) {
+		some_nodes.emplace(hostsPlacement->hosts[i].hostname);
+	}
+
+	// Create subset stream
+	network.registerStreamCallback(TestStreamId, send_callback);
+	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
+	auto someNodesStream = network.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+
+	// Send command
+	network.sendCommand(someNodesStream, "send", 5);
+
+	// Wait for result
+	{ auto result_lock = std::unique_lock<std::mutex>{result_mutex};
+		result_cv.wait(result_lock, [&results_received]() {
+			return results_received.load() > 0;
+		});
+	}
+
+	// Check result
+	EXPECT_EQ(results_received.load(), size_t{2});
+
+	// Exit network
+	network.runExit();
+}
+
 
 int main(int argc, char **argv)
 {
