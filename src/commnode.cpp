@@ -143,8 +143,12 @@ namespace workers
 // Process result messages; aggregate and send to local result socket
 static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	zmqnet::Stream const& stream, std::string filterPath, std::string filterFunctionName,
-	lrle_bitset const& descendants_bitset)
+	lrle_bitset const& descendants_bitset, zmqnet::StreamSync const& streamSync)
 {
+	if (!std::holds_alternative<zmqnet::sync::WaitForAll>(streamSync)) {
+		throw std::runtime_error("not implemented: streamSync");
+	}
+
 	int rc = -1;
 
 	// Open task socket to receive this stream's input from downstream data task
@@ -886,19 +890,31 @@ int main(int argc, char* const argv[])
 			log("got new stream %d command on communicator %02x\n",
 				stream.id, stream.communicatorId);
 
+			// Reconstitute stream sync setting
+			auto streamSync = zmqnet::StreamSync{};
+			if (newStreamCommand.getSync().isImmediate()) {
+				streamSync = zmqnet::sync::Immediate{};
+			} else if (newStreamCommand.getSync().isWaitForAll()) {
+				streamSync = zmqnet::sync::WaitForAll{};
+			} else if (newStreamCommand.getSync().isTimeout()) {
+				streamSync = zmqnet::sync::Timeout{ .ms = newStreamCommand.getSync().getTimeout() };
+			} else {
+				assert(false);
+			}
+
 			// Create new stream task worker
 			streamAggregatorTasks.emplace_back(
 				[](zmq::context_t& ctx, std::string resultEndpoint,
 					zmqnet::Stream stream, std::string filterPath, std::string filterFunctionName,
-					lrle_bitset descendants_bitset) {
+					lrle_bitset descendants_bitset, zmqnet::StreamSync streamSync) {
 
 					(void)workers::stream_aggregator(ctx, std::move(resultEndpoint),
 						stream, std::move(filterPath), std::move(filterFunctionName),
-						std::move(descendants_bitset));
+						std::move(descendants_bitset), std::move(streamSync));
 
 				}, std::ref(ctx), resultEndpoint,
 					stream, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName,
-					communicatorDescendants.at(stream.communicatorId));
+					communicatorDescendants.at(stream.communicatorId), streamSync);
 
 			// Relay to children
 			net::send_MessageReader(downstream.control_socket, std::move(reader));

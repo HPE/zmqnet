@@ -30,11 +30,16 @@ struct NetworkCommand {
       streamId @4 :Int32;
       filterLibraryName @5 :Text;
       filterFunctionName @6 :Text;
+      sync :union {
+        immediate @7 :Void;
+        waitForAll @8 :Void;
+        timeout @9 :Int32;
+      }
     }
 
     user :group {
-      streamId @7 :Int32;
-      content @8 :Data;
+      streamId @10 :Int32;
+      content @11 :Data;
     }
   }
 }

@@ -515,16 +515,23 @@ zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmqnet::NodeSe
 zmqnet::Stream zmqnet::detail::Frontend::createStream(zmqnet::Communicator const& communicator,
 	Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName, zmqnet::StreamSync const& streamSync)
 {
-	if (!std::holds_alternative<sync::WaitForAll>(streamSync)) {
-		throw std::runtime_error("not implemented: streamSync");
-	}
-
 	// Create stream create command message
 	auto builder = capnp::MallocMessageBuilder{};
 	auto streamCommand = builder.initRoot<NetworkCommand>().initStream();
 	streamCommand.setStreamId(streamId);
 	streamCommand.setFilterLibraryName(filterLibraryName);
 	streamCommand.setFilterFunctionName(filterFunctionName);
+
+	// Set synchronization type
+	if (std::get_if<sync::Immediate>(&streamSync)) {
+		streamCommand.initSync().setImmediate();
+	} else if (std::get_if<sync::WaitForAll>(&streamSync)) {
+		streamCommand.initSync().setWaitForAll();
+	} else if (auto const timeout = std::get_if<sync::Timeout>(&streamSync)) {
+		streamCommand.initSync().setTimeout(timeout->ms);
+	} else {
+		assert(false);
+	}
 
 	// Send filter create command
 	log("registering stream %d filter %s function %s with comm id %d\n", streamId, filterLibraryName.c_str(), filterFunctionName.c_str(), communicator.id);
