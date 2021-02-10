@@ -213,10 +213,10 @@ int main(int argc, char** argv)
 			auto rootnode = zmqnet::SyncFrontend{app_id, session_id, manifest_id, topology, raw_leaf_argv};
 
 			auto allNodesCommunicator = rootnode.getAllNodesCommunicator();
-			auto stream = rootnode.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+			auto stream = rootnode.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
-				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 				auto const result = rootnode.runCommand(someNodesStream, "send", 5);
 				fprintf(stderr, "some nodes result: '%s'\n", result.asBytes().begin());
@@ -227,7 +227,7 @@ int main(int argc, char** argv)
 			}
 
 			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
-				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 				auto const result = rootnode.runCommand(someNodesStream, "send", 5);
 				fprintf(stderr, "some nodes result: '%s'\n", result.asBytes().begin());
@@ -260,10 +260,10 @@ int main(int argc, char** argv)
 
 			auto allNodesCommunicator = rootnode.getAllNodesCommunicator();
 			rootnode.registerStreamCallback(TestStreamId, print_callback);
-			auto stream = rootnode.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+			auto stream = rootnode.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
-				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 				rootnode.sendCommand(someNodesStream, "send", 5);
 				expected_results++;
@@ -273,7 +273,7 @@ int main(int argc, char** argv)
 			expected_results++;
 
 			{ auto someNodesCommunicator = rootnode.registerCommunicator(some_nodes);
-				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+				auto someNodesStream = rootnode.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 				rootnode.sendCommand(someNodesStream, "send", 5);
 				expected_results++;

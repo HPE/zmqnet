@@ -161,7 +161,8 @@ TEST_F(ZmqnetFunctionTest, SingleNodeStreamTest)
 
 	// Create stream
 	auto allNodesCommunicator = network.getAllNodesCommunicator();
-	(void)network.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	(void)network.registerStream(allNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Exit network
 	network.runExit();
@@ -176,7 +177,8 @@ TEST_F(ZmqnetFunctionTest, SingleNodeCommandTest)
 
 	// Create stream
 	auto allNodesCommunicator = network.getAllNodesCommunicator();
-	auto stream = network.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Send command and get result
 	auto const result = network.runCommand(stream, "send", 5);
@@ -213,7 +215,8 @@ TEST_F(ZmqnetFunctionTest, SingleNodeCommandTestAsync)
 	// Regster callback and create stream
 	network.registerStreamCallback(TestStreamId, send_callback);
 	auto allNodesCommunicator = network.getAllNodesCommunicator();
-	auto stream = network.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Send command
 	network.sendCommand(stream, "send", 5);
@@ -241,7 +244,8 @@ TEST_F(ZmqnetFunctionTest, MultiNodeCommandTest)
 
 	// Create stream
 	auto allNodesCommunicator = network.getAllNodesCommunicator();
-	auto stream = network.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Send command and get result
 	auto const result = network.runCommand(stream, "send", 5);
@@ -278,7 +282,8 @@ TEST_F(ZmqnetFunctionTest, MultiNodeCommandTestAsync)
 	// Regster callback and create stream
 	network.registerStreamCallback(TestStreamId, send_callback);
 	auto allNodesCommunicator = network.getAllNodesCommunicator();
-	auto stream = network.registerStream(allNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Send command
 	network.sendCommand(stream, "send", 5);
@@ -318,7 +323,8 @@ TEST_F(ZmqnetFunctionTest, SubsetCreationTest)
 
 	// Create subset stream
 	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
-	(void)network.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	(void)network.registerStream(someNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Exit network
 	network.runExit();
@@ -345,7 +351,8 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTest)
 
 	// Create subset stream
 	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
-	auto someNodesStream = network.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	auto someNodesStream = network.registerStream(someNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Send command and get result
 	auto const result = network.runCommand(someNodesStream, "send", 5);
@@ -385,7 +392,8 @@ TEST_F(ZmqnetFunctionTest, SubsetCreationTestAsync)
 	// Register callback and create subset stream
 	network.registerStreamCallback(TestStreamId, send_callback);
 	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
-	(void)network.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	(void)network.registerStream(someNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Exit network
 	network.runExit();
@@ -427,7 +435,8 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTestAsync)
 	// Create subset stream
 	network.registerStreamCallback(TestStreamId, send_callback);
 	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
-	auto someNodesStream = network.registerStream(someNodesCommunicator, TestStreamId, "libfilter.so", "run");
+	auto someNodesStream = network.registerStream(someNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
 
 	// Send command
 	network.sendCommand(someNodesStream, "send", 5);

@@ -513,8 +513,12 @@ zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmqnet::NodeSe
 }
 
 zmqnet::Stream zmqnet::detail::Frontend::createStream(zmqnet::Communicator const& communicator,
- 	Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
+	Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName, zmqnet::StreamSync const& streamSync)
 {
+	if (!std::holds_alternative<sync::WaitForAll>(streamSync)) {
+		throw std::runtime_error("not implemented: streamSync");
+	}
+
 	// Create stream create command message
 	auto builder = capnp::MallocMessageBuilder{};
 	auto streamCommand = builder.initRoot<NetworkCommand>().initStream();
@@ -586,12 +590,12 @@ zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(zmqnet::NodeSet 
 }
 
 zmqnet::Stream zmqnet::SyncFrontend::registerStream(zmqnet::Communicator const& communicator,
-		zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
+		zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName, zmqnet::StreamSync const& streamSync)
 {
 	auto const start_ms = get_milliseconds();
 
 	// Send stream create command
-	auto const stream = createStream(communicator, streamId, filterLibraryName, filterFunctionName);
+	auto const stream = createStream(communicator, streamId, filterLibraryName, filterFunctionName, streamSync);
 
 	// Wait for acknowledgement
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);

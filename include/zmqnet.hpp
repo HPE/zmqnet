@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <set>
+#include <variant>
 
 #include <future>
 #include <memory>
@@ -48,6 +49,20 @@ static inline auto make_ByteArray(unsigned char const* buffer, size_t buffer_len
 	return kj::heapArray(buffer, buffer_len);
 }
 
+// When constructing a Frontend object, provide a topology structure to build the network
+struct Topology
+{
+	// Launch strategy
+	enum : int
+		{ Fcfs    // First-come first-served. Single launch invocation
+		, Layered // Statically assign topology. Launch the network layer-by-layer
+		, Packed  // Simulate running at higher scale by launching a commnode for each PE
+	} launch;
+
+	// Communication tree fanout. Each non-leaf commnode will have `fanout` children
+	int fanout;
+};
+
 // Communicators are subsets of job nodes to which commands can be targeted. Can include all nodes.
 using NodeSet = std::set<std::string>;
 struct Communicator
@@ -64,19 +79,26 @@ struct Stream
 	Id id;
 };
 
-// When constructing a Frontend object, provide a topology structure to build the network
-struct Topology
+// Message aggregation can be synchronized, or subject to a timeout
+namespace sync
 {
-	// Launch strategy
-	enum : int
-		{ Fcfs    // First-come first-served. Single launch invocation
-		, Layered // Statically assign topology. Launch the network layer-by-layer
-		, Packed  // Simulate running at higher scale by launching a commnode for each PE
-	} launch;
 
-	// Communication tree fanout. Each non-leaf commnode will have `fanout` children
-	int fanout;
+// Do not wait, apply user filter function to message as soon as it is received
+struct Immediate {};
+
+// Wait for all child nodes in a stream to send a message before applying the filter function
+struct WaitForAll {};
+
+// Wait for the given number of milliseconds to elapse, or for all messages to be received
+// before applying the filter function
+struct Timeout
+{
+	int ms;
 };
+
+} // sync
+
+using StreamSync = std::variant<sync::Immediate, sync::WaitForAll, sync::Timeout>;
 
 // Internal base Frontend and Backend objects
 namespace detail
@@ -84,22 +106,22 @@ namespace detail
 
 class Frontend
 {
-protected:
+protected: // members
 	int m_max_node_id;
 	std::unordered_map<std::string, int> m_nodeIdMap;
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::TcpDownstreamLink> m_downstream;
 	Communicator::Id m_next_communicatorId;
 
-protected:
+protected: // derived class interface
 	Frontend(int const app_id, long int const session_id, long int const manifest_id,
 		Topology const& topology, char const* const* leaf_argv);
 	~Frontend();
 
-protected:
 	Communicator createCommunicator(NodeSet const& nodes);
-	Stream createStream(Communicator const& communicator,
-		Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName);
+	Stream createStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		zmqnet::StreamSync const& streamSync);
 
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void sendExit();
@@ -107,7 +129,13 @@ protected:
 
 class Backend
 {
-public:
+protected: // members
+	zmq::context_t m_ctx;
+	std::unique_ptr<net::UpstreamLink> m_upstream;
+	int m_node_id;
+	std::vector<unsigned char> m_node_bitset;
+
+protected: // derived class interface
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv)
 	{
@@ -122,17 +150,10 @@ public:
 			argv + 3);            // Leaf binary argv
 	}
 
-protected:
-	zmq::context_t m_ctx;
-	std::unique_ptr<net::UpstreamLink> m_upstream;
-	int m_node_id;
-	std::vector<unsigned char> m_node_bitset;
-
-	void notifyReady();
-
-protected:
 	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
 	~Backend();
+
+	void notifyReady();
 
 	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
 };
@@ -144,7 +165,8 @@ protected:
 // user input.
 class SyncFrontend : public detail::Frontend
 {
-public:
+public: // interface
+
 	// Frontend construction launches the network and connects the communication tree.
 	// The Frontend constructor is used to build a communication tree on a running application.
 	// Any filter libraries required by the application should be added to the CTI Manifest
@@ -164,7 +186,8 @@ public:
 	// Create a new stream in the provided communicator. Stream IDs are determined by the user.
 	// Provide a filter library and filter function name.
 	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
-		std::string const& filterLibraryName, std::string const& filterFunctionName);
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		StreamSync const& streamSync);
 
 	// Once a Stream is created, send commands by providing a buffer of command data.
 	// Results from the Backend instances are aggregated according to the filter function
@@ -181,16 +204,21 @@ public:
 // the contents of every incoming message for that stream.
 class AsyncFrontend : public detail::Frontend
 {
-public:
+public: // types
+
+	// Command callbacks take a pair of Stream ID and ByteArray, where the Stream ID corresponds
+	// to the stream on which the incoming command is received, and the ByteArray is the raw
+	// contents of the command.
 	using CallbackFunc = std::function<void(Stream::Id const&, ByteArrayPtr)>;
 
-private:
+private: // members
 	zmq::context_t m_ctx;
 	std::unordered_map<Stream::Id, std::future<void>> m_callbackProcessors;
 	std::unique_ptr<net::shared_semaphore> m_blocking_registration;
 	std::future<zmq::socket_t> m_responseDistributor;
 
-public:
+public: // interface
+
 	// See zmqnet::SyncFrontend for description
 	AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
 		Topology const& topology, char const* const* leaf_argv);
@@ -209,7 +237,8 @@ public:
 	// Create a new stream in the provided communicator. Stream IDs are determined by the user.
 	// Provide a filter library and filter function name.
 	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
-		std::string const& filterLibraryName, std::string const& filterFunctionName);
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		zmqnet::StreamSync const& streamSync);
 
 	// Once a Stream is created, send send commands by providing a buffer of command data.
 	// Results from the Backend instances are aggregated according to the filter function
@@ -229,7 +258,7 @@ public:
 // Command.
 class SyncBackend : public detail::Backend
 {
-public:
+public: // interface
 
 	// Network connection arguments are prepended to the argument array for the user-provided
 	// leaf binary. Extract these arguments using `getParams` to obtain the following:
@@ -274,14 +303,17 @@ public:
 // function `waitForExit` that returns when an exit command is received.
 class AsyncBackend : public detail::Backend
 {
-public:
+public: // types
 
 	// Command callbacks take a pair of Stream ID and ByteArray, where the Stream ID corresponds
 	// to the stream on which the incoming command is received, and the ByteArray is the raw
 	// contents of the command.
+	// The callback result is a new ByteArray that is then sent as a message to the parent node.
+	// If the result array is empty, then no message is sent. This can be accomplished by returning
+	// a default-constructed zmqnet::ByteArray{}
 	using CallbackFunc = std::function<ByteArray(Stream::Id const&, ByteArray)>;
 
-private:
+private: // members
 	zmq::context_t m_ctx;
 
 	std::string m_collectorEndpoint;
@@ -291,7 +323,7 @@ private:
 	std::unordered_map<Stream::Id, std::future<void>> m_callbackProcessors;
 	std::future<zmq::socket_t> m_commandDistributor;
 
-public:
+public: // interface
 
 	// Network connection arguments are prepended to the argument array for the user-provided
 	// leaf binary. Extract these arguments using `getParams` to obtain the following:
