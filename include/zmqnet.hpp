@@ -142,7 +142,7 @@ protected:
 // Synchronous Frontends send a command and receive results synchronously.
 // This is useful for non-interactive programs that do not need to issue commands in response to
 // user input.
-class SyncFrontend : public detail::Frontend
+class SyncFrontend : private detail::Frontend
 {
 public:
 	// Frontend construction launches the network and connects the communication tree.
@@ -179,7 +179,7 @@ public:
 
 // Asynchronous Frontend register callbacks for each handled Stream that will receive
 // the contents of every incoming message for that stream.
-class AsyncFrontend : public detail::Frontend
+class AsyncFrontend : private detail::Frontend
 {
 public:
 	using CallbackFunc = std::function<void(Stream::Id const&, ByteArrayPtr)>;
@@ -227,7 +227,7 @@ public:
 // Synchronous backends follow a simple command loop, where the next command is received blocking
 // and returned to the caller with the referenced Stream object, and the ByteArray contents of the
 // Command.
-class SyncBackend : public detail::Backend
+class SyncBackend : private detail::Backend
 {
 public:
 
@@ -272,7 +272,7 @@ public:
 // the contents of every incoming message for that stream.
 // The main thread of the process running an asynchronous Backend is expected to call the blocking
 // function `waitForExit` that returns when an exit command is received.
-class AsyncBackend : public detail::Backend
+class AsyncBackend : private detail::Backend
 {
 public:
 
