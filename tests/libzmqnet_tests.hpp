@@ -16,9 +16,10 @@ struct BackendArgv : public cti::Argv {
 	using Parameter = cti::Argv::Parameter;
 
 	static constexpr Parameter Sync { "sync", 's' };
+	static constexpr Parameter TimeoutNodeId { "timeout-node-id", 't' };
 
 	static constexpr GNUOption long_options[] = {
-		Sync,
+		Sync, TimeoutNodeId,
 		long_options_done
 	};
 };

@@ -56,10 +56,51 @@ int run_async_leafnode(std::string const& upstreamControlEndpoint, std::string c
 	return 0;
 }
 
+int empty_sync_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
+{
+	fprintf(stderr, "running empty node %d, connect parent %s %s. drops all messages\n",
+		node_id, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
+
+	auto leafnode = zmqnet::SyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, node_id};
+
+	while (true) {
+		auto const [stream, command] = leafnode.nextCommand();
+
+		if (stream.id < 0) {
+			return 0;
+
+		} else {
+			fprintf(stderr, "%d dropping command %s from stream %d\n",
+				node_id, command.begin(), stream.id);
+		}
+	}
+}
+
+int empty_async_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
+{
+	fprintf(stderr, "running empty node %d, connect parent %s %s. drops all messages\n",
+		node_id, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
+
+	auto leafnode = zmqnet::AsyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, node_id};
+
+	leafnode.registerCallback(TestStreamId, [node_id](zmqnet::Stream::Id const& streamId, zmqnet::ByteArray command) {
+		fprintf(stderr, "%d dropping command %s from stream %d\n",
+			node_id, command.begin(), streamId);
+		return zmqnet::ByteArray{};
+	});
+
+	leafnode.notifyReady();
+
+	leafnode.waitForExit();
+
+	return 0;
+}
+
 // Parse user-provided arguments
 static auto parse_argv(int argc, char* const argv[])
 {
 	auto synchronous_mode = false;
+	auto timeout_node_id = int{-1};
 
 	using BA = BackendArgv;
 	auto parsedArgv = cti::IncomingArgv<BA>{argc, argv};
@@ -75,6 +116,10 @@ static auto parse_argv(int argc, char* const argv[])
 			synchronous_mode = (value == "yes");
 			break;
 
+		case BA::TimeoutNodeId.val:
+			timeout_node_id = std::stoi(value);
+			break;
+
 		case '?':
 		default:
 			throw std::runtime_error("bad arg");
@@ -83,7 +128,7 @@ static auto parse_argv(int argc, char* const argv[])
 
 	// Rest of arguments are launcher / leaf arguments
 	auto const [rest_argc, rest_argv] = parsedArgv.get_rest();
-	return std::make_tuple(synchronous_mode, rest_argc, rest_argv);
+	return std::make_tuple(synchronous_mode, timeout_node_id, rest_argc, rest_argv);
 }
 
 int main(int argc, char** argv)
@@ -99,13 +144,27 @@ int main(int argc, char** argv)
 	auto const [upstreamControlEndpoint, upstreamDataEndpoint, node_id,
 		leaf_argc, leaf_argv] = zmqnet::SyncBackend::getParams(argc, argv);
 
-	auto const [synchronous_mode, binary_argc, binary_argv] = parse_argv(leaf_argc, leaf_argv);
+	auto const [synchronous_mode, timeout_node_id, binary_argc, binary_argv] = parse_argv(leaf_argc, leaf_argv);
 	assert((binary_argc == 0) && (binary_argv[0] == nullptr));
 
-	if (synchronous_mode) {
-		rc = run_sync_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
+	// Normal test, send node ID in response to commands
+	if (timeout_node_id != node_id) {
+
+		if (synchronous_mode) {
+			rc = run_sync_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
+		} else {
+			rc = run_async_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
+		}
+
+	// Timeout test, this is the node that will ignore incoming commands
 	} else {
-		rc = run_async_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
+
+		if (synchronous_mode) {
+			rc = empty_sync_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
+		} else {
+			rc = empty_async_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
+		}
+
 	}
 
 	return rc;
