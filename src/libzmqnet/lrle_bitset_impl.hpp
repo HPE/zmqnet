@@ -68,6 +68,10 @@ struct lrle_bitset
 		}
 	}
 
+	void clear() {
+		compressed.clear();
+	}
+
 	auto or_buf(unsigned char const* rhs, size_t rhs_len) const {
 		unsigned char buf[(compressed.size() + rhs_len) * CHUNK_SIZE];
 
@@ -105,11 +109,13 @@ struct lrle_bitset
 		return lrle_bitset{buf, (size_t)len};
 	}
 
+	auto eq_buf(unsigned char const* rhs, size_t rhs_len) const {
+		return (compressed.size() == rhs_len)
+			&& (::memcmp(compressed.data(), rhs, rhs_len) == 0);
+	}
+
 	bool operator== (lrle_bitset const& rhs) const {
-		if (compressed.size() != rhs.compressed.size()) {
-			return false;
-		}
-		return compressed == rhs.compressed;
+		return eq_buf(rhs.compressed.data(), rhs.compressed.size());
 	}
 
 	bool operator!= (lrle_bitset const& rhs) const {
