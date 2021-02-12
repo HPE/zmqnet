@@ -111,15 +111,15 @@ public:
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv)
 	{
-		if (argc < 4) {
-			throw std::runtime_error("expected 3 network param arguments");
+		if (argc < 5) {
+			throw std::runtime_error("expected 4 network param arguments");
 		}
 		return std::make_tuple(
 			std::string{argv[1]}, // Upstream control endpoint
 			std::string{argv[2]}, // Upstream data endpoint
 			std::stoi(argv[3]),   // Node ID
-			argc - 3,             // Leaf binary argc
-			argv + 3);            // Leaf binary argv
+			argc - 4,             // Leaf binary argc
+			argv + 4);            // Leaf binary argv
 	}
 
 protected:
@@ -242,11 +242,6 @@ public:
 	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
 	//     = zmqnet::SyncBackend::getParams(argc, argv);
 	// auto backend = zmqnet::SyncBackend(controlEndpoint, dataEndpoint, node_id);
-
-	// Note: the remaining arguments rest_argc, rest_argv are one index before the arguments for
-	// the user-provided leaf binary. So while rest_argv[0] will not be equal to argv[0], you can
-	// pass these values of rest_argc, rest_argv to `getopt` and parse the program options directly,
-	// without having to copy or otherwise manipulate the argument array.
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv) { return detail::Backend::getParams(argc, argv); }
 
@@ -304,11 +299,6 @@ public:
 	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
 	//     = zmqnet::SyncBackend::getParams(argc, argv);
 	// auto backend = zmqnet::SyncBackend(controlEndpoint, dataEndpoint, node_id);
-
-	// Note: the remaining arguments rest_argc, rest_argv are one index before the arguments for
-	// the user-provided leaf binary. So while rest_argv[0] will not be equal to argv[0], you can
-	// pass these values of rest_argc, rest_argv to `getopt` and parse the program options directly,
-	// without having to copy or otherwise manipulate the argument array.
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv) { return detail::Backend::getParams(argc, argv); }
 
