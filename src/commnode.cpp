@@ -163,8 +163,16 @@ protected: // inherited interface
 	{}
 
 public: // interface
+
+	// Return all stored messages and bitset of the source descendants. Resets state.
+	// Called for aggregation when all descendants have reported or exited
 	virtual BitsetContentPair eject() = 0;
 
+	// Return all stored messages and bitset of the source descendants. Does not reset state.
+	// Called in timeout handler for incoming message socket.
+	virtual BitsetContentPair timeout() = 0;
+
+	// Insert new content, reported by the descendants contained in bitset
 	virtual BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len,
 		zmqnet::ByteArray&& content) = 0;
 };
@@ -178,10 +186,8 @@ public: // interface
 	{}
 
 	// Immediate stores no messages, so it always ejects an empty content array
-	BitsetContentPair eject() override
-	{
-		return BitsetContentPair{};
-	}
+	BitsetContentPair eject()   override { return BitsetContentPair{}; }
+	BitsetContentPair timeout() override { return BitsetContentPair{}; }
 
 	// Create and return a content array with one element, the new content
 	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& content) override
@@ -221,6 +227,10 @@ public: // interface
 
 		return BitsetContentPair{std::move(bitset), std::move(contents)};
 	}
+
+	// WaitForAll only ejects messages when one is received from each descendant,
+	// ignore any requests for timeout
+	BitsetContentPair timeout() override { return BitsetContentPair{}; }
 
 	// Store the provided message, eject for aggregation if it was received from the last descendant
 	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& new_content) override
@@ -277,15 +287,13 @@ public: // interface
 	}
 
 	// Eject all stored messages for aggregation, but keep track of timed-out descendants
-	BitsetContentPair timeout()
+	BitsetContentPair timeout() override
 	{
 		auto bitset = std::move(current_descendants);
 		auto contents = std::move(content);
 
 		current_descendants.clear();
 		content.clear();
-
-		log("sync: timed out %zu messages\n", contents.size());
 
 		return BitsetContentPair{std::move(bitset), std::move(contents)};
 	}
@@ -477,17 +485,15 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 				}
 			}
 
-		// Socket hit timeout, eject and send synchronizer contents
+		// Socket hit timeout, send any timed-out synchronizer contents
 		} else {
 			assert(std::get_if<zmqnet::sync::Timeout>(&streamSync));
 
-			if (auto timeoutSync = (Sync_Timeout*)synchronizer.get()) {
-				auto [bitset, content] = timeoutSync->timeout();
+			auto [bitset, content] = synchronizer->timeout();
 
-				// Synchronizer reported results to send, aggregate
-				if (!bitset.empty()) {
-					aggregate_and_send(std::move(bitset), std::move(content));
-				}
+			// If synchronizer reported results to send, aggregate
+			if (!bitset.empty()) {
+				aggregate_and_send(std::move(bitset), std::move(content));
 			}
 		}
 	}
