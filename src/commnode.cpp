@@ -698,7 +698,7 @@ int main(int argc, char* const argv[])
 		};
 
 		// Copy provided arguments
-		for (int i = 1; i < leaf_argc; i++) {
+		for (int i = 0; i < leaf_argc; i++) {
 			completeLeafArgv.add(leaf_argv[i]);
 		}
 
