@@ -164,9 +164,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	// Open the filter implementation dynamic library
 	log("commnode %02x %d: opening filter at %s\n",
 		stream.communicatorId, stream.id, filterPath.c_str());
-	using FilterRunType = zmqnet::ByteArray(std::vector<zmqnet::ByteArray> const&);
 	auto filterHandle = cti::Dlopen::Handle{filterPath};
-	auto filterRun = filterHandle.load<FilterRunType>(filterFunctionName);
+	auto filterRun = filterHandle.load<zmqnet::FilterType>(filterFunctionName);
 
 	// Wait until all downstream children have created this stream
 	for (auto started_descendants = lrle_bitset{}; started_descendants != descendants_bitset; ) {

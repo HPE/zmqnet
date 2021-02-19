@@ -38,7 +38,11 @@ using ByteArray = kj::Array<kj::byte>;
 // Extract bytes with .begin() and size with .size()
 using ByteArrayPtr = kj::ArrayPtr<kj::byte const>;
 
-// In asynchronous callbacks, return a ByteArray to produce a message result
+// Filters are passed an array of ByteArrays as inputs, and return a ByteArray as a result
+// If no output is desired, return an empty zmqnet::ByteArray{}
+using FilterType = zmqnet::ByteArray(std::vector<zmqnet::ByteArray> const&);
+
+// In asynchronous callbacks or filter functions, return a ByteArray to produce a message result
 static inline auto make_ByteArray(char const* buffer, size_t buffer_len)
 {
 	return kj::heapArray((unsigned char const*)buffer, buffer_len);
