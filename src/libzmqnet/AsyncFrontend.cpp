@@ -213,7 +213,8 @@ void zmqnet::AsyncFrontend::registerStreamCallback(Stream::Id const& streamId, z
 		}, std::ref(m_ctx), stream, std::move(callbackFunc)));
 }
 
-zmqnet::Stream zmqnet::AsyncFrontend::registerStream(Communicator const& communicator, Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
+zmqnet::Stream zmqnet::AsyncFrontend::registerStream(Communicator const& communicator, Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
+	zmqnet::StreamSync const& streamSync)
 {
 	// Ensure stream callback registered
 	if (m_callbackProcessors.find(streamId) == m_callbackProcessors.end()) {
@@ -229,7 +230,7 @@ zmqnet::Stream zmqnet::AsyncFrontend::registerStream(Communicator const& communi
 	m_blocking_registration->set(registration_lock, true);
 
 	// Send filter create command
-	auto const result = createStream(communicator, streamId, filterLibraryName, filterFunctionName);
+	auto const result = createStream(communicator, streamId, filterLibraryName, filterFunctionName, streamSync);
 
 	// Wait for distributor to clear registration flag (registration flag is unlocked during wait)
 	log("waiting for stream %d registration to complete\n", streamId);

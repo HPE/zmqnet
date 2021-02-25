@@ -67,11 +67,27 @@ struct Argv {
     struct Option : public GNUOption {
         explicit constexpr Option(const char* longFlag, char shortFlag) :
             GNUOption { longFlag, no_argument, nullptr, shortFlag } {}
+
+        auto format() const {
+	    if (name == nullptr) {
+                return std::string{"-"}  + (char)(val);
+            } else {
+                return std::string{"--"} + name;
+            }
+        }
     };
 
     struct Parameter : public GNUOption {
         explicit constexpr Parameter(const char* longFlag, char shortFlag) :
             GNUOption { longFlag, required_argument, nullptr, shortFlag } {}
+
+        auto format(std::string const& value) const {
+	    if (name == nullptr) {
+                return std::string{"-"}  + (char)(val) + value;
+            } else {
+                return std::string{"--"} + name + "=" + value;
+            }
+        }
     };
 
     struct Argument : public std::string {

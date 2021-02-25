@@ -466,6 +466,20 @@ static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags con
 	}
 }
 
+static inline auto recv_MessageReader_timeout(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
+{
+	auto received_result = zmq::message_t{};
+
+	// Nonzero return value indicates successful result
+	if (socket.recv(received_result, sockopt)) {
+		return std::make_optional(ReaderStorage{std::move(received_result)});
+
+	// Zero value indicates timeout
+	} else {
+		return std::optional<ReaderStorage>{};
+	}
+}
+
 } // net
 
 

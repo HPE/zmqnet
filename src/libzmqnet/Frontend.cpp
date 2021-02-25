@@ -432,13 +432,13 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	log("launch started: %5ldms\n", startup_ms - start_ms);
 
 	// Launch tree
-	if (topology.launch == Topology::Fcfs) {
+	if (topology.launch == Topology::Launch::Fcfs) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::fcfsTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
-	} else if (topology.launch == Topology::Layered) {
+	} else if (topology.launch == Topology::Launch::Layered) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
-	} else if (topology.launch == Topology::Packed) {
+	} else if (topology.launch == Topology::Launch::Packed) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::packedTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	}
@@ -513,7 +513,7 @@ zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmqnet::NodeSe
 }
 
 zmqnet::Stream zmqnet::detail::Frontend::createStream(zmqnet::Communicator const& communicator,
- 	Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
+	Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName, zmqnet::StreamSync const& streamSync)
 {
 	// Create stream create command message
 	auto builder = capnp::MallocMessageBuilder{};
@@ -521,6 +521,17 @@ zmqnet::Stream zmqnet::detail::Frontend::createStream(zmqnet::Communicator const
 	streamCommand.setStreamId(streamId);
 	streamCommand.setFilterLibraryName(filterLibraryName);
 	streamCommand.setFilterFunctionName(filterFunctionName);
+
+	// Set synchronization type
+	if (std::get_if<sync::Immediate>(&streamSync)) {
+		streamCommand.initSync().setImmediate();
+	} else if (std::get_if<sync::WaitForAll>(&streamSync)) {
+		streamCommand.initSync().setWaitForAll();
+	} else if (auto const timeout = std::get_if<sync::Timeout>(&streamSync)) {
+		streamCommand.initSync().setTimeout(timeout->ms);
+	} else {
+		assert(false);
+	}
 
 	// Send filter create command
 	log("registering stream %d filter %s function %s with comm id %d\n", streamId, filterLibraryName.c_str(), filterFunctionName.c_str(), communicator.id);
@@ -586,12 +597,12 @@ zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(zmqnet::NodeSet 
 }
 
 zmqnet::Stream zmqnet::SyncFrontend::registerStream(zmqnet::Communicator const& communicator,
-		zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName)
+		zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName, zmqnet::StreamSync const& streamSync)
 {
 	auto const start_ms = get_milliseconds();
 
 	// Send stream create command
-	auto const stream = createStream(communicator, streamId, filterLibraryName, filterFunctionName);
+	auto const stream = createStream(communicator, streamId, filterLibraryName, filterFunctionName, streamSync);
 
 	// Wait for acknowledgement
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
