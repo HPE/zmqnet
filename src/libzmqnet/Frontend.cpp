@@ -432,13 +432,13 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	log("launch started: %5ldms\n", startup_ms - start_ms);
 
 	// Launch tree
-	if (topology.launch == Topology::Fcfs) {
+	if (topology.launch == Topology::Launch::Fcfs) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::fcfsTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
-	} else if (topology.launch == Topology::Layered) {
+	} else if (topology.launch == Topology::Launch::Layered) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
-	} else if (topology.launch == Topology::Packed) {
+	} else if (topology.launch == Topology::Launch::Packed) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::packedTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	}

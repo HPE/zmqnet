@@ -53,11 +53,12 @@ static inline auto make_ByteArray(unsigned char const* buffer, size_t buffer_len
 struct Topology
 {
 	// Launch strategy
-	enum : int
+	enum Launch : int
 		{ Fcfs    // First-come first-served. Single launch invocation
 		, Layered // Statically assign topology. Launch the network layer-by-layer
 		, Packed  // Simulate running at higher scale by launching a commnode for each PE
-	} launch;
+	};
+	Launch launch;
 
 	// Communication tree fanout. Each non-leaf commnode will have `fanout` children
 	int fanout;

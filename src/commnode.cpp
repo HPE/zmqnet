@@ -144,7 +144,7 @@ namespace workers
 namespace
 {
 
-class Sync_Base
+class Sync
 {
 protected: // types
 	using BitsetContentPair = std::pair<lrle_bitset, std::vector<zmqnet::ByteArray>>;
@@ -152,12 +152,12 @@ protected: // types
 protected: // members
 
 	// Synchronization implementations store the descendant bitset to determine if / when
-	// to eject messages for aggreagation
+	// to eject messages for aggregation
 	unsigned char const* descendants_buf;
 	size_t descendants_len;
 
 protected: // inherited interface
-	Sync_Base(unsigned char const* descendants_buf_, size_t descendants_len_)
+	Sync(unsigned char const* descendants_buf_, size_t descendants_len_)
 		: descendants_buf{descendants_buf_}
 		, descendants_len{descendants_len_}
 	{}
@@ -178,11 +178,11 @@ public: // interface
 };
 
 // Immediate: messages are sent as soon as they are received
-class Sync_Immediate : public Sync_Base
+class Sync_Immediate : public Sync
 {
 public: // interface
 	Sync_Immediate(unsigned char const* descendants_buf, size_t descendants_len)
-		: Sync_Base{descendants_buf, descendants_len}
+		: Sync{descendants_buf, descendants_len}
 	{}
 
 	// Immediate stores no messages, so it always ejects an empty content array
@@ -200,7 +200,7 @@ public: // interface
 };
 
 // WaitForAll: store all messages until one has been received from every descendant
-struct Sync_WaitForAll : public Sync_Base
+struct Sync_WaitForAll : public Sync
 {
 private: // members
 	// Track descendants from which a message has been received
@@ -211,7 +211,7 @@ private: // members
 
 public: // interface
 	Sync_WaitForAll(unsigned char const* descendants_buf, size_t descendants_len)
-		: Sync_Base{descendants_buf, descendants_len}
+		: Sync{descendants_buf, descendants_len}
 		, reported_descendants{}
 		, content{}
 	{}
@@ -252,7 +252,7 @@ public: // interface
 
 // Timeout: store all messages until one has been received from every descendant, or until
 // `timeout` method is called (triggered by socket read timeout at the aggregation level)
-class Sync_Timeout : public Sync_Base
+class Sync_Timeout : public Sync
 {
 
 	// Reported descendants may contain timed out descendants
@@ -267,7 +267,7 @@ class Sync_Timeout : public Sync_Base
 
 public: // interface
 	Sync_Timeout(unsigned char const* descendants_buf, size_t descendants_len)
-		: Sync_Base{descendants_buf, descendants_len}
+		: Sync{descendants_buf, descendants_len}
 		, reported_descendants{}
 		, current_descendants{}
 		, content{}
@@ -380,7 +380,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	}
 
 	// Select synchronization implementation
-	auto synchronizer = std::unique_ptr<Sync_Base>{};
+	auto synchronizer = std::unique_ptr<Sync>{};
 	{ auto const descendants_buf = descendants_bitset.compressed.data();
 		auto const descendants_len = descendants_bitset.compressed.size();
 
