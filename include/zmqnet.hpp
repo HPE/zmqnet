@@ -199,6 +199,7 @@ public: // interface
 	// specified during construction of the Stream, and returned to the caller in a ByteArray
 	// object.
 	ByteArray runCommand(Stream const& stream, char const* command_buffer, size_t command_len);
+	ByteArray runCommand(Stream const& stream, std::string const& command);
 
 	// Notify all Backend instances that the network should exit. Returns once all Backend instances
 	// have exited.
@@ -250,6 +251,7 @@ public: // interface
 	// specified during construction of the Stream, and passed to the Stream callback registered
 	// previously.
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
+	void sendCommand(Stream const& stream, std::string const& command);
 
 	// Notify all Backend instances that the network should exit. Returns once all Backend instances
 	// have exited.

@@ -635,6 +635,11 @@ zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream,
 	return kj::heapArray<kj::byte>(response.getUser().getContent().asBytes());
 }
 
+zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream, std::string const& command)
+{
+	return runCommand(stream, command.c_str(), command.length() + 1);
+}
+
 void zmqnet::SyncFrontend::runExit()
 {
 	auto const start_ms = get_milliseconds();

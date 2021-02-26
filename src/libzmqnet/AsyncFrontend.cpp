@@ -252,6 +252,11 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const
 	Frontend::sendCommand(stream, command_buffer, command_len);
 }
 
+void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, std::string const& command)
+{
+	return sendCommand(stream, command.c_str(), command.length() + 1);
+}
+
 void zmqnet::AsyncFrontend::runExit()
 {
 	// Send exit command
