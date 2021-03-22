@@ -39,6 +39,12 @@ PKG_CHECK_MODULES([COMMON_TOOLS_FE], [common_tools_fe])
 PKG_CHECK_MODULES([COMMON_TOOLS_BE], [common_tools_be])
 
 #
+### Check for libraries. ###
+#
+AC_CHECK_LIB(dl, dlopen)
+AC_CHECK_LIB(dl, dlclose)
+
+#
 ### Check for headers. ###
 #
 save_CXXFLAGS="$CXXFLAGS"
