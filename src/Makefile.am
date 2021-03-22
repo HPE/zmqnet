@@ -9,4 +9,4 @@ libexec_PROGRAMS = commnode
 
 commnode_SOURCES = commnode.cpp
 commnode_CXXFLAGS = -fPIC -fno-rtti $(AM_CXXFLAGS) $(LIBZMQ_CFLAGS) $(CAPNP_CFLAGS) $(COMMON_TOOLS_BE_CFLAGS)
-commnode_LDFLAGS = libzmqnet/libzmqnet.la $(AM_LDFLAGS) $(LIBZMQ_LIBS) $(CAPNP_LIBS) $(COMMON_TOOLS_BE_LIBS)
+commnode_LDFLAGS = libzmqnet/libzmqnet.la $(AM_LDFLAGS) $(LIBZMQ_LIBS) $(CAPNP_LIBS) $(COMMON_TOOLS_BE_LIBS) -ldl
