@@ -23,7 +23,12 @@ check_exit_status
 source $top_level/release_versioning
 zmqnet_version="$major.$minor.$revision"
 echo "zmqnet version: \"$zmqnet_version\""
-install_dir="/opt/cray/pe/zmqnet/$zmqnet_version"
+
+# allow install_dir to be specified externally by products that depend on zmqnet
+if [ -z "$install_dir" ]; then
+    install_dir="/opt/cray/pe/zmqnet/$zmqnet_version"
+fi
+
 echo "Install dir: \"$install_dir\""
 mkdir -p $install_dir
 check_exit_status
