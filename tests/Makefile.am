@@ -1,7 +1,7 @@
 # Copyright 2020 Hewlett Packard Enterprise Development LP.
 
 SRC = $(top_srcdir)/src
-AM_CXXFLAGS = -Wl,-E -Wl,-rpath,$(prefix)/lib
+AM_CXXFLAGS = -Wl,-E -Wl,-rpath,$(prefix)/lib -std=c++17
 AM_CPPFLAGS = -I$(top_srcdir)/tests
 
 TESTS = libzmqnet_unit_tests
@@ -19,7 +19,7 @@ stop: stop.c
 	cc -g stop.c -o stop
 
 libfilter.so: libfilter.cpp
-	$(CC) $(AM_CXXFLAGS) $(ZMQNET_CFLAGS) -fPIC -shared $(AM_LDFLAGS) $(ZMQNET_LIBS) $< -o $@
+	$(CXX) $(AM_CXXFLAGS) $(ZMQNET_CFLAGS) -fPIC -shared $(AM_LDFLAGS) $(ZMQNET_LIBS) $< -o $@
 
 topotest_SOURCES = topotest.cpp libfilter.so
 topotest_CXXFLAGS = $(AM_CXXFLAGS) $(COMMON_TOOLS_FE_CFLAGS) $(COMMON_TOOLS_BE_CFLAGS) $(ZMQNET_CFLAGS)
