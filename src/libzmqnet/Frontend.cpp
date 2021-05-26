@@ -423,7 +423,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 
 	// Find commnode path
 	auto const commnodePath = std::getenv("LIBZMQNET_INSTALL_DIR") ?
-		std::string(std::getenv("LIBZMQNET_INSTALL_DIR")) + "/libexec/commnode"
+		std::string{std::getenv("LIBZMQNET_INSTALL_DIR")} + "/libexec/commnode"
 		:
 		std::string{LIBZMQNET_PREFIX} + "/libexec/commnode"
 	;
