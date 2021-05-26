@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <set>
 
+#include <cstdlib>
+
 #include "lrle_bitset_impl.hpp"
 
 #include "common_tools_fe.h"
@@ -420,8 +422,12 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	auto const start_ms = get_milliseconds();
 
 	// Find commnode path
-	auto const commnodePath = std::string{LIBZMQNET_PREFIX} + "/libexec/commnode";
-
+	auto const commnodePath = std::getenv("LIBZMQNET_INSTALL_DIR") ?
+		std::string{std::getenv("LIBZMQNET_INSTALL_DIR")} + "/libexec/commnode"
+		:
+		std::string{LIBZMQNET_PREFIX} + "/libexec/commnode"
+	;
+	
 	// Fetch node layout from CTI for network topology
 	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
 		{ cti_getAppHostsPlacement(app_id)
