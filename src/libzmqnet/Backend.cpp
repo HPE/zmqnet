@@ -30,20 +30,52 @@ zmqnet::detail::Backend::~Backend()
 
 void zmqnet::detail::Backend::notifyReady()
 {
-	// Notify parent commnode that setup is completed
-	log("backend %d: notifying parent ready from leaf node\n", m_node_id);
-	auto builder = capnp::MallocMessageBuilder{};
-	auto response = builder.initRoot<NetworkResponse>();
-	auto ready = response.initReady();
+	{   // Notify parent commnode that setup is completed
+		log("backend %d: notifying parent ready from leaf node\n", m_node_id);
+		auto builder = capnp::MallocMessageBuilder{};
+		auto response = builder.initRoot<NetworkResponse>();
+		auto ready = response.initReady();
 
-	// Set node bitset
-	ready.setNodes(kj::ArrayPtr<kj::byte const>
-		{ (unsigned char const*)m_node_bitset.data()
-		, m_node_bitset.size()
-	});
+		// Set node bitset
+		ready.setNodes(kj::ArrayPtr<kj::byte const>
+			{ (unsigned char const*)m_node_bitset.data()
+			, m_node_bitset.size()
+		});
+		
+		// Send ready
+		net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
+	}
 
-	// Send acknowledgement
-	net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
+	{   // Process incoming broadcast communicator command
+		auto reader = net::recv_MessageReader(m_upstream->control_socket);
+		auto command = reader.getRoot<NetworkCommand>();
+		assert(command.isCommunicator());
+
+		auto const communicatorId = command.getCommunicator().getCommunicatorId();
+		log("backend %d: new communicator %02x\n", m_node_id, communicatorId);
+		assert(communicatorId == net::communicator_ids::AllNodes);
+
+		// subscribe to subset tag
+		log("backend %d: in communicator %02x, subscribing\n", m_node_id, communicatorId);
+
+		// Subscribe to subset tag
+		net::subscribe_to_tag(m_upstream->control_socket, communicatorId);
+
+		// Create acknowledgement
+		auto builder = capnp::MallocMessageBuilder{};
+		auto response = builder.initRoot<NetworkResponse>();
+		auto communicatorAck = response.initCommunicator();
+		communicatorAck.setCommunicatorId(communicatorId);
+
+		// Set node bitset
+		communicatorAck.setNodes(kj::ArrayPtr<kj::byte const>
+			{ (unsigned char const*)m_node_bitset.data()
+			, m_node_bitset.size()
+		});
+
+		// Send acknowledgement
+		net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
+	}
 }
 
 void zmqnet::detail::Backend::sendResult(zmqnet::Stream const& stream, char const* result_buffer, size_t result_len)
@@ -412,13 +444,6 @@ zmqnet::AsyncBackend::AsyncBackend(std::string const& upstreamControlEndpoint, s
 {
 	// Connect for message injection by main thread
 	m_collectorSocket.connect(m_collectorEndpoint);
-
-	// Launch response distributor task, moving control of upstream control socket
-	m_commandDistributor = std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, std::string resultEndpoint, int node_id, std::vector<unsigned char> const& node_bitset) {
-			return workers::command_distributor(ctx, std::move(input_socket), std::move(resultEndpoint), node_id, node_bitset);
-		}, std::ref(m_ctx), std::move(m_upstream->control_socket), m_collectorEndpoint, m_node_id,
-			m_node_bitset);
 }
 
 zmqnet::AsyncBackend::~AsyncBackend()
@@ -453,6 +478,13 @@ void zmqnet::AsyncBackend::notifyReady()
 		[](zmq::context_t& ctx, std::string collectorEndpoint, zmq::socket_t&& output_socket) {
 			return async::collect_network_responses(ctx, std::move(collectorEndpoint), std::move(output_socket));
 		}, std::ref(m_ctx), m_collectorEndpoint, std::move(m_upstream->data_socket));
+
+	// Launch response distributor task, moving control of upstream control socket
+	m_commandDistributor = std::async(std::launch::async,
+		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, std::string resultEndpoint, int node_id, std::vector<unsigned char> const& node_bitset) {
+			return workers::command_distributor(ctx, std::move(input_socket), std::move(resultEndpoint), node_id, node_bitset);
+		}, std::ref(m_ctx), std::move(m_upstream->control_socket), m_collectorEndpoint, m_node_id,
+			m_node_bitset);
 }
 
 void zmqnet::AsyncBackend::waitForExit()
