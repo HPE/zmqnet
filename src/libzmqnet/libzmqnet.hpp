@@ -62,6 +62,31 @@ static inline void log(const char* format, ...)
 	}
 }
 
+static inline void enable_individual_logfile(std::string filename = "") 
+{
+	if (!debug_enabled()) return;
+
+	if (filename == "") filename = "zmqnet_" + std::to_string(getpid()) + ".log";
+
+	const char *dir = getenv("CRAY_DBG_LOG_DIR");
+    if (!dir) {
+        dir = "/tmp";
+    }
+
+	auto fullpath = std::string(dir) + "/" + filename;
+
+	auto file = fopen(fullpath.c_str(), "w");
+	if (!file) {
+		log("Failed to open %s for writing.\n", fullpath.c_str());
+		return;
+	}
+
+	if (dup2(fileno(file), STDERR_FILENO) < 0) {
+		log("(%s) dup2 failed.\n", fullpath.c_str());
+		return;
+	}
+}
+
 namespace net
 {
 
