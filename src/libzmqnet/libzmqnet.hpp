@@ -68,7 +68,7 @@ static inline void enable_individual_logfile(std::string filename = "")
 
 	if (filename == "") filename = "zmqnet_" + std::to_string(getpid()) + ".log";
 
-	const char *dir = getenv("CRAY_DBG_LOG_DIR");
+	const char *dir = getenv("CTI_LOG_DIR");
     if (!dir) {
         dir = "/tmp";
     }
