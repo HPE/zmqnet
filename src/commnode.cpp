@@ -873,7 +873,7 @@ int main(int argc, char* const argv[])
 				auto const nodeString = std::to_string(node);
 				*node_arg_ptr = (char*)nodeString.c_str();
 
-				// Exec leaf binary
+				// Exec commnode binary
 				execvp(argv[0], commnode_argv);
 				perror("execvp");
 				_exit(-1);
@@ -909,6 +909,9 @@ int main(int argc, char* const argv[])
 			if (auto const forkedPid = fork()) {
 				// Add launched process to cleanup list
 				localChildPids.emplace_back(forkedPid);
+				if (packed_mode) {
+					enable_individual_logfile("zmqnet_leaf_commnode_" + std::to_string(node) + ".log");
+				}
 
 			} else {
 				// Set node argument
