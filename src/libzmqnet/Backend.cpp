@@ -494,10 +494,6 @@ void zmqnet::AsyncBackend::sendResult(const Stream::Id &streamId, zmqnet::ByteAr
 		log("backend %d: tried to directly send result to stream %d, but it doesn't exist. sending nothing.\n", m_node_id, streamId);
 		return;
 	}
-	
-	// connect to collector proxy
-	auto result_socket = zmq::socket_t{m_ctx, zmq::socket_type::push};
-	result_socket.connect(m_collectorEndpoint);
 
 	// package message
 	auto builder = capnp::MallocMessageBuilder{};
@@ -514,8 +510,8 @@ void zmqnet::AsyncBackend::sendResult(const Stream::Id &streamId, zmqnet::ByteAr
 	});
 
 	// send result
-	log("backend %d %d: injecting result of size lu\n", m_node_id, streamId, result_size);
-	net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);
+	log("backend %d %d: injecting result of size %lu\n", m_node_id, streamId, result_size);
+	net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllNodes, builder);
 }
 
 void zmqnet::AsyncBackend::waitForExit()
