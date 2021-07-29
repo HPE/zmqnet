@@ -353,6 +353,12 @@ public: // interface
 	// After all callbacks are registered, send a "setup complete" message with `notifyReady`.
 	void notifyReady();
 
+	// Directly send 'result' to the front end using the stream 'streamId'.
+	// The data is filtered through the registered filter functions and
+	// passed to the client side callback defined in
+	// 'AsyncFrontend::registerStreamCallback'.
+	void sendResult(const Stream::Id &streamId, zmqnet::ByteArray &&result);
+
 	// Blocks and waits for an incoming exit message to be received.
 	void waitForExit();
 };

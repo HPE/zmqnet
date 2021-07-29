@@ -806,6 +806,14 @@ int main(int argc, char* const argv[])
 	auto num_children = int{};
 	auto node_id = int{};
 
+	auto const first_pe = (packed_node_id < 0)
+		? cti_be_getNodeFirstPE()
+		: packed_node_id;
+
+	if (packed_mode) {
+		enable_individual_logfile("zmqnet_leaf_commnode_" + std::to_string(first_pe) + ".log");
+	}
+
 	// Use either FCFS or leveled tree launch based on arguments
 	if (!dealerEndpoint.empty()) {
 
@@ -832,9 +840,6 @@ int main(int argc, char* const argv[])
 	auto localChildPids = std::vector<pid_t>{};
 
 	// Determine number of local children, one per PE on node
-	auto const first_pe = (packed_node_id < 0)
-		? cti_be_getNodeFirstPE()
-		: packed_node_id;
 	auto const local_pes = 1;
 	num_children += local_pes;
 
@@ -909,9 +914,6 @@ int main(int argc, char* const argv[])
 			if (auto const forkedPid = fork()) {
 				// Add launched process to cleanup list
 				localChildPids.emplace_back(forkedPid);
-				if (packed_mode) {
-					enable_individual_logfile("zmqnet_leaf_commnode_" + std::to_string(node) + ".log");
-				}
 
 			} else {
 				// Set node argument

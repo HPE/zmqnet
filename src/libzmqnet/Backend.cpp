@@ -487,6 +487,33 @@ void zmqnet::AsyncBackend::notifyReady()
 			m_node_bitset);
 }
 
+void zmqnet::AsyncBackend::sendResult(const Stream::Id &streamId, zmqnet::ByteArray &&result) 
+{
+	// ensure streamId is valid
+	if (m_callbackProcessors.find(streamId) == m_callbackProcessors.end()) {
+		log("backend %d: tried to directly send result to stream %d, but it doesn't exist. sending nothing.\n", m_node_id, streamId);
+		return;
+	}
+
+	// package message
+	auto builder = capnp::MallocMessageBuilder{};
+	auto response = builder.initRoot<NetworkResponse>();
+	auto userResponse = response.initUser();
+	userResponse.setStreamId(streamId);
+	auto const result_size = result.size();
+	userResponse.setContent(std::move(result));
+
+	// set node bitset
+	userResponse.setNodes(kj::ArrayPtr<kj::byte const>
+		{ (unsigned char const*)m_node_bitset.data()
+		, m_node_bitset.size()
+	});
+
+	// send result
+	log("backend %d %d: injecting result of size %lu\n", m_node_id, streamId, result_size);
+	net::send_MessageBuilder(m_collectorSocket, net::communicator_ids::AllNodes, builder);
+}
+
 void zmqnet::AsyncBackend::waitForExit()
 {
 	// Wait for distributor to exit after receiving network exit command, reacquiring upstream data socket
