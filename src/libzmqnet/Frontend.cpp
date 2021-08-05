@@ -427,6 +427,8 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 		:
 		std::string{LIBZMQNET_PREFIX} + "/libexec/commnode"
 	;
+
+	log("launching commnode: %s\n", commnodePath.c_str());
 	
 	// Fetch node layout from CTI for network topology
 	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>

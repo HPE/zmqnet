@@ -538,7 +538,7 @@ static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::
 // Standard endpoint format for task sockets created by message distributors
 static inline std::string stream_endpoint(zmqnet::Stream const& stream)
 {
-	return "inproc://stream-" + std::to_string(stream.communicatorId) + "-" + std::to_string(stream.id);
+	return "inproc://stream-" + std::to_string(stream.id);
 }
 
 static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream const& stream, net::ReaderStorage&& expiring)

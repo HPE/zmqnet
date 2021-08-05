@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <set>
+#include <mutex>
 #include <variant>
 
 #include <future>
@@ -161,6 +162,57 @@ protected: // derived class interface
 	void notifyReady();
 
 	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
+};
+
+class CallbackProcessorManager {
+	// Instances of AsyncBackend use a CallbackProcessorManager to launch
+	// callback processor threads (see workers::callback_processor in Backend.cpp).
+	// Launching a callback processor requires two things: AsyncBackend::registerCallback to be called by 
+	// the user on the server side, and AsyncFrontend::registerStream to be called by the user
+	// on the client side.
+	// The CallbackProcessorManager makes sure both of these things happpen,
+	// specifically in the order given, before actually spawning a new thread.
+private:
+	// same as AsyncBackend::CallbackFunc
+	using CallbackFunc = std::function<ByteArray(Stream::Id const&, ByteArray)>;
+
+public:
+	CallbackProcessorManager(zmq::context_t &ctx, const std::string &collectorEndpoint, 
+		const int &nodeId, const std::vector<unsigned char> &nodeBitset);
+
+	// Called by a user's call to AsyncBackend::registerCallback. Records 
+	// callbackFunc to be used on stream streamId when the stream is created.
+	void registerCallback(Stream::Id const& streamId, CallbackFunc callbackFunc);
+
+	// Called by the AsyncBackend's incoming command thread. Actually launches
+	// the thread stored with the given id. If the id doesn't exist, an exception
+	// is thrown.
+	void launchCallbackProcessor(Stream::Id id);
+
+	// Wait for all running callback processors to exit. It is assumed that the
+	// running threads have already received an exit command over the network.
+	void waitForExit();
+
+	// Returns true if there is a running thread associated with the given id.
+	bool streamIsActive(const Stream::Id &id) const;
+
+private:
+	// Given an id, returns true if either a waiting callback function has been
+	// registered but not launched, or if there is a running thread associated
+	// with the given id.
+	bool callbackProcessorExists(Stream::Id id);
+
+	// Functions that have been registered but not launched
+	std::unordered_map<Stream::Id, CallbackFunc> m_waitingCallbackProcs;
+	// Launched threads
+	std::unordered_map<Stream::Id, std::future<void>> m_runningCallbackProcs;
+	mutable std::mutex m_callbackLock;
+
+	// References to data in AsyncBackend needed to launch a new thread
+	zmq::context_t &m_ctx;
+	const std::string &m_collectorEndpoint;
+	const int m_nodeId;
+	const std::vector<unsigned char> &m_nodeBitset;
 };
 
 } // detail
@@ -321,10 +373,9 @@ private: // members
 	std::string m_collectorEndpoint;
 	zmq::socket_t m_collectorSocket;
 	std::future<zmq::socket_t> m_responseCollector;
-
-	std::unordered_map<Stream::Id, std::future<void>> m_callbackProcessors;
 	std::future<zmq::socket_t> m_commandDistributor;
-
+	detail::CallbackProcessorManager m_callbackProcManager;
+	
 public: // interface
 
 	// Network connection arguments are prepended to the argument array for the user-provided
