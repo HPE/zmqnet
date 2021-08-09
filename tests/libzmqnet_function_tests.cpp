@@ -338,6 +338,24 @@ TEST_F(ZmqnetFunctionTest, SubsetCreationTest)
 	network.runExit();
 }
 
+// Test creating a stream subset across a single node
+TEST_F(ZmqnetFunctionTest, SubsetCreationTestByRank)
+{
+	// Launch network with four nodes
+	auto network = launchSyncNetwork(8, 1,
+		zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 2 });
+
+	std::set<size_t> ranks = {0, 1, 2, 3};
+
+	// Create subset stream
+	auto someNodesCommunicator = network.registerCommunicator(ranks);
+	(void)network.registerStream(someNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
+
+	// Exit network
+	network.runExit();
+}
+
 // Test sending command to a stream subset across multiple nodes, check result
 TEST_F(ZmqnetFunctionTest, SubsetCommandTest)
 {
@@ -373,6 +391,32 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTest)
 	network.runExit();
 }
 
+// Test sending command to a stream subset across a single node, check result
+TEST_F(ZmqnetFunctionTest, SubsetCommandTestByRank)
+{
+	// Launch network with four nodes
+	auto network = launchSyncNetwork(8, 1,
+		zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 2 });
+
+	// Add nodes with even IDs to subset
+	auto some_nodes = std::set<size_t>{0, 1, 2, 3};
+
+	// Create subset stream
+	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
+	auto someNodesStream = network.registerStream(someNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
+
+	// Send command and get result
+	auto const result = network.runCommand(someNodesStream, "send", 5);
+
+	// Check result
+	auto const nodeIds = parseNodeIds((char const*)result.asBytes().begin());
+	EXPECT_EQ(nodeIds.size(), size_t{1});
+
+	// Exit network
+	network.runExit();
+}
+
 // Test creating an asynchronous stream subset across multiple nodes
 TEST_F(ZmqnetFunctionTest, SubsetCreationTestAsync)
 {
@@ -396,6 +440,31 @@ TEST_F(ZmqnetFunctionTest, SubsetCreationTestAsync)
 	for (int i = 0; i < hostsPlacement->numHosts; i += 2) {
 		some_nodes.emplace(hostsPlacement->hosts[i].hostname);
 	}
+
+	// Register callback and create subset stream
+	network.registerStreamCallback(TestStreamId, send_callback);
+	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
+	(void)network.registerStream(someNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
+
+	// Exit network
+	network.runExit();
+}
+
+// Test creating a stream subset across a single node
+TEST_F(ZmqnetFunctionTest, SubsetCreationTestByRankAsync)
+{
+	// Launch network with four nodes
+	auto network = launchAsyncNetwork(8, 1,
+		zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 1 });
+
+	// Create callback
+	auto send_callback = [&](zmqnet::Stream::Id const& streamId, zmqnet::ByteArrayPtr result) {
+		ASSERT_EQ(streamId, TestStreamId);
+	};
+
+	// Add nodes with even IDs to subset
+	std::set<size_t> some_nodes = {0, 1, 2, 3};
 
 	// Register callback and create subset stream
 	network.registerStreamCallback(TestStreamId, send_callback);
@@ -458,6 +527,53 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTestAsync)
 
 	// Check result
 	EXPECT_EQ(results_received.load(), size_t{2});
+
+	// Exit network
+	network.runExit();
+}
+
+// Test sending an asynchronous command to a stream subset across a single node, check result
+TEST_F(ZmqnetFunctionTest, SubsetCommandTestAsyncByRank)
+{
+	auto result_mutex = std::mutex{};
+	auto result_cv = std::condition_variable{};
+	auto results_received = std::atomic<size_t>{0};
+
+	// Launch network with four nodes
+	auto network = launchAsyncNetwork(8, 1,
+		zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 1 });
+
+	// Create callback
+	auto send_callback = [&](zmqnet::Stream::Id const& streamId, zmqnet::ByteArrayPtr result) {
+		ASSERT_EQ(streamId, TestStreamId);
+
+		// Parse result
+		auto const nodeIds = parseNodeIds((char const*)result.asBytes().begin());
+		results_received = nodeIds.size();
+		result_cv.notify_one();
+	};
+
+	// Add nodes with even IDs to subset
+	auto some_nodes = std::set<size_t>{0, 1, 2, 3};
+
+	// Create subset stream
+	network.registerStreamCallback(TestStreamId, send_callback);
+	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
+	auto someNodesStream = network.registerStream(someNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
+
+	// Send command
+	network.sendCommand(someNodesStream, "send", 5);
+
+	// Wait for result
+	{ auto result_lock = std::unique_lock<std::mutex>{result_mutex};
+		result_cv.wait(result_lock, [&results_received]() {
+			return results_received.load() > 0;
+		});
+	}
+
+	// Check result
+	EXPECT_EQ(results_received.load(), size_t{1});
 
 	// Exit network
 	network.runExit();
