@@ -611,12 +611,12 @@ zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(zmqnet::NodeSet 
 	return communicator;
 }
 
-zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(const std::set<size_t> &ranksSet)
+zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(const RankSet &ranks)
 {
 	auto const start_ms = get_milliseconds();
 
 	// Send communicator create command
-	auto const communicator = createCommunicator(ranksSet);
+	auto const communicator = createCommunicator(ranks);
 
 	// Wait for acknowledgement
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);

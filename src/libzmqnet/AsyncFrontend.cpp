@@ -195,7 +195,7 @@ zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(zmqnet::NodeSet
 	return communicator;
 }
 
-zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(const std::set<size_t> &ranksSet)
+zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(const RankSet &ranks)
 {
 	// Lock blocking registration flag shared with distributor task
 	log("starting communicator registration\n");
@@ -206,7 +206,7 @@ zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(const std::set<
 	m_blocking_registration->set(registration_lock, true);
 
 	// Send communicator create command
-	auto const communicator = createCommunicator(ranksSet);
+	auto const communicator = createCommunicator(ranks);
 
 	// Wait for distributor to clear registration flag (registration flag is unlocked during wait)
 	log("waiting for communicator %02x registration to complete\n", communicator.id);

@@ -71,6 +71,7 @@ struct Topology
 
 // Communicators are subsets of job nodes to which commands can be targeted. Can include all nodes.
 using NodeSet = std::set<std::string>;
+using RankSet = std::set<size_t>;
 struct Communicator
 {
 	using Id = int;
@@ -125,7 +126,7 @@ protected: // derived class interface
 	~Frontend();
 
 	Communicator createCommunicator(NodeSet const& nodes);
-	Communicator createCommunicator(const std::set<size_t> &ranksSet);
+	Communicator createCommunicator(const RankSet &ranks);
 	Stream createStream(Communicator const& communicator, Stream::Id const& streamId,
 		std::string const& filterLibraryName, std::string const& filterFunctionName,
 		zmqnet::StreamSync const& streamSync);
@@ -240,8 +241,8 @@ public: // interface
 
 	// Create a new communicator targeting the nodes with hostnames specified in `nodes`
 	Communicator registerCommunicator(NodeSet const& nodes);
-	// Create a new communicator targeting the nodes with ranks specified in `ranksSet`
-	Communicator registerCommunicator(const std::set<size_t> &ranksSet);
+	// Create a new communicator targeting the nodes with ranks specified in `ranks`
+	Communicator registerCommunicator(const RankSet &ranks);
 
 	// Create a new stream in the provided communicator. Stream IDs are determined by the user.
 	// Provide a filter library and filter function name.
@@ -290,8 +291,8 @@ public: // interface
 
 	// Create a new communicator targeting the nodes with hostnames specified in `nodes`
 	Communicator registerCommunicator(NodeSet const& nodes);
-	// Create a new communicator targeting the nodes with ranks specified in `ranksSet`
-	Communicator registerCommunicator(const std::set<size_t> &ranksSet);
+	// Create a new communicator targeting the nodes with ranks specified in `ranks`
+	Communicator registerCommunicator(const RankSet &ranks);
 
 	// Create a new callback processor for the given stream ID. After the callback is registered,
 	// the actual Stream can be registered with the network
