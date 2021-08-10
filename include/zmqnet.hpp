@@ -187,7 +187,7 @@ public:
 	// Called by the AsyncBackend's incoming command thread. Actually launches
 	// the thread stored with the given id. If the id doesn't exist, an exception
 	// is thrown.
-	void launchCallbackProcessor(Stream::Id id);
+	void launchCallbackProcessor(const Stream::Id &id);
 
 	// Wait for all running callback processors to exit. It is assumed that the
 	// running threads have already received an exit command over the network.
@@ -200,7 +200,7 @@ private:
 	// Given an id, returns true if either a waiting callback function has been
 	// registered but not launched, or if there is a running thread associated
 	// with the given id.
-	bool callbackProcessorExists(Stream::Id id);
+	bool callbackProcessorExists(const Stream::Id &id);
 
 	// Functions that have been registered but not launched
 	std::unordered_map<Stream::Id, CallbackFunc> m_waitingCallbackProcs;

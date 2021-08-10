@@ -457,13 +457,13 @@ void zmqnet::detail::CallbackProcessorManager::registerCallback(Stream::Id const
 	m_waitingCallbackProcs.emplace(streamId, std::move(callbackFunc));
 }
 
-bool zmqnet::detail::CallbackProcessorManager::callbackProcessorExists(Stream::Id id) {
+bool zmqnet::detail::CallbackProcessorManager::callbackProcessorExists(const Stream::Id &id) {
 	auto lock = std::scoped_lock<std::mutex>(m_callbackLock);
 	return m_waitingCallbackProcs.find(id) != m_waitingCallbackProcs.end()
 		|| m_runningCallbackProcs.find(id) != m_runningCallbackProcs.end();
 }
 
-void zmqnet::detail::CallbackProcessorManager::launchCallbackProcessor(Stream::Id id) {
+void zmqnet::detail::CallbackProcessorManager::launchCallbackProcessor(const Stream::Id &id) {
 	auto lock = std::scoped_lock<std::mutex>(m_callbackLock);
 
 	if (m_waitingCallbackProcs.find(id) == m_waitingCallbackProcs.end()) {
@@ -471,7 +471,7 @@ void zmqnet::detail::CallbackProcessorManager::launchCallbackProcessor(Stream::I
 	}
 
 	// Remove from waiting
-	auto func = std::move(m_waitingCallbackProcs.at(id));
+	auto func = m_waitingCallbackProcs.at(id);
 	m_waitingCallbackProcs.erase(id);
 
 	// Reconstitute stream object
