@@ -352,7 +352,6 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			stream.communicatorId, stream.id, descendants_bitset.to_string().c_str(), started_descendants.to_string().c_str());
 		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
-		assert(reader.getTag() == stream.communicatorId);
 		assert(response.isStream() && (response.getStream().getStreamId() == stream.id));
 
 		// Add to started descendants
@@ -521,14 +520,12 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 	// Store stream task sockets
 	struct hash_Stream {
 		size_t operator() (zmqnet::Stream const& stream) const {
-			auto communicator_id_hash = std::hash<zmqnet::Communicator::Id>{}(stream.communicatorId);
-			auto stream_id_hash = std::hash<zmqnet::Stream::Id>{}(stream.id);
-			return communicator_id_hash + (net::communicator_ids::AllNodes + 1) * stream_id_hash;
+			return std::hash<zmqnet::Stream::Id>{}(stream.id);
 		}
 	};
 	struct compare_Stream {
 		bool operator() (zmqnet::Stream const& lhs, zmqnet::Stream const& rhs) const {
-			return (lhs.communicatorId == rhs.communicatorId) && (lhs.id == rhs.id);
+			return lhs.id == rhs.id;
 		}
 	};
 	auto taskSockets = std::unordered_map<zmqnet::Stream, zmq::socket_t, hash_Stream, compare_Stream>{};
@@ -556,7 +553,26 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 			for (auto&& [stream, task_socket] : taskSockets) {
 				log("commnode: relay exit message to stream %d in communicator %02x\n",
 					stream.id, stream.communicatorId);
-				net::send_MessageReader_copy(task_socket, reader);
+
+				// when using subsets, it's possible that the thread associated
+				// with the task socket that we're looking at in this thread has 
+				// already exited and trying to send it another exit would block 
+				// forever. we use a poller_t to quickly check if it's still alive.
+
+				auto poller = zmq::poller_t<>{};
+				poller.add(task_socket, zmq::event_flags::pollout);
+				// the endpoint is not a socket on another machine, it is another thread
+				// right here in this process. if it's not ready in 10ms, it never will be.
+				const auto timeout = std::chrono::milliseconds{10};
+				std::vector<zmq::poller_t<>::event_type> pollout(1); // to hold results of poll
+
+				if (poller.wait_all(pollout, timeout)) {
+					// receiving end is ready
+					net::send_MessageReader_copy(task_socket, reader);
+				} else {
+					// receiving end is not ready, possibly already gone
+					log("commnode: WARNING: response_distributor exit message timed out. assuming stream already exited. \n");
+				}
 			}
 
 			// Add to exited descendants
@@ -1179,7 +1195,7 @@ cleanup_main:
 			, all_descendants.compressed.size()
 		});
 
-		log("notifying parent of exit\n");
+		log("notifying parent of exit (%s)\n", all_descendants.to_string().c_str());
 		net::send_MessageBuilder(upstream.data_socket, net::communicator_ids::AllNodes, builder);
 	}
 

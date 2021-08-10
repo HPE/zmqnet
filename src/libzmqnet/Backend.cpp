@@ -333,7 +333,8 @@ static void callback_processor(zmq::context_t& ctx, std::string resultEndpoint, 
 
 static zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket,
 	std::string resultEndpoint, int node_id,
-	std::vector<unsigned char> const& node_bitset)
+	std::vector<unsigned char> const& node_bitset,
+	zmqnet::detail::CallbackProcessorManager &callbackProcManager)
 {
 	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
 
@@ -417,6 +418,12 @@ static zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& in
 			// Reconstitute stream object
 			auto const stream = zmqnet::Stream { .communicatorId = net::communicator_ids::AllNodes, .id = streamId };
 
+			// Activate thread
+			// It is assumed the callback has already been registered by the user.
+			log("backend %d: launching thread\n", node_id);
+			callbackProcManager.launchCallbackProcessor(streamId);
+
+			log("backend %d: recording task socket and sending ack to thread\n", node_id);
 			// Create task socket and store in stream task socket map
 			taskSockets.emplace_hint(idSocketPair, streamId,
 				async::make_task_socket(ctx, stream, std::move(reader)));
@@ -431,6 +438,65 @@ static zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& in
 
 } // workers
 
+zmqnet::detail::CallbackProcessorManager::CallbackProcessorManager(zmq::context_t &ctx, const std::string &collectorEndpoint, const int &nodeId, const std::vector<unsigned char> &nodeBitset)
+	: m_ctx{ctx}
+	, m_collectorEndpoint{collectorEndpoint}
+	, m_nodeId{nodeId}
+	, m_nodeBitset{nodeBitset}
+{}
+
+void zmqnet::detail::CallbackProcessorManager::registerCallback(Stream::Id const& streamId, CallbackFunc callbackFunc) {
+	// Ensure stream not registered
+	if (callbackProcessorExists(streamId)) {
+		throw std::runtime_error("asynchronous callback already registered for stream ID " + std::to_string(streamId));
+	}
+
+	auto lock = std::scoped_lock<std::mutex>(m_callbackLock);
+
+	// Set callback processor as ready
+	m_waitingCallbackProcs.emplace(streamId, std::move(callbackFunc));
+}
+
+bool zmqnet::detail::CallbackProcessorManager::callbackProcessorExists(const Stream::Id &id) {
+	auto lock = std::scoped_lock<std::mutex>(m_callbackLock);
+	return m_waitingCallbackProcs.find(id) != m_waitingCallbackProcs.end()
+		|| m_runningCallbackProcs.find(id) != m_runningCallbackProcs.end();
+}
+
+void zmqnet::detail::CallbackProcessorManager::launchCallbackProcessor(const Stream::Id &id) {
+	auto lock = std::scoped_lock<std::mutex>(m_callbackLock);
+
+	if (m_waitingCallbackProcs.find(id) == m_waitingCallbackProcs.end()) {
+		throw std::runtime_error("tried to launch a callback processor with a streamId that was never registered.");
+	}
+
+	// Remove from waiting
+	auto func = m_waitingCallbackProcs.at(id);
+	m_waitingCallbackProcs.erase(id);
+
+	// Reconstitute stream object
+	auto const stream = zmqnet::Stream { .communicatorId = net::communicator_ids::AllNodes, .id = id };
+
+	// Launch worker thread
+	m_runningCallbackProcs.emplace(id, std::async(std::launch::async,
+		[](zmq::context_t& ctx, std::string collectorEndpoint, int node_id, std::vector<unsigned char> const& node_bitset, zmqnet::Stream stream, CallbackFunc &&callbackFunc) {
+			return workers::callback_processor(ctx, std::move(collectorEndpoint), node_id, node_bitset, stream, std::move(callbackFunc));
+		}, std::ref(m_ctx), m_collectorEndpoint, m_nodeId, m_nodeBitset, stream, std::move(func)));
+}
+
+void zmqnet::detail::CallbackProcessorManager::waitForExit() {
+	auto lock = std::scoped_lock<std::mutex>(m_callbackLock);
+
+	for (auto&& [streamId, callback_processor] : m_runningCallbackProcs) {
+		(void)callback_processor.get();
+	}
+}
+
+bool zmqnet::detail::CallbackProcessorManager::streamIsActive(const Stream::Id &id) const {
+	auto lock = std::scoped_lock<std::mutex>(m_callbackLock);
+	return m_runningCallbackProcs.find(id) != m_runningCallbackProcs.end();
+}
+
 zmqnet::AsyncBackend::AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, node_id}
 	, m_ctx{}
@@ -438,9 +504,9 @@ zmqnet::AsyncBackend::AsyncBackend(std::string const& upstreamControlEndpoint, s
 	, m_collectorEndpoint{"inproc://" + net::generate_uuid()}
 	, m_collectorSocket{m_ctx, zmq::socket_type::push}
 	, m_responseCollector{}
-
-	, m_callbackProcessors{}
 	, m_commandDistributor{}
+
+	, m_callbackProcManager(m_ctx, m_collectorEndpoint, m_node_id, m_node_bitset)
 {
 	// Connect for message injection by main thread
 	m_collectorSocket.connect(m_collectorEndpoint);
@@ -453,19 +519,7 @@ zmqnet::AsyncBackend::~AsyncBackend()
 
 void zmqnet::AsyncBackend::registerCallback(zmqnet::Stream::Id const& streamId, zmqnet::AsyncBackend::CallbackFunc callbackFunc)
 {
-	// Ensure stream not registered
-	if (m_callbackProcessors.find(streamId) != m_callbackProcessors.end()) {
-		throw std::runtime_error("asynchronous callback already registered for stream ID " + std::to_string(streamId));
-	}
-
-	// Reconstitute stream object
-	auto const stream = zmqnet::Stream { .communicatorId = net::communicator_ids::AllNodes, .id = streamId };
-
-	// Launch worker thread
-	m_callbackProcessors.emplace(streamId, std::async(std::launch::async,
-		[](zmq::context_t& ctx, std::string collectorEndpoint, int node_id, std::vector<unsigned char> const& node_bitset, zmqnet::Stream const& stream, CallbackFunc&& callbackFunc) {
-			return workers::callback_processor(ctx, std::move(collectorEndpoint), node_id, node_bitset, stream, std::move(callbackFunc));
-		}, std::ref(m_ctx), m_collectorEndpoint, m_node_id, m_node_bitset, stream, std::move(callbackFunc)));
+	m_callbackProcManager.registerCallback(streamId, callbackFunc);
 }
 
 void zmqnet::AsyncBackend::notifyReady()
@@ -481,16 +535,16 @@ void zmqnet::AsyncBackend::notifyReady()
 
 	// Launch response distributor task, moving control of upstream control socket
 	m_commandDistributor = std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, std::string resultEndpoint, int node_id, std::vector<unsigned char> const& node_bitset) {
-			return workers::command_distributor(ctx, std::move(input_socket), std::move(resultEndpoint), node_id, node_bitset);
+		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, std::string resultEndpoint, int node_id, std::vector<unsigned char> const& node_bitset, zmqnet::detail::CallbackProcessorManager &cpm) {
+			return workers::command_distributor(ctx, std::move(input_socket), std::move(resultEndpoint), node_id, node_bitset, cpm);
 		}, std::ref(m_ctx), std::move(m_upstream->control_socket), m_collectorEndpoint, m_node_id,
-			m_node_bitset);
+			m_node_bitset, std::ref(m_callbackProcManager));
 }
 
 void zmqnet::AsyncBackend::sendResult(const Stream::Id &streamId, zmqnet::ByteArray &&result) 
 {
 	// ensure streamId is valid
-	if (m_callbackProcessors.find(streamId) == m_callbackProcessors.end()) {
+	if (!m_callbackProcManager.streamIsActive(streamId)) {
 		log("backend %d: tried to directly send result to stream %d, but it doesn't exist. sending nothing.\n", m_node_id, streamId);
 		return;
 	}
@@ -522,9 +576,7 @@ void zmqnet::AsyncBackend::waitForExit()
 
 	// Wait for stream workers
 	log("backend %d: waiting for stream workers\n", m_node_id);
-	for (auto&& [streamId, callback_processor] : m_callbackProcessors) {
-		(void)callback_processor.get();
-	}
+	m_callbackProcManager.waitForExit();
 
 	// Send exit acknowledgement to parent
 	auto builder = capnp::MallocMessageBuilder{};
