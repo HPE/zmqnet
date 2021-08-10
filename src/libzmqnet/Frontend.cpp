@@ -491,29 +491,36 @@ zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmqnet::NodeSe
 		throw std::runtime_error("expected non-empty node set");
 	}
 
+	// Pack node set into bitset
+	auto node_ids = std::set<size_t>{};
+	for (auto&& node : nodes) {
+		node_ids.insert(m_nodeIdMap.at(node));
+	}
+
+	return createCommunicator(node_ids);
+}
+
+zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(const std::set<size_t> &ranksSet) {
+	if (ranksSet.empty()) {
+		throw std::runtime_error("expected non-empty ranks set");
+	}
+
 	// Create subset create command message
 	auto builder = capnp::MallocMessageBuilder{};
 	auto communicatorCommand = builder.initRoot<NetworkCommand>().initCommunicator();
 	auto const communicatorId = m_next_communicatorId++;
 	communicatorCommand.setCommunicatorId(communicatorId);
 
-	// Pack node set into bitset
-	{ auto node_ids = std::set<size_t>{};
-		for (auto&& node : nodes) {
-			node_ids.insert(m_nodeIdMap.at(node));
-		}
+	// Compress bitset into lrle bitset
+	auto const ranksSet_bitset = lrle_bitset{ranksSet};
 
-		// Compress bitset into lrle bitset
-		auto const node_ids_bitset = lrle_bitset{node_ids};
-
-		communicatorCommand.setNodes(kj::ArrayPtr<kj::byte const>
-			{ (unsigned char const*)node_ids_bitset.compressed.data()
-			, node_ids_bitset.compressed.size()
-		});
-	}
+	communicatorCommand.setNodes(kj::ArrayPtr<kj::byte const>
+		{ (unsigned char const*)ranksSet_bitset.compressed.data()
+		, ranksSet_bitset.compressed.size()
+	});
 
 	// Send communicator create command
-	log("registering communicator %02x\n", communicatorId);
+	log("registering communicator %02x (%s)\n", communicatorId, ranksSet_bitset.to_string().c_str());
 	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllNodes, builder);
 
 	// Return new communicator handle
@@ -591,6 +598,25 @@ zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(zmqnet::NodeSet 
 
 	// Send communicator create command
 	auto const communicator = createCommunicator(nodes);
+
+	// Wait for acknowledgement
+	auto reader = net::recv_MessageReader(m_downstream->data_socket);
+	auto response = reader.getRoot<NetworkResponse>();
+	assert(response.isCommunicator() && (response.getCommunicator().getCommunicatorId() == communicator.id));
+
+	auto const communicator_ms = get_milliseconds() - start_ms;
+	log("communicator registered RT: %5ldms\n", communicator_ms);
+
+	// Return new communicator handle
+	return communicator;
+}
+
+zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(const RankSet &ranks)
+{
+	auto const start_ms = get_milliseconds();
+
+	// Send communicator create command
+	auto const communicator = createCommunicator(ranks);
 
 	// Wait for acknowledgement
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
