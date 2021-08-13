@@ -466,7 +466,6 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 			// Check stream ID and user result
 			} else {
-				assert(reader.getTag() == stream.communicatorId);
 				assert(response.isUser());
 				assert(response.getUser().getStreamId() == stream.id);
 				log("commnode %02x %d: user content length: %lu\n",
