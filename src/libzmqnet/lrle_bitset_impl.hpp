@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 #include <set>
+#include <string>
+#include <stdexcept>
 
 // For a description of the LRLE bitset implementation, see
 // https://connect.us.cray.com/confluence/display/DTOOLS/Rank+Bitset+Representations#RankBitsetRepresentations-2.LimitedRunLengthEncoding
