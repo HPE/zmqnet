@@ -14,9 +14,9 @@
 
 #include "lrle_bitset_impl.hpp"
 
-zmqnet::detail::Backend::Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
+zmqnet::detail::Backend::Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, std::string const& upstreamPublicKey, int node_id)
 	: m_ctx{}
-	, m_upstream{std::make_unique<net::UpstreamLink>(m_ctx, upstreamControlEndpoint, upstreamDataEndpoint)}
+	, m_upstream{std::make_unique<net::UpstreamLink>(m_ctx, upstreamControlEndpoint, upstreamDataEndpoint, upstreamPublicKey)}
 	, m_node_id{node_id}
 	, m_node_bitset{std::move(lrle_bitset{(size_t)node_id}.compressed)}
 {
@@ -101,8 +101,8 @@ void zmqnet::detail::Backend::sendResult(zmqnet::Stream const& stream, char cons
 
 // Synchronous Backend
 
-zmqnet::SyncBackend::SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
-	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, node_id}
+zmqnet::SyncBackend::SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, std::string const& upstreamPublicKey, int node_id)
+	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, upstreamPublicKey, node_id}
 {
 	// Backend instantiated, notify network ready
 	notifyReady();
@@ -497,8 +497,8 @@ bool zmqnet::detail::CallbackProcessorManager::streamIsActive(const Stream::Id &
 	return m_runningCallbackProcs.find(id) != m_runningCallbackProcs.end();
 }
 
-zmqnet::AsyncBackend::AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
-	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, node_id}
+zmqnet::AsyncBackend::AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, std::string const& upstreamPublicKey, int node_id)
+	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, upstreamPublicKey, node_id}
 	, m_ctx{}
 
 	, m_collectorEndpoint{"inproc://" + net::generate_uuid()}

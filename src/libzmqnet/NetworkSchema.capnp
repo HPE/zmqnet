@@ -4,6 +4,7 @@ struct TopologyRequest {
   nodeControlEndpoint @0 :Text;
   nodeDataEndpoint @1 :Text;
   nodeHostname @2 :Text;
+  nodePublicKey @3 :Text;
 }
 
 struct TopologyResponse {
@@ -11,8 +12,9 @@ struct TopologyResponse {
 
   parentControlEndpoint @1 :Text;
   parentDataEndpoint @2 :Text;
+  parentPublicKey @3 :Text;
 
-  numChildren @3 :Int32;
+  numChildren @4 :Int32;
 }
 
 struct NetworkCommand {

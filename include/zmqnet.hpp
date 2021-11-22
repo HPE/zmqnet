@@ -147,18 +147,19 @@ protected: // derived class interface
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv)
 	{
-		if (argc < 5) {
-			throw std::runtime_error("expected 4 network param arguments");
+		if (argc < 6) {
+			throw std::runtime_error("expected 5 network param arguments");
 		}
 		return std::make_tuple(
 			std::string{argv[1]}, // Upstream control endpoint
 			std::string{argv[2]}, // Upstream data endpoint
-			std::stoi(argv[3]),   // Node ID
-			argc - 4,             // Leaf binary argc
-			argv + 4);            // Leaf binary argv
+			std::string{argv[3]}, // Upstream public key
+			std::stoi(argv[4]),   // Node ID
+			argc - 5,             // Leaf binary argc
+			argv + 5);            // Leaf binary argv
 	}
 
-	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
+	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, std::string const& upstreamPublicKey, int node_id);
 	~Backend();
 
 	void notifyReady();
@@ -342,7 +343,7 @@ public: // interface
 	// Connect to the communication tree using network parameters extracted by
 	// zmqnet::Backend::getParams(argc, argv) where argc and argv are the actual arguments provided
 	// to the user binary calling SyncBackend.
-	SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
+	SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, std::string const& upstreamPublicKey, int node_id);
 
 	// Block and wait for the next incoming command. The Stream on which this command was received
 	// is provided, containing the user-provided Stream ID that was used when creating the Stream
@@ -400,7 +401,7 @@ public: // interface
 
 	// The constructor takes the same network parameters as the synchronous variant, as extracted
 	// from the leaf binary arguments by zmqnet::Backend::getParams.
-	AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
+	AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, std::string const& upstreamPublicKey, int node_id);
 	~AsyncBackend();
 
 	// Before initialization of the async. backend can complete, callbacks must be registered for
