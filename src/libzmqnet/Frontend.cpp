@@ -53,7 +53,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 		::fclose(authFile.get());
 
 		// Add auth file to manifest
-		if (cti_addManifestFile(manifest_id, authFile.name())) {
+		if (cti_addManifestFile(manifest_id, authFile.path())) {
 			throw std::runtime_error("failed to add authfile to manifest: " +
 				std::string{cti_error_str()});
 		}
@@ -72,7 +72,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
 
 		// Set authentication type argument
-		commnodeArgv.add(CommnodeArgv::AuthType, std::to_string((int)auth));
+		commnodeArgv.add(CommnodeArgv::AuthType, std::to_string(static_cast<int>(auth)));
 
 		// Add keyfile path if CURVE set
 		if (auth == zmqnet::Auth::Curve) {
@@ -80,7 +80,9 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 			// Generate path to auth file
 			auto fileDir = std::unique_ptr<char, decltype(&::free)> {
 				cti_getSessionFileDir(session_id), ::free };
-			auto const authFilePath = std::string{fileDir.get()} + "/" + authFile.name();
+			auto const authFileName = std::string{
+				::basename(::strdup(authFile.path()))};
+			auto const authFilePath = std::string{fileDir.get()} + "/" + authFileName;
 			commnodeArgv.add(CommnodeArgv::AuthFile, authFilePath);
 		}
 

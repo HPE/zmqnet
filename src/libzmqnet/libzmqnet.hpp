@@ -88,13 +88,30 @@ static inline void enable_individual_logfile(std::string filename = "")
 
 struct temp_file
 {
-	std::unique_ptr<char, decltype(&::free)> temp_name;
+	std::unique_ptr<char, decltype(&::free)> temp_path;
 	int fd;
 	FILE* file;
 
+	static auto generate_template()
+	{
+		// If TMPDIR is not set, or formatting fails, use current directory
+		auto result = decltype(temp_file::temp_path) {
+			::strdup("./temp-XXXXXX"), ::free };
+
+		// Try in TMPDIR
+		if (auto const tmp_dir = ::getenv("TMPDIR")) {
+			char *raw = nullptr;
+			if (::asprintf(&raw, "%s/temp-XXXXXX", tmp_dir) > 0) {
+				result.reset(raw);
+			}
+		}
+
+		return result;
+	}
+
 	temp_file()
-		: temp_name{::strdup("./temp-XXXXXX"), ::free}
-		, fd{::mkstemp(temp_name.get())}
+		: temp_path{generate_template()}
+		, fd{::mkstemp(temp_path.get())}
 		, file{::fdopen(fd, "w")}
 	{
 		if (fd < 0) {
@@ -104,7 +121,7 @@ struct temp_file
 	}
 
 	auto get() { return file; }
-	auto name() const { return temp_name.get(); }
+	auto path() const { return temp_path.get(); }
 	void close()
 	{
 		if (file != nullptr) {
@@ -115,16 +132,16 @@ struct temp_file
 	void reset()
 	{
 		close();
-		if (temp_name) {
-			::unlink(temp_name.get());
-			temp_name.reset();
+		if (temp_path) {
+			::unlink(temp_path.get());
+			temp_path.reset();
 		}
 	}
 
 	~temp_file() { reset(); }
 
 	temp_file(temp_file&& expiring)
-		: temp_name{std::move(expiring.temp_name)}
+		: temp_path{std::move(expiring.temp_path)}
 		, fd{expiring.fd}
 		, file{expiring.file}
 	{
@@ -281,7 +298,7 @@ public:
 	// Log messages coming from upstream into control socket
 	void logIncoming(zmq::socket_t& control_socket, std::string const& controlEndpoint)
 	{
-		auto const proxyOutgoingEndpoint = std::string{"inproc://" + generate_uuid()};
+		auto const proxyOutgoingEndpoint = "inproc://" + generate_uuid();
 
 		// Messages arrive from upstream control endpoint and flow into proxy
 		proxy_incoming.connect(controlEndpoint);
@@ -295,7 +312,7 @@ public:
 	// Return real control endpoint
 	std::string logOutgoing(zmq::socket_t& control_socket, std::string const& controlEndpoint)
 	{
-		auto const proxyIncomingEndpoint = std::string{"inproc://" + generate_uuid()};
+		auto const proxyIncomingEndpoint = "inproc://" + generate_uuid();
 
 		// Messages are sent to downstream control endpoint and flow into proxy
 		control_socket.bind(proxyIncomingEndpoint);
