@@ -1,0 +1,20 @@
+[submodule "external/hpc-pe-cdst-capnproto"]
+	path = external/hpc-pe-cdst-capnproto
+	url = git@github.hpe.com:hpe/hpc-pe-cdst-capnproto.git
+	branch = cdst-external
+[submodule "external/hpc-pe-cdst-lrle_bitset"]
+	path = external/hpc-pe-cdst-lrle_bitset
+	url = git@github.hpe.com:hpe/hpc-pe-cdst-lrle_bitset.git
+[submodule "external/hpc-pe-cdst-cdst_build_library"]
+	path = external/hpc-pe-cdst-cdst_build_library
+	url = git@github.hpe.com:hpe/hpc-pe-cdst-cdst_build_library.git
+[submodule "tests/hpc-pe-cdst-googletest"]
+	path = tests/hpc-pe-cdst-googletest
+	url = git@github.hpe.com:hpe/hpc-pe-cdst-googletest.git
+	branch = cdst_external
+[submodule "external/hpc-pe-cdst-libzmq"]
+	path = external/hpc-pe-cdst-libzmq
+	url = git@github.hpe.com:hpe/hpc-pe-cdst-libzmq.git
+[submodule "external/hpc-pe-cdst-cppzmq"]
+	path = external/hpc-pe-cdst-cppzmq
+	url = git@github.hpe.com:hpe/hpc-pe-cdst-cppzmq.git
