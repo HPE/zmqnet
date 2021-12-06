@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2010-2020 Hewlett Packard Enterprise Development LP.
+# Copyright 2010-2021 Hewlett Packard Enterprise Development LP.
 #
 # This build script is used when zmqnet is being built as a dependency of another
 # product. It has the ability to specify the installation directory as an input
@@ -13,8 +13,9 @@ echo "#            Setup environment.            #"
 echo "############################################"
 
 top_level=$PWD
+githubName=hpc-pe-cdst
 
-source ./external/cdst_build_library/build_lib
+source ./external/${githubName}-cdst_build_library/build_lib
 
 setup_modules
 
@@ -23,6 +24,8 @@ check_exit_status
 
 module load cray-cti-devel
 check_exit_status
+
+module list
 
 # Create install directory
 source $top_level/release_versioning
@@ -43,13 +46,13 @@ echo "#               Building libzmq            #"
 echo "############################################"
 
 # ensure submodule is checked out
-if [ ! -f $top_level/external/libzmq/README.md ]
+if [ ! -f $top_level/external/${githubName}-libzmq/README.md ]
 then
     echo "libzmq submodule not checked out..."
     exit 1
 fi
 
-pushd $top_level/external/libzmq
+pushd $top_level/external/${githubName}-libzmq
 check_exit_status
 
 autoreconf -ifv
@@ -72,13 +75,13 @@ echo "#               Installing cppzmq          #"
 echo "############################################"
 
 # ensure submodule is checked out
-if [ ! -f $top_level/external/cppzmq/README.md ]
+if [ ! -f $top_level/external/${githubName}-cppzmq/README.md ]
 then
     echo "cppzmq submodule not checked out..."
     exit 1
 fi
 
-pushd $top_level/external/cppzmq
+pushd $top_level/external/${githubName}-cppzmq
 check_exit_status
 
 rm -rf build
@@ -107,12 +110,12 @@ echo "#           Building Cap'n Proto           #"
 echo "############################################"
 
 # ensure submodule is checked out
-if [[ ! -f $top_level/external/capnproto/README.md ]]; then
+if [[ ! -f $top_level/external/${githubName}-capnproto/README.md ]]; then
     echo "capnproto submodule not checked out..."
     exit 1
 fi
 
-pushd $top_level/external/capnproto/c++
+pushd $top_level/external/${githubName}-capnproto/c++
 check_exit_status
 
 autoreconf -ifv
@@ -135,12 +138,12 @@ echo "#           Building LRLE Bitset           #"
 echo "############################################"
 
 # ensure submodule is checked out
-if [[ ! -f $top_level/external/lrle_bitset/configure.ac ]]; then
+if [[ ! -f $top_level/external/${githubName}-lrle_bitset/configure.ac ]]; then
     echo "lrle_bitset submodule not checked out..."
     exit 1
 fi
 
-pushd $top_level/external/lrle_bitset
+pushd $top_level/external/${githubName}-lrle_bitset
 check_exit_status
 
 autoreconf -ifv
