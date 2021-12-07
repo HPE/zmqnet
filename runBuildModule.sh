@@ -13,9 +13,8 @@ echo "#            Setup environment.            #"
 echo "############################################"
 
 top_level=$PWD
-githubName=hpc-pe-cdst
 
-source ./external/${githubName}-cdst_build_library/build_lib
+source ./external/cdst_build_library/build_lib
 
 setup_modules
 
@@ -46,13 +45,13 @@ echo "#               Building libzmq            #"
 echo "############################################"
 
 # ensure submodule is checked out
-if [ ! -f $top_level/external/${githubName}-libzmq/README.md ]
+if [ ! -f $top_level/external/libzmq/README.md ]
 then
     echo "libzmq submodule not checked out..."
     exit 1
 fi
 
-pushd $top_level/external/${githubName}-libzmq
+pushd $top_level/external/libzmq
 check_exit_status
 
 autoreconf -ifv
@@ -75,13 +74,13 @@ echo "#               Installing cppzmq          #"
 echo "############################################"
 
 # ensure submodule is checked out
-if [ ! -f $top_level/external/${githubName}-cppzmq/README.md ]
+if [ ! -f $top_level/external/cppzmq/README.md ]
 then
     echo "cppzmq submodule not checked out..."
     exit 1
 fi
 
-pushd $top_level/external/${githubName}-cppzmq
+pushd $top_level/external/cppzmq
 check_exit_status
 
 rm -rf build
@@ -110,12 +109,12 @@ echo "#           Building Cap'n Proto           #"
 echo "############################################"
 
 # ensure submodule is checked out
-if [[ ! -f $top_level/external/${githubName}-capnproto/README.md ]]; then
+if [[ ! -f $top_level/external/capnproto/README.md ]]; then
     echo "capnproto submodule not checked out..."
     exit 1
 fi
 
-pushd $top_level/external/${githubName}-capnproto/c++
+pushd $top_level/external/capnproto/c++
 check_exit_status
 
 autoreconf -ifv
@@ -138,12 +137,12 @@ echo "#           Building LRLE Bitset           #"
 echo "############################################"
 
 # ensure submodule is checked out
-if [[ ! -f $top_level/external/${githubName}-lrle_bitset/configure.ac ]]; then
+if [[ ! -f $top_level/external/lrle_bitset/configure.ac ]]; then
     echo "lrle_bitset submodule not checked out..."
     exit 1
 fi
 
-pushd $top_level/external/${githubName}-lrle_bitset
+pushd $top_level/external/lrle_bitset
 check_exit_status
 
 autoreconf -ifv
