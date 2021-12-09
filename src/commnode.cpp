@@ -12,7 +12,6 @@
 #include <vector>
 #include <future>
 #include <thread>
-#include <fstream>
 #include <sstream>
 
 #include "zmqnet.hpp"
@@ -30,8 +29,6 @@
 // Parse user-provided arguments
 static auto parse_argv(int argc, char* const argv[])
 {
-	auto authFile = std::string{};
-	auto authType = zmqnet::Auth::None;
 	auto dealerEndpoint = std::string{};
 	auto nodeConnectionMap = std::string{};
 	auto packed_mode = false;
@@ -46,14 +43,6 @@ static auto parse_argv(int argc, char* const argv[])
 		if (c <= 0) { break; }
 
 		switch (c) {
-
-		case CA::AuthFile.val:
-			authFile = std::move(value);
-			break;
-
-		case CA::AuthType.val:
-			authType = (zmqnet::Auth)std::stoi(value);
-			break;
 
 		case CA::Packed.val:
 			packed_mode = true;
@@ -82,11 +71,7 @@ static auto parse_argv(int argc, char* const argv[])
 	if (leaf_argv[0] == nullptr) {
 		throw std::runtime_error("leaf binary not provided");
 	}
-	return std::make_tuple(
-		std::move(authFile), authType,
-		std::move(dealerEndpoint), std::move(nodeConnectionMap),
-		packed_mode, packed_node_id,
-		leaf_argc, leaf_argv);
+	return std::make_tuple(std::move(dealerEndpoint), std::move(nodeConnectionMap), packed_mode, packed_node_id, leaf_argc, leaf_argv);
 }
 
 // Parse node topology and parent connection data from argument string
@@ -95,7 +80,6 @@ static auto parseNodeConnectionMap(std::string&& nodeConnectionMap)
 	auto node_id = int{0};
 	auto parentControlEndpoint = std::string{};
 	auto parentDataEndpoint = std::string{};
-	auto parentPublicKey = std::string{};
 	auto commnode_children = int{};
 	auto commnode_subchildren = int{};
 
@@ -143,15 +127,14 @@ static auto parseNodeConnectionMap(std::string&& nodeConnectionMap)
 		}
 
 		// Split out parent connection data
-		auto [controlEndpoint, dataEndpoint, publicKey]
-			= cti::split::string<3>(std::move(nodeConnection), ' ');
+		auto [controlEndpoint, dataEndpoint]
+			= cti::split::string<2>(std::move(nodeConnection), ' ');
 		parentControlEndpoint = std::move(controlEndpoint);
 		parentDataEndpoint = std::move(dataEndpoint);
-		parentPublicKey = std::move(publicKey);
 	}
 
 cleanup_parseNodeConnectionMap:
-	return std::make_tuple(node_id, std::move(parentControlEndpoint), std::move(parentDataEndpoint), std::move(parentPublicKey), commnode_children, commnode_subchildren);
+	return std::make_tuple(node_id, std::move(parentControlEndpoint), std::move(parentDataEndpoint), commnode_children, commnode_subchildren);
 }
 
 namespace workers
@@ -730,10 +713,8 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 namespace launch
 {
 
-static auto fcfs(zmq::context_t& ctx,
-	zmqnet::Auth const& auth,
-	net::UpstreamLink& upstream, net::TcpDownstreamLink& downstream,
-	std::string const& dealerEndpoint, std::string const& dealerPublicKey)
+static auto fcfs(zmq::context_t& ctx, net::UpstreamLink& upstream, net::TcpDownstreamLink& downstream,
+	std::string const& dealerEndpoint)
 {
 	// Format externally-accessible endpoints
 	auto const hostname = cti_be_getNodeHostname();
@@ -741,13 +722,8 @@ static auto fcfs(zmq::context_t& ctx,
 	log("listening on %s / %s\n", controlEndpoint.c_str(), dataEndpoint.c_str());
 
 	// Send endpoints to topology server and receive parent's endpoints and number of network children
-	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::req};
-
-	// Authenticate and connect to topology server
-	if (auth == zmqnet::Auth::Curve) {
-		net::set_curve_client(dealer_socket, dealerPublicKey);
-	}
-	dealer_socket.connect(dealerEndpoint);
+	auto request_socket = zmq::socket_t{ctx, zmq::socket_type::req};
+	request_socket.connect(dealerEndpoint);
 	log("connected to topology server %s\n", dealerEndpoint.c_str());
 
 	// Create topology request message
@@ -756,21 +732,19 @@ static auto fcfs(zmq::context_t& ctx,
 		topologyRequest.setNodeHostname(hostname);
 		topologyRequest.setNodeControlEndpoint(controlEndpoint);
 		topologyRequest.setNodeDataEndpoint(dataEndpoint);
-		topologyRequest.setNodePublicKey(downstream.getPublicKey());
 
 		// Send this node's endpoints to topology server
-		net::send_MessageBuilder(dealer_socket, net::communicator_ids::AllNodes, builder);
+		net::send_MessageBuilder(request_socket, net::communicator_ids::AllNodes, builder);
 		log("registered endpoints with topology server\n");
 	}
 
 	// Receive this node's topology info from topology server
-	auto reader = net::recv_MessageReader(dealer_socket);
+	auto reader = net::recv_MessageReader(request_socket);
 	auto topologyResponse = reader.getRoot<TopologyResponse>();
-	log("topology server reported id %d parent %s / %s / %s, %d children\n",
+	log("topology server reported id %d parent %s / %s, %d children\n",
 		topologyResponse.getNodeId(),
 		topologyResponse.getParentControlEndpoint().cStr(),
 		topologyResponse.getParentDataEndpoint().cStr(),
-		topologyResponse.getParentPublicKey().cStr(),
 		topologyResponse.getNumChildren());
 
 	// Apply topology information
@@ -780,19 +754,15 @@ static auto fcfs(zmq::context_t& ctx,
 	// Connect to parent's endpoints
 	auto const& parentControlEndpoint = topologyResponse.getParentControlEndpoint();
 	auto const& parentDataEndpoint = topologyResponse.getParentDataEndpoint();
-	auto const& parentPublicKey = topologyResponse.getParentPublicKey();
 	log("connecting to parent %s / %s\n",
 		parentControlEndpoint.cStr(), parentDataEndpoint.cStr());
-	upstream.connect(parentControlEndpoint, parentDataEndpoint,
-		auth, parentPublicKey);
+	upstream.connect(parentControlEndpoint, parentDataEndpoint);
 
 	return std::make_tuple(node_id, num_children);
 }
 
-static void layered(zmq::context_t& ctx,
-	zmqnet::Auth const& auth,
-	net::UpstreamLink& upstream, net::TcpDownstreamLink& downstream,
-	std::string const& parentControlEndpoint, std::string const& parentDataEndpoint, std::string const& parentPublicKey,
+static void layered(net::UpstreamLink& upstream, net::TcpDownstreamLink& downstream,
+	std::string const& parentControlEndpoint, std::string const& parentDataEndpoint,
 	int num_subchildren)
 {
 	// Format externally-accessible endpoints
@@ -803,8 +773,7 @@ static void layered(zmq::context_t& ctx,
 	// Connect to parent's endpoints
 	log("connecting to parent %s / %s\n",
 		parentControlEndpoint.c_str(), parentDataEndpoint.c_str());
-	upstream.connect(parentControlEndpoint, parentDataEndpoint,
-		auth, parentPublicKey);
+	upstream.connect(parentControlEndpoint, parentDataEndpoint);
 
 	// Send endpoints to frontend
 	{ auto builder = capnp::MallocMessageBuilder{};
@@ -843,15 +812,12 @@ int main(int argc, char* const argv[])
 	auto ctx = zmq::context_t{};
 
 	// Read arguments from frontend
-	auto [authFile, authType,
-		dealerEndpoint, nodeConnectionMap,
-		packed_mode, packed_node_id,
-		leaf_argc, leaf_argv] = parse_argv(argc, argv);
+	auto [dealerEndpoint, nodeConnectionMap, packed_mode, packed_node_id, leaf_argc, leaf_argv] = parse_argv(argc, argv);
 
 	// Start network connection process
-	auto upstream = net::UpstreamLink{ctx, authType};
+	auto upstream = net::UpstreamLink{ctx};
 	net::subscribe_to_tag(upstream.control_socket, net::communicator_ids::AllNodes);
-	auto downstream = net::TcpDownstreamLink{ctx, authType};
+	auto downstream = net::TcpDownstreamLink{ctx};
 	auto num_children = int{};
 	auto node_id = int{};
 
@@ -866,28 +832,12 @@ int main(int argc, char* const argv[])
 	// Use either FCFS or leveled tree launch based on arguments
 	if (!dealerEndpoint.empty()) {
 
-		// Open and read authentication details if CURVE enabled
-		auto dealerPublicKey = std::string{};
-		if (!authFile.empty() && (authType == zmqnet::Auth::Curve)) {
-			auto authStream = std::ifstream{authFile.c_str()};
-			if (!std::getline(authStream, dealerPublicKey)) {
-				throw std::runtime_error("failed to read dealer public key from auth file at " + authFile);
-			}
-
-			log("read CURVE key %s\n", dealerPublicKey.c_str());
-		}
-
 		// Run FCFS launch procedure
-		log("launching FCFS %s\n", dealerPublicKey.c_str());
-		std::tie(node_id, num_children) = launch::fcfs(ctx, authType,
-			upstream, downstream,
-			dealerEndpoint, dealerPublicKey);
+		std::tie(node_id, num_children) = launch::fcfs(ctx, upstream, downstream, dealerEndpoint);
 
 	} else {
 		// Connect using leveled tree launch
-		auto [node_id_,
-			parentControlEndpoint, parentDataEndpoint, parentPublicKey,
-			num_children_, num_subchildren] = parseNodeConnectionMap(std::move(nodeConnectionMap));
+		auto [node_id_, parentControlEndpoint, parentDataEndpoint, num_children_, num_subchildren] = parseNodeConnectionMap(std::move(nodeConnectionMap));
 		node_id = node_id_;
 		num_children = num_children_;
 
@@ -897,10 +847,7 @@ int main(int argc, char* const argv[])
 		}
 
 		// Run layered launch procedure
-		log("launching leveled tree with %d children\n", num_children);
-		launch::layered(ctx, authType, upstream, downstream,
-			parentControlEndpoint, parentDataEndpoint,
-			parentPublicKey, num_subchildren);
+		launch::layered(upstream, downstream, parentControlEndpoint, parentDataEndpoint, num_subchildren);
 	}
 	log("%d network children\n", num_children);
 
@@ -919,7 +866,6 @@ int main(int argc, char* const argv[])
 		// Set up commnode daemon arguments with topology connection info and leaf process arguments
 		auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{argv[0]};
 		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
-		commnodeArgv.add(CommnodeArgv::AuthFile, authFile);
 		commnodeArgv.add(CommnodeArgv::Packed);
 		commnodeArgv.add(cti::Argv::Argument{"-n"});
 		commnodeArgv.add(cti::Argv::Argument{"-1"}); // Add seperately from option so it can be replaced via pointer
@@ -963,10 +909,8 @@ int main(int argc, char* const argv[])
 		// Prepend endpoints and node number to provided leaf arguments
 		auto completeLeafArgv = cti::ManagedArgv
 			{ leaf_argv[0]
-			, std::to_string((int)authType)
 			, controlEndpoint
 			, dataEndpoint
-			, downstream.getPublicKey()
 			, ""
 		};
 
@@ -977,7 +921,7 @@ int main(int argc, char* const argv[])
 
 		// Get pointer to node argument
 		auto complete_leaf_argv = completeLeafArgv.get();
-		auto node_arg_ptr = &complete_leaf_argv[5];
+		auto node_arg_ptr = &complete_leaf_argv[3];
 
 		for (int node = first_pe; node < first_pe + local_pes; node++) {
 			log("%d / %d\n", node - first_pe + 1, local_pes);

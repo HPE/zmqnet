@@ -14,15 +14,11 @@
 
 #include "lrle_bitset_impl.hpp"
 
-zmqnet::detail::Backend::Backend(BackendParams const& backendParams)
+zmqnet::detail::Backend::Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 	: m_ctx{}
-	, m_upstream{std::make_unique<net::UpstreamLink>(m_ctx,
-		backendParams.upstreamControlEndpoint,
-		backendParams.upstreamDataEndpoint,
-		backendParams.authType,
-		backendParams.upstreamPublicKey)}
-	, m_node_id{backendParams.node_id}
-	, m_node_bitset{std::move(lrle_bitset{(size_t)m_node_id}.compressed)}
+	, m_upstream{std::make_unique<net::UpstreamLink>(m_ctx, upstreamControlEndpoint, upstreamDataEndpoint)}
+	, m_node_id{node_id}
+	, m_node_bitset{std::move(lrle_bitset{(size_t)node_id}.compressed)}
 {
 	net::subscribe_to_tag(m_upstream->control_socket, net::communicator_ids::AllNodes);
 }
@@ -105,8 +101,8 @@ void zmqnet::detail::Backend::sendResult(zmqnet::Stream const& stream, char cons
 
 // Synchronous Backend
 
-zmqnet::SyncBackend::SyncBackend(detail::Backend::BackendParams const& backendParams)
-	: Backend{backendParams}
+zmqnet::SyncBackend::SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
+	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, node_id}
 {
 	// Backend instantiated, notify network ready
 	notifyReady();
@@ -501,8 +497,8 @@ bool zmqnet::detail::CallbackProcessorManager::streamIsActive(const Stream::Id &
 	return m_runningCallbackProcs.find(id) != m_runningCallbackProcs.end();
 }
 
-zmqnet::AsyncBackend::AsyncBackend(detail::Backend::BackendParams const& backendParams)
-	: Backend{backendParams}
+zmqnet::AsyncBackend::AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
+	: Backend{upstreamControlEndpoint, upstreamDataEndpoint, node_id}
 	, m_ctx{}
 
 	, m_collectorEndpoint{"inproc://" + net::generate_uuid()}

@@ -21,6 +21,9 @@
 
 #include "argv_defs.hpp"
 
+// External interface
+#include "zmqnet.hpp"
+
 // Internal helpers and classes
 #include "libzmqnet.hpp"
 
@@ -31,60 +34,22 @@ namespace launch
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
 // tree by the frontend.
 // Return max node ID, assigned node ID map
-static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
+static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
 	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
 
 	// Start topology socket to send its connection info to commnode daemon
 	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
-
-	// Create auth file for commnode
-	auto authFile = temp_file();
-
-	// Fill auth file if CURVE encryption enabled
-	if (auth == zmqnet::Auth::Curve) {
-
-		// Generate and set server keys for topology dealer socket
-		auto const dealerPub = net::set_curve_server(dealer_socket);
-
-		// Write dealer public key to file
-		::fprintf(authFile.get(), "%s\n", dealerPub.c_str());
-		::fclose(authFile.get());
-
-		// Add auth file to manifest
-		if (cti_addManifestFile(manifest_id, authFile.path())) {
-			throw std::runtime_error("failed to add authfile to manifest: " +
-				std::string{cti_error_str()});
-		}
-	}
-
-	// Bind topology dealer socket
 	dealer_socket.bind("tcp://*:*");
 	auto const dealerEndpoint = net::replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
-	log("topology dealer listening on %s\n",
-		dealerEndpoint.c_str());
+	log("topology dealer listening on %s\n", dealerEndpoint.c_str());
 
 	cti_addManifestBinary(manifest_id, commnodePath.c_str());
 
 	// Set up commnode daemon arguments with topology connection info and leaf process arguments
 	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
 		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
-
-		// Set authentication type argument
-		commnodeArgv.add(CommnodeArgv::AuthType, std::to_string(static_cast<int>(auth)));
-
-		// Add keyfile path if CURVE set
-		if (auth == zmqnet::Auth::Curve) {
-
-			// Generate path to auth file
-			auto fileDir = std::unique_ptr<char, decltype(&::free)> {
-				cti_getSessionFileDir(session_id), ::free };
-			auto const authFileName = std::string{
-				::basename(::strdup(authFile.path()))};
-			auto const authFilePath = std::string{fileDir.get()} + "/" + authFileName;
-			commnodeArgv.add(CommnodeArgv::AuthFile, authFilePath);
-		}
 
 		// Add provided leaf arguments
 		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
@@ -97,13 +62,10 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 		}
 	}
 
-	// Remove temporary auth file
-	authFile.reset();
-
 	// Set up fanout topology and wait for all children to connect
 	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
-	auto endpoints = std::vector<std::tuple<std::string, std::string, std::string>> {
-		{rootControlEndpoint, rootDataEndpoint, rootLink.getPublicKey()}
+	auto endpoints = std::vector<std::tuple<std::string, std::string>> {
+		{rootControlEndpoint, rootDataEndpoint}
 	};
 	auto num_nodes = hostsPlacement.numHosts;
 	endpoints.reserve(num_nodes + 1);
@@ -125,18 +87,8 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 			// Assign node ID
 			nodeIdMap[topologyRequest.getNodeHostname().cStr()] = node_id;
 
-			log("topology request: %s %s %s %s -> %d\n",
-				topologyRequest.getNodeHostname().cStr(),
-				topologyRequest.getNodeControlEndpoint().cStr(),
-				topologyRequest.getNodeDataEndpoint().cStr(),
-				topologyRequest.getNodePublicKey().cStr(),
-				node_id);
-
 			// Register topology information
-			endpoints.emplace_back(
-				topologyRequest.getNodeControlEndpoint().cStr(),
-				topologyRequest.getNodeDataEndpoint().cStr(),
-				topologyRequest.getNodePublicKey().cStr());
+			endpoints.emplace_back(topologyRequest.getNodeControlEndpoint().cStr(), topologyRequest.getNodeDataEndpoint().cStr());
 		}
 
 		// Determine the number of children of current node
@@ -150,17 +102,11 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 		{ auto builder = capnp::MallocMessageBuilder{};
 			auto topologyResponse = builder.initRoot<TopologyResponse>();
 
-			auto const& [parentControlEndpoint, parentDataEndpoint, parentPublicKey] = endpoints[cursor];
+			auto const& [parentControlEndpoint, parentDataEndpoint] = endpoints[cursor];
 			topologyResponse.setNodeId(node_id);
 			topologyResponse.setParentControlEndpoint(parentControlEndpoint);
 			topologyResponse.setParentDataEndpoint(parentDataEndpoint);
-			topologyResponse.setParentPublicKey(parentPublicKey);
 			topologyResponse.setNumChildren(num_children);
-
-			log("topology response: %s %s %s\n",
-				parentControlEndpoint.c_str(),
-				parentDataEndpoint.c_str(),
-				parentPublicKey.c_str());
 
 			// Send topology response
 			net::send_MessageBuilder(dealer_socket, net::communicator_ids::AllNodes, builder);
@@ -189,7 +135,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 }
 
 // Return max node ID, assigned node ID map
-static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
+static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
 	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
@@ -290,7 +236,7 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 }
 
 // Return max node ID, assigned node ID map
-static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
+static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout,
 	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto const num_levels = (hostsPlacement.numHosts > 1)
@@ -303,7 +249,7 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 	auto nodeHostnameMap = std::unordered_map<int, std::string>{};
 	auto hostnameNodeMap = std::unordered_map<std::string, int>{};
 	auto nodeParentMap = std::unordered_map<int, int>{};
-	auto nodeEndpointsMap = std::unordered_map<int, std::tuple<std::string, std::string, std::string>>{};
+	auto nodeEndpointsMap = std::unordered_map<int, std::tuple<std::string, std::string>>{};
 	auto nodeNumChildrenMap = std::unordered_map<int, int>{};
 	auto nodeNumSubchildrenMap = std::unordered_map<int, int>{};
 
@@ -319,7 +265,7 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 	// Set root node connection information
 	nodeHostnameMap[0] = hostsPlacement.hosts[0].hostname;
 	hostnameNodeMap[hostsPlacement.hosts[0].hostname] = 0;
-	nodeEndpointsMap.emplace(-1, std::make_tuple(rootControlEndpoint, rootDataEndpoint, rootLink.getPublicKey()));
+	nodeEndpointsMap.emplace(-1, std::make_tuple(rootControlEndpoint, rootDataEndpoint));
 	nodeParentMap[0] = -1;
 	nodeLevels[0].emplace_back(0);
 
@@ -402,11 +348,10 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 		// Serialize the connection information for each parent node
 		for (auto&& parent_node : parentNodes) {
 			assert(nodeEndpointsMap.find(parent_node) != nodeEndpointsMap.end());
-			auto [parentControlEndpoint, parentDataEndpoint, parentPublicKey] = nodeEndpointsMap[parent_node];
+			auto [parentControlEndpoint, parentDataEndpoint] = nodeEndpointsMap[parent_node];
 
 			nodeConnectionStream << std::move(parentControlEndpoint)
 				<< " " << std::move(parentDataEndpoint)
-				<< " " << std::move(parentPublicKey)
 				<< ",";
 		}
 
@@ -437,7 +382,7 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 			auto response = reader.getRoot<TopologyRequest>();
 			auto const node = hostnameNodeMap[response.getNodeHostname()];
 			log("node %2d %s register %s %s\n", node, response.getNodeHostname().cStr(), response.getNodeControlEndpoint().cStr(), response.getNodeDataEndpoint().cStr());
-			nodeEndpointsMap.emplace(node, std::make_tuple(response.getNodeControlEndpoint(), response.getNodeDataEndpoint(), response.getNodePublicKey()));
+			nodeEndpointsMap.emplace(node, std::make_tuple(response.getNodeControlEndpoint(), response.getNodeDataEndpoint()));
 		}
 
 		manifest_id = cti_createManifest(session_id);
@@ -471,7 +416,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	: m_max_node_id{}
 	, m_nodeIdMap{}
 	, m_ctx{}
-	, m_downstream{}
+	, m_downstream{std::make_unique<net::TcpDownstreamLink>(m_ctx)}
 	, m_next_communicatorId{1}
 {
 	auto const start_ms = get_milliseconds();
@@ -484,18 +429,12 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	;
 
 	log("launching commnode: %s\n", commnodePath.c_str());
-
+	
 	// Fetch node layout from CTI for network topology
 	auto hostsPlacement = std::unique_ptr<cti_hostsList_t, decltype(&cti_destroyHostsList)>
 		{ cti_getAppHostsPlacement(app_id)
 		, cti_destroyHostsList
 	};
-
-	// Instantiate downstream network link
-	auto const auth = (debug_enabled())
-		? zmqnet::Auth::Log
-		: zmqnet::Auth::Curve;
-	m_downstream = std::make_unique<net::TcpDownstreamLink>(m_ctx, auth);
 
 	auto const startup_ms = get_milliseconds();
 	log("launch started: %5ldms\n", startup_ms - start_ms);
@@ -503,16 +442,13 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	// Launch tree
 	if (topology.launch == Topology::Launch::Fcfs) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
-			launch::fcfsTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, commnodePath, *hostsPlacement);
+			launch::fcfsTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	} else if (topology.launch == Topology::Launch::Layered) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
-			launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, commnodePath,*hostsPlacement);
+			launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	} else if (topology.launch == Topology::Launch::Packed) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
-			launch::packedTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, commnodePath, *hostsPlacement);
+			launch::packedTree(m_ctx, *m_downstream, app_id, session_id, manifest_id, topology.fanout, leaf_argv, commnodePath, *hostsPlacement);
 	}
 
 	auto const launch_ms = get_milliseconds();

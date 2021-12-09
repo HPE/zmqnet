@@ -29,9 +29,6 @@
 #include <capnp/serialize-packed.h>
 #include "libzmqnet/NetworkSchema.capnp.h"
 
-// External interface
-#include "zmqnet.hpp"
-
 // Logging
 
 static inline auto get_milliseconds()
@@ -44,7 +41,11 @@ static inline auto get_milliseconds()
 static inline bool debug_enabled()
 {
 	static const auto _enabled = []() {
-		return bool{::getenv("CTI_DEBUG")};
+		if (::getenv("CTI_DEBUG")) {
+			return true;
+		}
+
+		return false;
 	}();
 	return _enabled;
 }
@@ -86,70 +87,6 @@ static inline void enable_individual_logfile(std::string filename = "")
 	}
 }
 
-struct temp_file
-{
-	std::unique_ptr<char, decltype(&::free)> temp_path;
-	int fd;
-	FILE* file;
-
-	static auto generate_template()
-	{
-		// If TMPDIR is not set, or formatting fails, use current directory
-		auto result = decltype(temp_file::temp_path) {
-			::strdup("./temp-XXXXXX"), ::free };
-
-		// Try in TMPDIR
-		if (auto const tmp_dir = ::getenv("TMPDIR")) {
-			char *raw = nullptr;
-			if (::asprintf(&raw, "%s/temp-XXXXXX", tmp_dir) > 0) {
-				result.reset(raw);
-			}
-		}
-
-		return result;
-	}
-
-	temp_file()
-		: temp_path{generate_template()}
-		, fd{::mkstemp(temp_path.get())}
-		, file{::fdopen(fd, "w")}
-	{
-		if (fd < 0) {
-			throw std::runtime_error("failed to create temporary file: " +
-				std::string{strerror(errno)});
-		}
-	}
-
-	auto get() { return file; }
-	auto path() const { return temp_path.get(); }
-	void close()
-	{
-		if (file != nullptr) {
-			::fclose(file);
-			file = nullptr;
-		}
-	}
-	void reset()
-	{
-		close();
-		if (temp_path) {
-			::unlink(temp_path.get());
-			temp_path.reset();
-		}
-	}
-
-	~temp_file() { reset(); }
-
-	temp_file(temp_file&& expiring)
-		: temp_path{std::move(expiring.temp_path)}
-		, fd{expiring.fd}
-		, file{expiring.file}
-	{
-		expiring.fd = -1;
-		expiring.file = nullptr;
-	}
-};
-
 namespace net
 {
 
@@ -173,44 +110,6 @@ struct shared_semaphore
 	}
 };
 
-// Authentication and encryption
-
-// Generate pair of public / private keys
-static inline auto generate_curve_keypair()
-{
-	char pub[41];
-	char sec[41];
-	errno = 0;
-	if (::zmq_curve_keypair(pub, sec)) {
-		throw std::runtime_error(strerror(errno));
-	}
-
-	return std::make_pair(std::string{pub}, std::string{sec});
-}
-
-// Generate client keys and connect to server
-static inline void set_curve_client(zmq::socket_t& socket,
-	std::string const& serverPub)
-{
-	auto const [clientPub, clientSec] = generate_curve_keypair();
-	socket.set(zmq::sockopt::curve_publickey, clientPub);
-	socket.set(zmq::sockopt::curve_secretkey, clientSec);
-	socket.set(zmq::sockopt::curve_serverkey, serverPub);
-}
-
-// Generate and set socket server keys
-static inline std::string set_curve_server(zmq::socket_t& socket)
-{
-	auto [serverPub, serverSec] = net::generate_curve_keypair();
-
-	socket.set(zmq::sockopt::curve_server, 1);
-	socket.set(zmq::sockopt::curve_publickey, serverPub);
-	socket.set(zmq::sockopt::curve_secretkey, serverSec);
-
-	return std::move(serverPub);
-}
-
-
 // ZMQ and network
 
 static inline std::string generate_uuid()
@@ -227,18 +126,24 @@ static inline std::string generate_uuid()
 class PubSubLoggingProxy
 {
 public:
+	bool capture_enabled;
 	std::string proxyCaptureEndpoint;
 	zmq::socket_t proxy_incoming, proxy_outgoing, proxy_capture;
 	std::thread proxyTask, captureTask;
 
 	PubSubLoggingProxy(zmq::context_t& ctx, std::string const& logLinePrefix)
-		: proxyCaptureEndpoint{"inproc://" + generate_uuid()}
+		: capture_enabled{debug_enabled()}
+		, proxyCaptureEndpoint{"inproc://" + generate_uuid()}
 		, proxy_incoming{ctx, zmq::socket_type::xsub}
 		, proxy_outgoing{ctx, zmq::socket_type::xpub}
 		, proxy_capture{ctx, zmq::socket_type::pair}
 		, proxyTask{}
 		, captureTask{}
 	{
+		if (!capture_enabled) {
+			return;
+		}
+
 		// Bind to first end of capture socket
 		proxy_capture.bind(proxyCaptureEndpoint);
 
@@ -298,120 +203,99 @@ public:
 	// Log messages coming from upstream into control socket
 	void logIncoming(zmq::socket_t& control_socket, std::string const& controlEndpoint)
 	{
-		auto const proxyOutgoingEndpoint = "inproc://" + generate_uuid();
+		if (capture_enabled) {
+			auto const proxyOutgoingEndpoint = std::string{"inproc://" + generate_uuid()};
 
-		// Messages arrive from upstream control endpoint and flow into proxy
-		proxy_incoming.connect(controlEndpoint);
+			// Messages arrive from upstream control endpoint and flow into proxy
+			proxy_incoming.connect(controlEndpoint);
 
-		// Messages leave proxy and are sent to downstream control socket
-		proxy_outgoing.bind(proxyOutgoingEndpoint);
-		control_socket.connect(proxyOutgoingEndpoint);
+			// Messages leave proxy and are sent to downstream control socket
+			proxy_outgoing.bind(proxyOutgoingEndpoint);
+			control_socket.connect(proxyOutgoingEndpoint);
+
+		// Capture disabled, connect directly
+		} else {
+			control_socket.connect(controlEndpoint);
+		}
 	}
 
 	// Log messages originating from control socket downstream
 	// Return real control endpoint
 	std::string logOutgoing(zmq::socket_t& control_socket, std::string const& controlEndpoint)
 	{
-		auto const proxyIncomingEndpoint = "inproc://" + generate_uuid();
+		if (capture_enabled) {
+			auto const proxyIncomingEndpoint = std::string{"inproc://" + generate_uuid()};
 
-		// Messages are sent to downstream control endpoint and flow into proxy
-		control_socket.bind(proxyIncomingEndpoint);
-		proxy_incoming.connect(proxyIncomingEndpoint);
+			// Messages are sent to downstream control endpoint and flow into proxy
+			control_socket.bind(proxyIncomingEndpoint);
+			proxy_incoming.connect(proxyIncomingEndpoint);
 
-		// Messages leave proxy and are sent to downstream control endpoint
-		proxy_outgoing.bind(controlEndpoint);
+			// Messages leave proxy and are sent to downstream control endpoint
+			proxy_outgoing.bind(controlEndpoint);
 
-		return proxy_outgoing.get(zmq::sockopt::last_endpoint);
+			return proxy_outgoing.get(zmq::sockopt::last_endpoint);
+
+		// Capture disabled, bind directly
+		} else {
+			control_socket.bind(controlEndpoint);
+			return control_socket.get(zmq::sockopt::last_endpoint);
+		}
 	}
 
 	~PubSubLoggingProxy()
 	{
 		// Join proxy and capture threads
-		captureTask.join();
-		proxyTask.join();
+		if (capture_enabled) {
+			captureTask.join();
+			proxyTask.join();
+		}
 	}
 };
 
 class UpstreamLink
 {
 public:
-	std::unique_ptr<PubSubLoggingProxy> loggingProxy;
+	PubSubLoggingProxy loggingProxy;
 	zmq::socket_t control_socket, data_socket;
 
-	void connect(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint,
-		zmqnet::Auth const& auth, std::string const& upstreamPublicKey)
+	void connect(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
 	{
-		// Set key data for control / data sockets
-		if (auth == zmqnet::Auth::Curve) {
-			net::set_curve_client(control_socket, upstreamPublicKey);
-			net::set_curve_client(data_socket, upstreamPublicKey);
-		}
-
-		// Set up control message logging proxy if logging enabled
-		if (auth == zmqnet::Auth::Log) {
-			loggingProxy->logIncoming(control_socket, upstreamControlEndpoint);
-
-		// Connect control directly to upstream socket
-		} else {
-			control_socket.connect(upstreamControlEndpoint);
-		}
-
-		// Connect data socket
+		// Connect to upstream sockets
+		loggingProxy.logIncoming(control_socket, upstreamControlEndpoint);
 		data_socket.connect(upstreamDataEndpoint);
 	}
 
-	UpstreamLink(zmq::context_t& ctx, zmqnet::Auth const& auth)
-		: loggingProxy{(auth == zmqnet::Auth::Log)
-			? std::make_unique<PubSubLoggingProxy>(ctx, "receiving")
-			: nullptr }
+	UpstreamLink(zmq::context_t& ctx)
+		: loggingProxy{ctx, "receiving"}
 		, control_socket{ctx, zmq::socket_type::sub}
 		, data_socket{ctx, zmq::socket_type::push}
 	{}
 
 	UpstreamLink(zmq::context_t& ctx,
-		std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint,
-		zmqnet::Auth const& auth, std::string const& upstreamPublicKey)
-		: UpstreamLink{ctx, auth}
+		std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint)
+		: UpstreamLink{ctx}
 	{
-		connect(upstreamControlEndpoint, upstreamDataEndpoint, auth, upstreamPublicKey);
+		connect(upstreamControlEndpoint, upstreamDataEndpoint);
 	}
 };
 
 class DownstreamLink
 {
 public:
-	std::unique_ptr<PubSubLoggingProxy> loggingProxy;
+	PubSubLoggingProxy loggingProxy;
 
 	std::string controlEndpoint, dataEndpoint;
 	zmq::socket_t control_socket, data_socket;
 
 	DownstreamLink(zmq::context_t& ctx,
-		std::string const& controlEndpoint_, std::string const& dataEndpoint_,
-		zmqnet::Auth const& auth)
-		: loggingProxy{(auth == zmqnet::Auth::Log)
-			? std::make_unique<PubSubLoggingProxy>(ctx, "sending")
-			: nullptr }
-		, controlEndpoint{controlEndpoint_}
-		, dataEndpoint{controlEndpoint_}
+		std::string const& controlEndpoint_, std::string const& dataEndpoint_)
+		: loggingProxy{ctx, "sending"}
 		, control_socket{ctx, zmq::socket_type::pub}
 		, data_socket{ctx, zmq::socket_type::pull}
-	{}
-
-	// Bind to downstream endpoints and set real endpoint values
-	void bind(zmqnet::Auth const& auth)
 	{
-		// Log control messages if debug is enabled
-		if (auth == zmqnet::Auth::Log) {
-			controlEndpoint = loggingProxy->logOutgoing(control_socket, controlEndpoint);
-
-		// Bind control socket directly without proxy
-		} else {
-			control_socket.bind(controlEndpoint);
-			controlEndpoint = control_socket.get(zmq::sockopt::last_endpoint);
-		}
-
-		// Bind data socket
-		data_socket.bind(dataEndpoint);
+		// Bind to downstream endpoints and set real endpoint values
+		controlEndpoint = loggingProxy.logOutgoing(control_socket, controlEndpoint_);
+		data_socket.bind(dataEndpoint_);
 		dataEndpoint = data_socket.get(zmq::sockopt::last_endpoint);
 	}
 };
@@ -419,66 +303,37 @@ public:
 class InprocDownstreamLink : public DownstreamLink
 {
 public:
-	InprocDownstreamLink(zmq::context_t& ctx, zmqnet::Auth const& auth)
+	InprocDownstreamLink(zmq::context_t& ctx)
 		: DownstreamLink
 			{ ctx
 			, "inproc://" + generate_uuid() // control endpoint
 			, "inproc://" + generate_uuid() // data endpoint
-			, (debug_enabled()) ? zmqnet::Auth::Log : zmqnet::Auth::None
 		}
-	{
-		bind(auth);
-	}
+	{}
 };
 
 class IpcDownstreamLink : public DownstreamLink
 {
 public:
-	IpcDownstreamLink(zmq::context_t& ctx, zmqnet::Auth const& auth)
+	IpcDownstreamLink(zmq::context_t& ctx)
 		: DownstreamLink
 			{ ctx
 			, "ipc://ipc-" + generate_uuid() // control endpoint
 			, "ipc://ipc-" + generate_uuid() // data endpoint
-			, (debug_enabled()) ? zmqnet::Auth::Log : zmqnet::Auth::None
 		}
-	{
-		bind(auth);
-	}
+	{}
 };
 
 class TcpDownstreamLink : public DownstreamLink
 {
 public:
-	std::string publicKey;
-
-	TcpDownstreamLink(zmq::context_t& ctx, zmqnet::Auth const& auth)
+	TcpDownstreamLink(zmq::context_t& ctx)
 		: DownstreamLink
 			{ ctx
 			, "tcp://*:*" // control endpoint
 			, "tcp://*:*" // data endpoint
-			, auth
 		}
-		, publicKey{}
-	{
-		if (auth == zmqnet::Auth::Curve) {
-
-			// Generate and set the same keys for both control and data endpoints
-			auto [pub, sec] = net::generate_curve_keypair();
-			control_socket.set(zmq::sockopt::curve_server, 1);
-			control_socket.set(zmq::sockopt::curve_publickey, pub);
-			control_socket.set(zmq::sockopt::curve_secretkey, sec);
-			data_socket.set(zmq::sockopt::curve_server, 1);
-			data_socket.set(zmq::sockopt::curve_publickey, pub);
-			data_socket.set(zmq::sockopt::curve_secretkey, sec);
-
-			// Store public key even if encryption was not used
-			publicKey = std::move(pub);
-		}
-
-		bind(auth);
-	}
-
-	auto const& getPublicKey() const { return publicKey; }
+	{}
 };
 
 static inline auto replace_endpoint_host(std::string endpoint, std::string const& hostname)

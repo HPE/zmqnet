@@ -39,13 +39,11 @@ struct TopotestArgv : public cti::Argv {
 
 static constexpr auto TestStreamId = zmqnet::Stream::Id{1};
 
-template <typename Params>
-int run_sync_leafnode(Params const& beParams)
+int run_sync_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 {
-	fprintf(stderr, "running leafnode node %d, connect parent %s %s\n",
-		beParams.node_id, beParams.upstreamControlEndpoint.c_str(), beParams.upstreamDataEndpoint.c_str());
+	fprintf(stderr, "running leafnode node %d, connect parent %s %s\n", node_id, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
-	auto leafnode = zmqnet::SyncBackend{beParams};
+	auto leafnode = zmqnet::SyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, node_id};
 
 	while (true) {
 		auto const [stream, command] = leafnode.nextCommand();
@@ -54,23 +52,20 @@ int run_sync_leafnode(Params const& beParams)
 			return 0;
 
 		} else {
-			fprintf(stderr, "%d got command %s from stream %d\n", beParams.node_id, command.begin(), stream.id);
+			fprintf(stderr, "%d got command %s from stream %d\n", node_id, command.begin(), stream.id);
 			assert(stream.id == TestStreamId);
-			auto const result = std::to_string(beParams.node_id);
+			auto const result = std::to_string(node_id);
 			leafnode.sendResult(stream, result.c_str(), result.length() + 1);
 		}
 	}
 }
 
-template <typename Params>
-int run_async_leafnode(Params const& beParams)
+int run_async_leafnode(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id)
 {
-	fprintf(stderr, "running leafnode node %d, connect parent %s %s\n",
-		beParams.node_id, beParams.upstreamControlEndpoint.c_str(), beParams.upstreamDataEndpoint.c_str());
+	fprintf(stderr, "running leafnode node %d, connect parent %s %s\n", node_id, upstreamControlEndpoint.c_str(), upstreamDataEndpoint.c_str());
 
-	auto leafnode = zmqnet::AsyncBackend{beParams};
+	auto leafnode = zmqnet::AsyncBackend{upstreamControlEndpoint, upstreamDataEndpoint, node_id};
 
-	auto const node_id = beParams.node_id;
 	leafnode.registerCallback(TestStreamId, [node_id](zmqnet::Stream::Id const& streamId, zmqnet::ByteArray command) {
 		fprintf(stderr, "%d got command %s from stream %d\n", node_id, command.begin(), streamId);
 		assert(streamId == TestStreamId);
@@ -144,7 +139,8 @@ int main(int argc, char** argv)
 	if (on_backend) {
 		fprintf(stderr, "topotest: leaf mode\n");
 
-		auto const [beParams, leaf_argc, leaf_argv] = zmqnet::SyncBackend::getParams(argc, argv);
+		auto const [upstreamControlEndpoint, upstreamDataEndpoint, node_id,
+			leaf_argc, leaf_argv] = zmqnet::SyncBackend::getParams(argc, argv);
 
 		auto const [leaf_mode, launchType, fanout, synchronous_mode, binary_argc, binary_argv] = parse_argv(leaf_argc, leaf_argv);
 
@@ -152,9 +148,9 @@ int main(int argc, char** argv)
 		assert((binary_argc == 0) && (binary_argv[0] == nullptr));
 
 		if (synchronous_mode) {
-			rc = run_sync_leafnode(beParams);
+			rc = run_sync_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
 		} else {
-			rc = run_async_leafnode(beParams);
+			rc = run_async_leafnode(upstreamControlEndpoint, upstreamDataEndpoint, node_id);
 		}
 
 		goto cleanup_main;

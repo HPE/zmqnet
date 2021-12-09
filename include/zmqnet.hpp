@@ -54,13 +54,6 @@ static inline auto make_ByteArray(unsigned char const* buffer, size_t buffer_len
 	return kj::heapArray(buffer, buffer_len);
 }
 
-// Type of encryption / logging
-enum class Auth : int
-	{ None // No encryption or authentication
-	, Curve // Use ZMQ CURVE key-based authentication and encryption
-	, Log // Encryption is disabled and logging is enabled
-};
-
 // When constructing a Frontend object, provide a topology structure to build the network
 struct Topology
 {
@@ -144,14 +137,6 @@ protected: // derived class interface
 
 class Backend
 {
-public: // types
-	struct BackendParams
-	{
-		Auth authType;
-		std::string upstreamControlEndpoint, upstreamDataEndpoint, upstreamPublicKey;
-		int node_id;
-	};
-
 protected: // members
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::UpstreamLink> m_upstream;
@@ -162,22 +147,18 @@ protected: // derived class interface
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv)
 	{
-		if (argc < 7) {
-			throw std::runtime_error("expected at least 7 network param arguments");
+		if (argc < 5) {
+			throw std::runtime_error("expected 4 network param arguments");
 		}
 		return std::make_tuple(
-			BackendParams
-				{ .authType = (zmqnet::Auth)std::stoi(argv[1])
-				, .upstreamControlEndpoint = argv[2]
-				, .upstreamDataEndpoint = argv[3]
-				, .upstreamPublicKey = argv[4]
-				, .node_id = std::stoi(argv[5])
-			},
-			argc - 6, // Rest of arguments count
-			argv + 6); // Rest of arguments array
+			std::string{argv[1]}, // Upstream control endpoint
+			std::string{argv[2]}, // Upstream data endpoint
+			std::stoi(argv[3]),   // Node ID
+			argc - 4,             // Leaf binary argc
+			argv + 4);            // Leaf binary argv
 	}
 
-	Backend(BackendParams const& backendParams);
+	Backend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
 	~Backend();
 
 	void notifyReady();
@@ -345,21 +326,23 @@ class SyncBackend : private detail::Backend
 public: // interface
 
 	// Network connection arguments are prepended to the argument array for the user-provided
-	// leaf binary. Extract these arguments using `getParams` to obtain a struct
-	// to pass to the backend constructor, followed by the remaining argument
-	// count and array.
+	// leaf binary. Extract these arguments using `getParams` to obtain the following:
+	// Upstream control endpoint
+	// Upstream data endpoint
+	// Node ID
+	// Remaining argument count and arguments provided by the user during Frontend construction
 
 	// Example usage:
-	// auto const [backendParams, rest_argc, rest_argv]
+	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
 	//     = zmqnet::SyncBackend::getParams(argc, argv);
-	// auto backend = zmqnet::SyncBackend(backendParams);
+	// auto backend = zmqnet::SyncBackend(controlEndpoint, dataEndpoint, node_id);
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv) { return detail::Backend::getParams(argc, argv); }
 
 	// Connect to the communication tree using network parameters extracted by
 	// zmqnet::Backend::getParams(argc, argv) where argc and argv are the actual arguments provided
 	// to the user binary calling SyncBackend.
-	SyncBackend(detail::Backend::BackendParams const& backendParams);
+	SyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
 
 	// Block and wait for the next incoming command. The Stream on which this command was received
 	// is provided, containing the user-provided Stream ID that was used when creating the Stream
@@ -402,20 +385,22 @@ private: // members
 public: // interface
 
 	// Network connection arguments are prepended to the argument array for the user-provided
-	// leaf binary. Extract these arguments using `getParams` to obtain a struct
-	// to pass to the backend constructor, followed by the remaining argument
-	// count and array.
+	// leaf binary. Extract these arguments using `getParams` to obtain the following:
+	// Upstream control endpoint
+	// Upstream data endpoint
+	// Node ID
+	// Remaining argument count and arguments provided by the user during Frontend construction
 
 	// Example usage:
-	// auto const [backendParams, rest_argc, rest_argv]
-	//     = zmqnet::AsyncBackend::getParams(argc, argv);
-	// auto backend = zmqnet::SyncBackend(backendParams);
+	// auto const [controlEndpoint, dataEndpoint, node_id, rest_argc, rest_argv]
+	//     = zmqnet::SyncBackend::getParams(argc, argv);
+	// auto backend = zmqnet::SyncBackend(controlEndpoint, dataEndpoint, node_id);
 	template <typename CharPtr>
 	static auto getParams(int argc, CharPtr argv) { return detail::Backend::getParams(argc, argv); }
 
 	// The constructor takes the same network parameters as the synchronous variant, as extracted
 	// from the leaf binary arguments by zmqnet::Backend::getParams.
-	AsyncBackend(detail::Backend::BackendParams const& backendParams);
+	AsyncBackend(std::string const& upstreamControlEndpoint, std::string const& upstreamDataEndpoint, int node_id);
 	~AsyncBackend();
 
 	// Before initialization of the async. backend can complete, callbacks must be registered for
