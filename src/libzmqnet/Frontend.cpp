@@ -32,7 +32,7 @@ namespace launch
 // tree by the frontend.
 // Return max node ID, assigned node ID map
 static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
-	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
+	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
 
@@ -92,7 +92,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 		}
 
 		// Launch commnode daemon
-		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, nullptr)) {
+		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, leaf_env)) {
 			throw std::runtime_error(cti_error_str());
 		}
 	}
@@ -190,7 +190,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 
 // Return max node ID, assigned node ID map
 static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
-	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
+	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
 
@@ -213,7 +213,7 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 		}
 
 		// Launch commnode daemon
-		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, nullptr)) {
+		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, leaf_env)) {
 			throw std::runtime_error(cti_error_str());
 		}
 	}
@@ -291,7 +291,7 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 
 // Return max node ID, assigned node ID map
 static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
-	char const* const* leaf_argv, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
+	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto const num_levels = (hostsPlacement.numHosts > 1)
 		? (int)(log(hostsPlacement.numHosts - 1) / log(fanout)) + 2
@@ -426,7 +426,7 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 		}
 
 		// Launch commnode daemon
-		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, nullptr)) {
+		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, leaf_env)) {
 			throw std::runtime_error(cti_error_str());
 		}
 
@@ -467,7 +467,8 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 // Common frontend implementation
 
 zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, long int const manifest_id,
-	zmqnet::Topology const& topology, char const* const* leaf_argv)
+	zmqnet::Topology const& topology,
+	char const* const* leaf_argv, char const* const* leaf_env)
 	: m_max_node_id{}
 	, m_nodeIdMap{}
 	, m_ctx{}
@@ -504,15 +505,15 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	if (topology.launch == Topology::Launch::Fcfs) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::fcfsTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, commnodePath, *hostsPlacement);
+				topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement);
 	} else if (topology.launch == Topology::Launch::Layered) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, commnodePath,*hostsPlacement);
+				topology.fanout, auth, leaf_argv, leaf_env, commnodePath,*hostsPlacement);
 	} else if (topology.launch == Topology::Launch::Packed) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
 			launch::packedTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, commnodePath, *hostsPlacement);
+				topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement);
 	}
 
 	auto const launch_ms = get_milliseconds();
@@ -647,8 +648,9 @@ void zmqnet::detail::Frontend::sendExit()
 // Synchronous frontend implementation
 
 zmqnet::SyncFrontend::SyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-	zmqnet::Topology const& topology, char const* const* leaf_argv)
-	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv}
+	zmqnet::Topology const& topology,
+	char const* const* leaf_argv, char const* const* leaf_env)
+	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env}
 {}
 
 zmqnet::Communicator zmqnet::SyncFrontend::getAllNodesCommunicator() const

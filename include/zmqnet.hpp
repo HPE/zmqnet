@@ -129,7 +129,7 @@ protected: // members
 
 protected: // derived class interface
 	Frontend(int const app_id, long int const session_id, long int const manifest_id,
-		Topology const& topology, char const* const* leaf_argv);
+		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env);
 	~Frontend();
 
 	Communicator createCommunicator(NodeSet const& nodes);
@@ -252,8 +252,10 @@ public: // interface
 	// `leaf_argv` are any additional arguments to be passed to the user's leaf binary,
 	// with `leaf_argv[0]` being the path to the leaf binary. This is the binary that will
 	// instantiate the Backend object to connect to the network and respond to network commands.
+	// Additional environment variables can be added to the leaf binary launch by
+	// providing an optional leaf_env argument.
 	SyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-		Topology const& topology, char const* const* leaf_argv);
+		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env = nullptr);
 
 	// Get the default communicator to send a message to all nodes
 	Communicator getAllNodesCommunicator() const;
@@ -302,7 +304,7 @@ public: // interface
 
 	// See zmqnet::SyncFrontend for description
 	AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-		Topology const& topology, char const* const* leaf_argv);
+		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env = nullptr);
 	~AsyncFrontend();
 
 	// Get the default communicator to send a message to all nodes
