@@ -696,7 +696,7 @@ static inline zmq::socket_t make_task_socket(zmq::context_t& ctx, zmqnet::Stream
 	// Relay message to new task socket
 	net::send_MessageReader(task_socket, std::move(expiring));
 
-	return std::move(task_socket);
+	return task_socket;
 }
 
 // Select stream task based on incoming message's stream ID, and send message to stream task socket
