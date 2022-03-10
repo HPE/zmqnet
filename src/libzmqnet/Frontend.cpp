@@ -50,7 +50,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 
 		// Write dealer public key to file
 		::fprintf(authFile.get(), "%s\n", dealerPub.c_str());
-		::fclose(authFile.get());
+		authFile.close();
 
 		// Add auth file to manifest
 		if (cti_addManifestFile(manifest_id, authFile.path())) {
