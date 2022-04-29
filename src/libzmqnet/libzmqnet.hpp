@@ -68,9 +68,9 @@ static inline void enable_individual_logfile(std::string filename = "")
 	if (filename == "") filename = "zmqnet_" + std::to_string(getpid()) + ".log";
 
 	const char *dir = getenv("CTI_LOG_DIR");
-    if (!dir) {
-        dir = "/tmp";
-    }
+	if (!dir) {
+		dir = "/tmp";
+	}
 
 	auto fullpath = std::string(dir) + "/" + filename;
 
@@ -413,6 +413,8 @@ public:
 		// Bind data socket
 		data_socket.bind(dataEndpoint);
 		dataEndpoint = data_socket.get(zmq::sockopt::last_endpoint);
+
+		log("control endpoint: %s, data endpoint: %s\n", controlEndpoint.c_str(), dataEndpoint.c_str());
 	}
 };
 
@@ -495,7 +497,7 @@ static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::str
 {
 	return std::make_tuple(
 		replace_endpoint_host(downstream.controlEndpoint, hostname),
-		replace_endpoint_host(downstream.dataEndpoint,    hostname)
+		replace_endpoint_host(downstream.dataEndpoint,	  hostname)
 	);
 }
 

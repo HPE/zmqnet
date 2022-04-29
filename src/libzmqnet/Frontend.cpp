@@ -196,6 +196,27 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 
 	// Start topology socket to send its connection info to commnode daemon
 	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
+	
+	// Create auth file for commnode
+	auto authFile = temp_file();
+
+	// Fill auth file if CURVE encryption enabled
+	if (auth == zmqnet::Auth::Curve) {
+		// Generate and set server keys for topology dealer socket
+		auto const dealerPub = net::set_curve_server(dealer_socket);
+
+		// Write dealer public key to file
+		::fprintf(authFile.get(), "%s\n", dealerPub.c_str());
+		authFile.close();
+
+		// Add auth file to manifest
+		if (cti_addManifestFile(manifest_id, authFile.path())) {
+			throw std::runtime_error("failed to add authfile to manifest: " + 
+				std::string{cti_error_str()});
+		}
+	}
+
+	// Bind topology dealer socket
 	dealer_socket.bind("tcp://*:*");
 	auto const dealerEndpoint = net::replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
 	log("topology dealer listening on %s\n", dealerEndpoint.c_str());
@@ -205,6 +226,21 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 	// Set up commnode daemon arguments with topology connection info and leaf process arguments
 	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
 		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
+
+		// Set authentication type argument
+		commnodeArgv.add(CommnodeArgv::AuthType, std::to_string(static_cast<int>(auth)));
+
+		// Add keyfile path if CURVE set
+		if (auth == zmqnet::Auth::Curve) {
+			// Generate path to auth file
+			auto fileDir = std::unique_ptr<char, decltype(&::free)> {
+				cti_getSessionFileDir(session_id), ::free };
+			auto const authFileName = std::string{
+				::basename(::strdup(authFile.path()))};
+			auto const authFilePath = std::string{fileDir.get()} + "/" + authFileName;
+			commnodeArgv.add(CommnodeArgv::AuthFile, authFilePath);
+		}
+
 		commnodeArgv.add(CommnodeArgv::Packed);
 
 		// Add provided leaf arguments
@@ -218,10 +254,13 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 		}
 	}
 
+	// Remove temporary auth file
+	authFile.reset();
+
 	// Set up fanout topology and wait for all children to connect
 	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
-	auto endpoints = std::vector<std::tuple<std::string, std::string>> {
-		{rootControlEndpoint, rootDataEndpoint}
+	auto endpoints = std::vector<std::tuple<std::string, std::string, std::string>> {
+		{rootControlEndpoint, rootDataEndpoint, rootLink.getPublicKey()}
 	};
 	auto num_nodes = cti_getNumAppPEs(app_id);
 	endpoints.reserve(num_nodes + 1);
@@ -243,7 +282,11 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 			nodeIdMap[topologyRequest.getNodeHostname().cStr()] = node_id;
 
 			// Register topology information
-			endpoints.emplace_back(topologyRequest.getNodeControlEndpoint().cStr(), topologyRequest.getNodeDataEndpoint().cStr());
+			endpoints.emplace_back(
+				topologyRequest.getNodeControlEndpoint().cStr(), 
+				topologyRequest.getNodeDataEndpoint().cStr(),
+				topologyRequest.getNodePublicKey().cStr()
+			);
 		}
 
 		// Determine the number of children of current node
@@ -257,10 +300,11 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 		{ auto builder = capnp::MallocMessageBuilder{};
 			auto topologyResponse = builder.initRoot<TopologyResponse>();
 
-			auto const& [parentControlEndpoint, parentDataEndpoint] = endpoints[cursor];
+			auto const& [parentControlEndpoint, parentDataEndpoint, parentPublicKey] = endpoints[cursor];
 			topologyResponse.setNodeId(node_id);
 			topologyResponse.setParentControlEndpoint(parentControlEndpoint);
 			topologyResponse.setParentDataEndpoint(parentDataEndpoint);
+			topologyResponse.setParentPublicKey(parentPublicKey);
 			topologyResponse.setNumChildren(num_children);
 
 			// Send topology response

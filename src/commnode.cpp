@@ -203,7 +203,7 @@ public: // interface
 	{}
 
 	// Immediate stores no messages, so it always ejects an empty content array
-	BitsetContentPair eject()   override { return BitsetContentPair{}; }
+	BitsetContentPair eject()	override { return BitsetContentPair{}; }
 	BitsetContentPair timeout() override { return BitsetContentPair{}; }
 
 	// Create and return a content array with one element, the new content
@@ -358,8 +358,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	result_socket.connect(resultEndpoint);
 
 	// Open the filter implementation dynamic library
-	log("commnode %02x %d: opening filter at %s\n",
-		stream.communicatorId, stream.id, filterPath.c_str());
+	log("commnode %02x %d: opening filter at %s::%s\n",
+		stream.communicatorId, stream.id, filterPath.c_str(), filterFunctionName.c_str());
 	auto filterHandle = cti::Dlopen::Handle{filterPath};
 	auto filterRun = filterHandle.load<zmqnet::FilterType>(filterFunctionName);
 
@@ -920,6 +920,7 @@ int main(int argc, char* const argv[])
 		auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{argv[0]};
 		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
 		commnodeArgv.add(CommnodeArgv::AuthFile, authFile);
+		commnodeArgv.add(CommnodeArgv::AuthType, std::to_string(static_cast<int>(authType)));
 		commnodeArgv.add(CommnodeArgv::Packed);
 		commnodeArgv.add(cti::Argv::Argument{"-n"});
 		commnodeArgv.add(cti::Argv::Argument{"-1"}); // Add seperately from option so it can be replaced via pointer
@@ -931,7 +932,7 @@ int main(int argc, char* const argv[])
 
 		// Get pointer to node argument
 		auto commnode_argv = commnodeArgv.get();
-		auto node_arg_ptr = (char**)&commnode_argv[4];
+		auto node_arg_ptr = (char**)&commnode_argv[6]; // should point to "-1"
 
 		// Launch packed commnodes
 		for (int i = 0; i < packed_commnodes; i++) {
@@ -960,13 +961,18 @@ int main(int argc, char* const argv[])
 		auto const [controlEndpoint, dataEndpoint] = net::formatEndpoints(downstream, cti_be_getNodeHostname());
 		log("forking %d local leaf processes %s\n", local_pes, leafPath.c_str());
 
+		// Prepend pubkey with '~' to prevent keys with leading '-' from
+		// interfering with the leaf program's argument parsing. '~' is not used
+		// in the Z85 encoding scheme that the key is currently encoded as.
+		auto pubkey = std::string{"~"} + downstream.getPublicKey();
+
 		// Prepend endpoints and node number to provided leaf arguments
 		auto completeLeafArgv = cti::ManagedArgv
 			{ leaf_argv[0]
 			, std::to_string((int)authType)
 			, controlEndpoint
 			, dataEndpoint
-			, downstream.getPublicKey()
+			, pubkey
 			, ""
 		};
 
@@ -1158,6 +1164,7 @@ int main(int argc, char* const argv[])
 			auto const stream = zmqnet::Stream { .communicatorId = reader.getTag(), .id = streamId };
 			log("got new stream %d command on communicator %02x\n",
 				stream.id, stream.communicatorId);
+			log("got filter: %s::%s\n", std::string{filterLibraryName}.c_str(), std::string{filterFunctionName}.c_str());
 
 			// Reconstitute stream sync setting
 			auto streamSync = zmqnet::StreamSync{};
@@ -1182,7 +1189,7 @@ int main(int argc, char* const argv[])
 						std::move(descendants_bitset), std::move(streamSync));
 
 				}, std::ref(ctx), resultEndpoint,
-					stream, filterBasePath + "/" + std::string{filterLibraryName}, filterFunctionName,
+					stream, filterBasePath + "/" + std::string{filterLibraryName}, std::string{filterFunctionName},
 					communicatorDescendants.at(stream.communicatorId), streamSync);
 
 			// Relay to children

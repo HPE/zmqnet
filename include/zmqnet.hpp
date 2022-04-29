@@ -165,12 +165,17 @@ protected: // derived class interface
 		if (argc < 7) {
 			throw std::runtime_error("expected at least 7 network param arguments");
 		}
+
+		// if the calling program was launched by a zmqnet commnode, the public
+		// key has '~' prepended to prevent argument parsing issues
+		auto upstreamPubkey = std::string{argv[4] + (argv[4][0] == '~' ? 1 : 0)};
+
 		return std::make_tuple(
 			BackendParams
 				{ .authType = (zmqnet::Auth)std::stoi(argv[1])
 				, .upstreamControlEndpoint = argv[2]
 				, .upstreamDataEndpoint = argv[3]
-				, .upstreamPublicKey = argv[4]
+				, .upstreamPublicKey = upstreamPubkey
 				, .node_id = std::stoi(argv[5])
 			},
 			argc - 6, // Rest of arguments count
