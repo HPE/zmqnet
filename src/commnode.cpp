@@ -180,6 +180,7 @@ protected: // inherited interface
 	{}
 
 public: // interface
+	virtual ~Sync() = default;
 
 	// Return all stored messages and bitset of the source descendants. Resets state.
 	// Called for aggregation when all descendants have reported or exited

@@ -95,7 +95,8 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 		}
 
 		// Stream / communicator messages come from a blocking registration command and should notify main thread
-		if (response.isStream() || response.isCommunicator()) {
+		auto lockRegistration = response.isStream() || response.isCommunicator();
+		if (lockRegistration) {
 
 			// Lock registration flag shared with main thread
 			auto registration_lock = blocking_registration.acquire_lock();
@@ -133,7 +134,7 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 		}
 
 		// Stream / communicator messages come from a blocking registration command and should notify main thread
-		if (response.isStream() || response.isCommunicator()) {
+		if (lockRegistration) {
 			auto registration_lock = blocking_registration.acquire_lock();
 
 			log("distributor: notifying main thread that registration has completed\n");
