@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <config.h>
+
 #include <stdarg.h>
 #include <unistd.h>
 #include <wait.h>
@@ -178,6 +180,7 @@ struct shared_semaphore
 // Generate pair of public / private keys
 static inline auto generate_curve_keypair()
 {
+#ifdef HAVE_ENCRYPTION
 	char pub[41];
 	char sec[41];
 	errno = 0;
@@ -186,21 +189,30 @@ static inline auto generate_curve_keypair()
 	}
 
 	return std::make_pair(std::string{pub}, std::string{sec});
+
+#else
+	// If encryption disabled, ensure call sites are also defined out
+	return;
+
+#endif
 }
 
 // Generate client keys and connect to server
 static inline void set_curve_client(zmq::socket_t& socket,
 	std::string const& serverPub)
 {
+#ifdef HAVE_ENCRYPTION
 	auto const [clientPub, clientSec] = generate_curve_keypair();
 	socket.set(zmq::sockopt::curve_publickey, clientPub);
 	socket.set(zmq::sockopt::curve_secretkey, clientSec);
 	socket.set(zmq::sockopt::curve_serverkey, serverPub);
+#endif
 }
 
 // Generate and set socket server keys
 static inline std::string set_curve_server(zmq::socket_t& socket)
 {
+#ifdef HAVE_ENCRYPTION
 	auto [serverPub, serverSec] = net::generate_curve_keypair();
 
 	socket.set(zmq::sockopt::curve_server, 1);
@@ -208,6 +220,10 @@ static inline std::string set_curve_server(zmq::socket_t& socket)
 	socket.set(zmq::sockopt::curve_secretkey, serverSec);
 
 	return std::move(serverPub);
+
+#else
+	return std::string{};
+#endif
 }
 
 
@@ -462,8 +478,10 @@ public:
 		}
 		, publicKey{}
 	{
+
 		if (auth == zmqnet::Auth::Curve) {
 
+#ifdef HAVE_ENCRYPTION
 			// Generate and set the same keys for both control and data endpoints
 			auto [pub, sec] = net::generate_curve_keypair();
 			control_socket.set(zmq::sockopt::curve_server, 1);
@@ -475,6 +493,10 @@ public:
 
 			// Store public key even if encryption was not used
 			publicKey = std::move(pub);
+#else
+			throw std::runtime_error("Encryption was disabled for this build, but was set as "
+				"the network authentication method");
+#endif
 		}
 
 		bind(auth);

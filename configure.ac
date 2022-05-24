@@ -44,6 +44,22 @@ PKG_CHECK_MODULES([COMMON_TOOLS_BE], [common_tools_be])
 AC_CHECK_LIB(dl, dlopen)
 AC_CHECK_LIB(dl, dlclose)
 
+### Select whether encryption will be available at runtime
+AC_ARG_ENABLE([encryption],
+  [AS_HELP_STRING([--enable-encryption], [Build encryption support into ZMQNet])],,
+  [enable_encryption=yes])
+# Strip whitespace and verify yes / no
+enable_encryption=`echo $enable_encryption`
+case $enable_encryption in
+  yes | no) ;;
+  *) AC_MSG_ERROR([Unknown option '$enable_encryption' for --enable-encryption, expected 'yes' or 'no']) ;;
+esac
+AM_CONDITIONAL([ENABLE_ENCRYPTION], [test x$enable_encryption = xyes])
+
+AM_COND_IF([ENABLE_ENCRYPTION],
+  [AC_DEFINE( [HAVE_ENCRYPTION], [1], [Define to 1 if encryption enabled.])]
+)
+
 #
 ### Check for headers. ###
 #

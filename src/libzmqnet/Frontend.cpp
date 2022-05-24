@@ -2,9 +2,7 @@
  * Copyright 2020 Hewlett Packard Enterprise Development LP.
  */
 
-#ifdef HAVE_CONFIG_H
 #include <config.h>
-#endif /* HAVE_CONFIG_H */
 
 #include <cassert>
 #include <cmath>
@@ -42,6 +40,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 	// Create auth file for commnode
 	auto authFile = temp_file();
 
+#ifdef HAVE_ENCRYPTION
 	// Fill auth file if CURVE encryption enabled
 	if (auth == zmqnet::Auth::Curve) {
 
@@ -58,6 +57,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 				std::string{cti_error_str()});
 		}
 	}
+#endif
 
 	// Bind topology dealer socket
 	dealer_socket.bind("tcp://*:*");
@@ -200,6 +200,7 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 	// Create auth file for commnode
 	auto authFile = temp_file();
 
+#ifdef HAVE_ENCRYPTION
 	// Fill auth file if CURVE encryption enabled
 	if (auth == zmqnet::Auth::Curve) {
 		// Generate and set server keys for topology dealer socket
@@ -215,6 +216,7 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 				std::string{cti_error_str()});
 		}
 	}
+#endif
 
 	// Bind topology dealer socket
 	dealer_socket.bind("tcp://*:*");
@@ -536,10 +538,43 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 		, cti_destroyHostsList
 	};
 
+	// Select network encryption / logging type
+#ifdef HAVE_ENCRYPTION
+	auto auth = zmqnet::Auth::Curve;
+#else
+	auto auth = zmqnet::Auth::None;
+#endif
+
+	if (auto const libzmqnet_curve = ::getenv("LIBZMQNET_CURVE")) {
+		try {
+
+			// Check build-time encryption build setting
+			if (std::stoi(libzmqnet_curve)) {
+#ifdef HAVE_ENCRYPTION
+				auth = zmqnet::Auth::Curve;
+#else
+				fprintf(stderr, "warning: encryption was enabled using LIBZMQNET_CURVE, "
+					"but it was disabled during the library build. Encryption will remain "
+					"disabled for this run.\n");
+#endif
+
+			// Encryption disabled by user
+			} else {
+				auth = zmqnet::Auth::None;
+			}
+
+		} catch (std::exception const& ex) {
+			throw std::runtime_error("Invalid setting for LIBZMQNET_CURVE (expected 0 or 1): "
+				+ std::string{libzmqnet_curve});
+		}
+	}
+
+	// If debug enabled, switch to logging mode
+	if (debug_enabled()) {
+		auth = zmqnet::Auth::Log;
+	}
+
 	// Instantiate downstream network link
-	auto const auth = (debug_enabled())
-		? zmqnet::Auth::Log
-		: zmqnet::Auth::Curve;
 	m_downstream = std::make_unique<net::TcpDownstreamLink>(m_ctx, auth);
 
 	auto const startup_ms = get_milliseconds();
