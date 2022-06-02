@@ -23,6 +23,8 @@ struct NetworkCommand {
 
     startLeaves @1 :Void;
 
+    ping @12 :Void;
+
     communicator :group {
       communicatorId @2 :Int32;
       nodes @3 :Data;
@@ -54,6 +56,10 @@ struct NetworkResponse {
 
     ready :group {
       nodes @1 :Data;
+    }
+
+    ping :group {
+      nodeId @9 :Int32;
     }
 
     communicator :group {

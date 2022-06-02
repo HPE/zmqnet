@@ -141,6 +141,19 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 
 			return std::make_tuple(zmqnet::Stream { .id = -1 }, ByteArray{});
 
+		// If ping, respond with local node bitset
+		} else if (command.isPing()) {
+			log("backend %d: got ping on communicator %d.\n", m_node_id, reader.getTag());
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+			auto pong = response.initPing();
+
+			pong.setNodeId(m_node_id);
+
+			net::send_MessageBuilder(m_upstream->data_socket, reader.getTag(), builder);
+
+			continue;
+
 		// Acknowledge and subscribe to communicator if node is in node set
 		} else if (command.isCommunicator()) {
 			auto const communicatorId = command.getCommunicator().getCommunicatorId();
@@ -363,6 +376,19 @@ static zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& in
 
 			// Return control of the upstream control socket back to main thread
 			return std::move(input_socket);
+
+		// If ping, respond with local node bitset
+		} else if (command.isPing()) {
+			log("backend %d: got ping on communicator %d.\n", node_id, reader.getTag());
+			auto builder = capnp::MallocMessageBuilder{};
+			auto response = builder.initRoot<NetworkResponse>();
+			auto pong = response.initPing();
+
+			pong.setNodeId(node_id);
+
+			net::send_MessageBuilder(result_socket, reader.getTag(), builder);
+
+			continue;
 
 		// Acknowledge and subscribe to communicator if node is in node set
 		} else if (command.isCommunicator()) {

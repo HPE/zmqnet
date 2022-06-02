@@ -38,7 +38,7 @@ protected:
 
 		// Create application arguments
 		auto launcherArgs = cti::ManagedArgv{};
-		launcherArgs.add("-n " + std::to_string(num_nodes));
+		launcherArgs.add("-n " + std::to_string(num_procs));
 
 		switch (wlm_type) {
 
@@ -356,6 +356,67 @@ TEST_F(ZmqnetFunctionTest, SubsetCreationTestByRank)
 	network.runExit();
 }
 
+// Test ping function
+TEST_F(ZmqnetFunctionTest, PingTest)
+{
+	auto allRanks = zmqnet::RankSet{0, 1, 2, 3};
+	auto halfRanks = zmqnet::RankSet{0, 2};
+
+	auto network = launchSyncNetwork(allRanks.size(), allRanks.size(),
+		zmqnet::Topology {.launch = zmqnet::Topology::Fcfs, .fanout = 2});
+
+	auto halfComm = network.registerCommunicator(halfRanks);
+	auto allComm = network.getAllNodesCommunicator();	
+
+	// Invalid combination of timeout/ranks should return empty set immediately
+	ASSERT_EQ(network.sendPing(allComm, -1, {}), zmqnet::RankSet{}); 
+	
+	// Ping until no response for 1000 ms
+	auto responded = network.sendPing(allComm, 1000, {});
+	ASSERT_EQ(responded, allRanks);
+
+	// Blocking ping until ranks in halfRanks respond
+	responded = network.sendPing(halfComm, -1, halfRanks);
+	ASSERT_EQ(responded, halfRanks);
+
+	// Ping only half the ranks, but pass all ranks. Should timeout
+	responded = network.sendPing(halfComm, 1000, allRanks);
+	ASSERT_EQ(responded, halfRanks);	
+	
+	network.runExit();
+}
+
+// Test ping function on an Async network
+TEST_F(ZmqnetFunctionTest, PingTestAsync)
+{
+	auto allRanks = zmqnet::RankSet{0, 1, 2, 3};
+	auto halfRanks = zmqnet::RankSet{0, 2};
+
+	auto network = launchAsyncNetwork(allRanks.size(), allRanks.size(),
+		zmqnet::Topology {.launch = zmqnet::Topology::Fcfs, .fanout = 2});
+
+	auto halfComm = network.registerCommunicator(halfRanks);
+	auto allComm = network.getAllNodesCommunicator();	
+
+	// Invalid combination of timeout/ranks should return empty set immediately
+	ASSERT_EQ(network.sendPing(allComm, -1, {}), zmqnet::RankSet{}); 
+	
+	// Ping until no response for 1000 ms
+	auto responded = network.sendPing(allComm, 1000, {});
+	ASSERT_EQ(responded, allRanks);
+
+	// Blocking ping until ranks in halfRanks respond
+	responded = network.sendPing(halfComm, -1, halfRanks);
+	ASSERT_EQ(responded, halfRanks);
+
+	// Ping only half the ranks, but pass all ranks. Should timeout
+	responded = network.sendPing(halfComm, 1000, allRanks);
+	ASSERT_EQ(responded, halfRanks);	
+
+	network.runExit();
+}
+
+
 // Test sending command to a stream subset across multiple nodes, check result
 TEST_F(ZmqnetFunctionTest, SubsetCommandTest)
 {
@@ -395,11 +456,11 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTest)
 TEST_F(ZmqnetFunctionTest, SubsetCommandTestByRank)
 {
 	// Launch network with four nodes
-	auto network = launchSyncNetwork(8, 1,
+	auto network = launchSyncNetwork(4, 4,
 		zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 2 });
 
 	// Add nodes with even IDs to subset
-	auto some_nodes = std::set<size_t>{0, 1, 2, 3};
+	auto some_nodes = std::set<size_t>{0, 2};
 
 	// Create subset stream
 	auto someNodesCommunicator = network.registerCommunicator(some_nodes);
@@ -411,7 +472,8 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTestByRank)
 
 	// Check result
 	auto const nodeIds = parseNodeIds((char const*)result.asBytes().begin());
-	EXPECT_EQ(nodeIds.size(), size_t{1});
+	
+	EXPECT_EQ(nodeIds.size(), size_t{2});
 
 	// Exit network
 	network.runExit();
@@ -540,7 +602,7 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTestAsyncByRank)
 	auto results_received = std::atomic<size_t>{0};
 
 	// Launch network with four nodes
-	auto network = launchAsyncNetwork(8, 1,
+	auto network = launchAsyncNetwork(4, 4,
 		zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 1 });
 
 	// Create callback
@@ -554,7 +616,7 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTestAsyncByRank)
 	};
 
 	// Add nodes with even IDs to subset
-	auto some_nodes = std::set<size_t>{0, 1, 2, 3};
+	auto some_nodes = std::set<size_t>{0, 2};
 
 	// Create subset stream
 	network.registerStreamCallback(TestStreamId, send_callback);
@@ -573,7 +635,7 @@ TEST_F(ZmqnetFunctionTest, SubsetCommandTestAsyncByRank)
 	}
 
 	// Check result
-	EXPECT_EQ(results_received.load(), size_t{1});
+	EXPECT_EQ(results_received.load(), size_t{2});
 
 	// Exit network
 	network.runExit();

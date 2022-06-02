@@ -631,17 +631,7 @@ zmqnet::detail::Frontend::~Frontend()
 
 zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmqnet::NodeSet const& nodes)
 {
-	if (nodes.empty()) {
-		throw std::runtime_error("expected non-empty node set");
-	}
-
-	// Pack node set into bitset
-	auto node_ids = std::set<size_t>{};
-	for (auto&& node : nodes) {
-		node_ids.insert(m_nodeIdMap.at(node));
-	}
-
-	return createCommunicator(node_ids);
+	return createCommunicator(toRankSet(nodes));
 }
 
 zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(const std::set<size_t> &ranksSet) {
@@ -713,6 +703,98 @@ void zmqnet::detail::Frontend::sendCommand(zmqnet::Stream const& stream, char co
 	net::send_MessageBuilder(m_downstream->control_socket, stream.communicatorId, builder);
 }
 
+zmqnet::RankSet zmqnet::detail::Frontend::sendPing(
+	Communicator const& comm, zmq::socket_t & listener,
+	int timeoutMs, RankSet const& stopAfter)
+{
+	// send a ping to `comm`, listen for responses on `listener` until `timeoutMs`
+	// milliseconds have passed or all ranks in `stopAfter` have responded.
+	// Return the set of ranks that responded to the ping in the allotted time.
+	//
+	// if `timeoutMs` == -1, use no timeout; a standard blocking wait.
+	// if `stopAfter` == {}, only stop listening when the timeout has been hit.
+
+	if ((timeoutMs < 0 && stopAfter.empty()) || timeoutMs < -1) {
+		// invalid parameters - would result in infinite wait
+		log("WARNING: invalid ping parameters: timeout: %d, empty waiting set?: %d\n",
+			timeoutMs, stopAfter.empty());
+		return {};
+	}
+
+	auto builder = capnp::MallocMessageBuilder{};
+	auto ping = builder.initRoot<NetworkCommand>();
+	ping.setPing();
+
+	net::send_MessageBuilder(m_downstream->control_socket, comm.id, builder);
+	log("sent ping on communicator %d.\n", comm.id);
+
+	auto oldTimeout = listener.get(zmq::sockopt::rcvtimeo);
+	listener.set(zmq::sockopt::rcvtimeo, timeoutMs);
+
+	auto stopRemaining = stopAfter;
+	auto responded = zmqnet::RankSet{};
+
+	while (auto maybeReader = net::recv_MessageReader_timeout(listener)) {
+		auto &reader = *maybeReader;
+		auto response = reader.getRoot<NetworkResponse>();
+		assert(response.isPing());
+		assert(response.getPing().getNodeId() >= 0);
+		auto nodeId = response.getPing().getNodeId();
+		log("got ping response from %d.\n", nodeId);
+
+		stopRemaining.erase(nodeId);
+		responded.insert(nodeId);
+
+		if (!stopAfter.empty() && stopRemaining.empty()) {
+			log("got responses from everything in passed set.\n");
+			break;
+		}
+	}
+	log("no more ping responses.\n");
+
+	listener.set(zmq::sockopt::rcvtimeo, oldTimeout);
+
+	return responded;
+}
+
+bool zmqnet::detail::Frontend::confirmPing(Communicator const& comm, RankSet const& ranks, zmq::socket_t & listener)
+{
+	// Send pings to confirm all `ranks` are listening to `comm` and responding on `listener`.
+	//
+	// listen for responses with an increasing timeout so a single straggler
+	// that just misses the nth millisecond but is ready on the n + 1th millisecond
+	// doesn't make everyone wait a super long time.
+	//
+	// timeout sequence is 50 -> 100 -> 200 -> 400 -> 800 milliseconds
+	
+	auto tries_left = int{0};
+	auto timeout = 50; // milliseconds
+	
+	for (tries_left = 5; tries_left >= 0; tries_left--, timeout *= 2) {
+		log("confirming ping on communicator %d. (%d tries left, %d ms timeout)\n",
+			comm.id, tries_left, timeout);
+		auto ping_result = sendPing(comm, listener, timeout, ranks);
+		if (ping_result == ranks) break;
+
+		if (debug_enabled()) {
+			// log incomplete result
+			std::ostringstream ss;
+			ss << lrle_bitset(ping_result).to_string();
+			ss << " (ping result) != ";
+			ss << lrle_bitset(ranks).to_string();
+			ss << " (target)";
+			log ("%s\n", ss.str().c_str());
+		}
+	}
+
+	if (tries_left == 0) {
+		return false;
+	}
+
+	log("ping confirm on communicator %d was successful\n", comm.id);
+	return true;
+}
+
 void zmqnet::detail::Frontend::sendExit()
 {
 	// Create exit command
@@ -722,6 +804,16 @@ void zmqnet::detail::Frontend::sendExit()
 
 	// Send exit command
 	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllNodes, builder);
+}
+
+zmqnet::RankSet zmqnet::detail::Frontend::toRankSet(zmqnet::NodeSet const& nodes)
+{
+	auto node_ids = std::set<size_t>{};
+	for (auto&& node : nodes) {
+		node_ids.insert(m_nodeIdMap.at(node));
+	}
+
+	return node_ids;
 }
 
 // Synchronous frontend implementation
@@ -739,25 +831,15 @@ zmqnet::Communicator zmqnet::SyncFrontend::getAllNodesCommunicator() const
 
 zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(zmqnet::NodeSet const& nodes)
 {
-	auto const start_ms = get_milliseconds();
-
-	// Send communicator create command
-	auto const communicator = createCommunicator(nodes);
-
-	// Wait for acknowledgement
-	auto reader = net::recv_MessageReader(m_downstream->data_socket);
-	auto response = reader.getRoot<NetworkResponse>();
-	assert(response.isCommunicator() && (response.getCommunicator().getCommunicatorId() == communicator.id));
-
-	auto const communicator_ms = get_milliseconds() - start_ms;
-	log("communicator registered RT: %5ldms\n", communicator_ms);
-
-	// Return new communicator handle
-	return communicator;
+	return registerCommunicator(Frontend::toRankSet(nodes));
 }
 
 zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(const RankSet &ranks)
 {
+	if (ranks.empty()) {
+		throw std::runtime_error("expected non-empty ranks set");
+	}
+
 	auto const start_ms = get_milliseconds();
 
 	// Send communicator create command
@@ -770,6 +852,12 @@ zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(const RankSet &r
 
 	auto const communicator_ms = get_milliseconds() - start_ms;
 	log("communicator registered RT: %5ldms\n", communicator_ms);
+
+	// Leaves and commnodes have now received the message to subscribe to a
+	// new zmq channel and are busy subscribing. Wait some time for them to complete.
+	if (!confirmPing(communicator, ranks)) {
+		throw std::runtime_error("Nodes failed to connect to communicator");
+	}
 
 	// Return new communicator handle
 	return communicator;
@@ -817,6 +905,16 @@ zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream,
 zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream, std::string const& command)
 {
 	return runCommand(stream, command.c_str(), command.length() + 1);
+}
+
+zmqnet::RankSet zmqnet::SyncFrontend::sendPing(Communicator const& comm, int timeoutMs, RankSet const& stopAfter)
+{
+	return Frontend::sendPing(comm, m_downstream->data_socket, timeoutMs, stopAfter);
+}
+
+bool zmqnet::SyncFrontend::confirmPing(Communicator const& comm, RankSet const& ranks)
+{
+	return Frontend::confirmPing(comm, ranks, m_downstream->data_socket);
 }
 
 void zmqnet::SyncFrontend::runExit()

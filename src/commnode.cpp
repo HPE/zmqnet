@@ -607,6 +607,13 @@ static inline zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socke
 
 			continue;
 
+		// If ping, send upstream
+		} else if (response.isPing()) {
+			log("commnode: forwarding ping on communicator %d upstream\n", reader.getTag());
+			net::send_MessageReader(result_socket, std::move(reader));
+
+			continue;
+
 		// If communicator, add to in-progress communicator
 		} else if (response.isCommunicator()) {
 
@@ -1076,8 +1083,14 @@ int main(int argc, char* const argv[])
 		auto reader = net::recv_MessageReader(upstream.control_socket);
 		auto command = reader.getRoot<NetworkCommand>();
 
+		if (command.isPing()) {
+			log("got ping on communicator %d\n", reader.getTag());
+
+			// Relay command to children
+			net::send_MessageReader(downstream.control_socket, std::move(reader));
+
 		// Determine if exit command was received
-		if (command.isExit()) {
+		} else if (command.isExit()) {
 			log("got exit command\n");
 
 			// Relay command to children

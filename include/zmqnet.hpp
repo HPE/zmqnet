@@ -139,7 +139,11 @@ protected: // derived class interface
 		zmqnet::StreamSync const& streamSync);
 
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
+	RankSet sendPing(Communicator const& comm, zmq::socket_t & listener, int timeoutMs, RankSet const& stopAfter);
+	bool confirmPing(Communicator const& comm, RankSet const& ranks, zmq::socket_t & listener);
 	void sendExit();
+
+	RankSet toRankSet(NodeSet const& nodes);
 };
 
 class Backend
@@ -283,6 +287,21 @@ public: // interface
 	ByteArray runCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	ByteArray runCommand(Stream const& stream, std::string const& command);
 
+	// Sends a synchronous "ping" to all nodes in `communicator`. After `timeoutMs`
+	// milliseconds have passed with no response or every rank in `stopAfter` has 
+	// responded, returns the set of ranks that heard the ping and responded.
+	//
+	// If `timeoutMs` is -1, no timeout is used, and the function waits an
+	// unlimited amount of time for every rank in `stopAfter` to respond.
+	// If `stopAfter` is an empty set, the function only stops waiting after the
+	// timeout specified by `timeoutMs` is hit.
+	// Passing `timeoutMs` < 0 and `stopAfter` == {} is invalid. If this invalid
+	// set of arguments is passed, the function immediately returns an empty set.
+	RankSet sendPing(Communicator const& communicator, int timeoutMs, RankSet const& stopAfter);
+	// return true if all `ranks` respond to a ping on `communicator` before a
+	// reasonable amount of time has passed.
+	bool confirmPing(Communicator const& communicator, RankSet const& ranks);
+
 	// Notify all Backend instances that the network should exit. Returns once all Backend instances
 	// have exited.
 	void runExit();
@@ -304,6 +323,8 @@ private: // members
 	std::unordered_map<Stream::Id, std::future<void>> m_callbackProcessors;
 	std::unique_ptr<net::shared_semaphore> m_blocking_registration;
 	std::future<zmq::socket_t> m_responseDistributor;
+	constexpr static auto m_pingEndpoint = "inproc://ping";
+	zmq::socket_t m_pingSocket;
 
 public: // interface
 
@@ -336,6 +357,21 @@ public: // interface
 	// previously.
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	void sendCommand(Stream const& stream, std::string const& command);
+
+	// Sends a synchronous "ping" to all nodes in `communicator`. After `timeoutMs`
+	// milliseconds have passed with no response or every rank in `stopAfter` has 
+	// responded, returns the set of ranks that heard the ping and responded.
+	//
+	// If `timeoutMs` is -1, no timeout is used, and the function waits an
+	// unlimited amount of time for every rank in `stopAfter` to respond.
+	// If `stopAfter` is an empty set, the function only stops waiting after the
+	// timeout specified by `timeoutMs` is hit.
+	// Passing `timeoutMs` < 0 and `stopAfter` == {} is invalid. If this invalid
+	// set of arguments is passed, the function immediately returns an empty set.
+	RankSet sendPing(Communicator const& communicator, int timeoutMs, RankSet const& stopAfter);
+	// return true if all `ranks` respond to a ping on `communicator` before a
+	// reasonable amount of time has passed.
+	bool confirmPing(Communicator const& communicator, RankSet const& ranks);
 
 	// Notify all Backend instances that the network should exit. Returns once all Backend instances
 	// have exited.

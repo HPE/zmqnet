@@ -68,9 +68,11 @@ static void callback_processor(zmq::context_t& ctx, zmqnet::Stream const& stream
 // Stream tasks are created by main thread.
 // Completed when received an exit message.
 // Returns control of input socket upon completion.
-static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket, net::shared_semaphore& blocking_registration)
+static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket, const char* ping_endpoint, net::shared_semaphore& blocking_registration)
 {
 	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
+	auto pingSocket = zmq::socket_t{ctx, zmq::socket_type::push};
+	pingSocket.connect(ping_endpoint);
 
 	while (true) {
 		// Receive next message
@@ -90,6 +92,13 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 
 			// Return control of the upstream control socket back to main thread
 			return std::move(input_socket);
+		}
+
+		// If ping, forward to ping endpoint
+		if (response.isPing()) {
+			log("distributor: got ping response\n");
+			net::send_MessageReader(pingSocket, std::move(reader));
+			continue;
 		}
 
 		// Stream / communicator messages come from a blocking registration command and should notify main thread
@@ -155,12 +164,18 @@ zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id
 	, m_callbackProcessors{}
 	, m_blocking_registration{std::make_unique<net::shared_semaphore>(false)}
 	, m_responseDistributor{}
+	, m_pingSocket(m_ctx, zmq::socket_type::pull)
 {
+	// Create socket for distributor task to forward pings to
+	m_pingSocket.bind(m_pingEndpoint);
+
 	// Launch callback distributor task
 	m_responseDistributor = std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, net::shared_semaphore& blocking_registration) {
-			return workers::response_distributor(ctx, std::move(input_socket), blocking_registration);
-		}, std::ref(m_ctx), std::move(m_downstream->data_socket), std::ref(*m_blocking_registration));
+		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, const char* ping_endpoint, 
+			net::shared_semaphore& blocking_registration) 
+		{
+			return workers::response_distributor(ctx, std::move(input_socket), ping_endpoint, blocking_registration);
+		}, std::ref(m_ctx), std::move(m_downstream->data_socket), m_pingEndpoint, std::ref(*m_blocking_registration));
 }
 
 zmqnet::AsyncFrontend::~AsyncFrontend()
@@ -175,28 +190,15 @@ zmqnet::Communicator zmqnet::AsyncFrontend::getAllNodesCommunicator() const
 
 zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(zmqnet::NodeSet const& nodes)
 {
-	// Lock blocking registration flag shared with distributor task
-	log("starting communicator registration\n");
-	auto registration_lock = m_blocking_registration->acquire_lock();
-
-	// Set registration flag
-	assert(m_blocking_registration->get(registration_lock) == false);
-	m_blocking_registration->set(registration_lock, true);
-
-	// Send communicator create command
-	auto const communicator = createCommunicator(nodes);
-
-	// Wait for distributor to clear registration flag (registration flag is unlocked during wait)
-	log("waiting for communicator %02x registration to complete\n", communicator.id);
-	m_blocking_registration->unlock_and_wait_until(std::move(registration_lock), false);
-	log("communicator %02x registration completed\n", communicator.id);
-
-	// Return new communicator handle
-	return communicator;
+	return registerCommunicator(Frontend::toRankSet(nodes));
 }
 
 zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(const RankSet &ranks)
 {
+	if (ranks.empty()) {
+		throw std::runtime_error("expected non-empty ranks set");
+	}
+
 	// Lock blocking registration flag shared with distributor task
 	log("starting communicator registration\n");
 	auto registration_lock = m_blocking_registration->acquire_lock();
@@ -211,6 +213,13 @@ zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(const RankSet &
 	// Wait for distributor to clear registration flag (registration flag is unlocked during wait)
 	log("waiting for communicator %02x registration to complete\n", communicator.id);
 	m_blocking_registration->unlock_and_wait_until(std::move(registration_lock), false);
+
+	// Leaves and commnodes have now received the message to subscribe to a
+	// new zmq channel and are busy subscribing. Wait some time for them to finish.
+	if (!confirmPing(communicator, ranks)) {
+		throw std::runtime_error("Nodes failed to connect to communicator");
+	}
+
 	log("communicator %02x registration completed\n", communicator.id);
 
 	// Return new communicator handle
@@ -277,6 +286,18 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const
 void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, std::string const& command)
 {
 	return sendCommand(stream, command.c_str(), command.length() + 1);
+}
+
+zmqnet::RankSet zmqnet::AsyncFrontend::sendPing(Communicator const& comm, int timeoutMs, zmqnet::RankSet const& stopAfter) 
+{
+	// response_distributor thread will forward ping responses to m_pingSocket
+	return Frontend::sendPing(comm, m_pingSocket, timeoutMs, stopAfter);
+}
+
+bool zmqnet::AsyncFrontend::confirmPing(Communicator const& comm, RankSet const& ranks)
+{
+	// response_distributor thread will forward ping responses to m_pingSocket
+	return Frontend::confirmPing(comm, ranks, m_pingSocket);
 }
 
 void zmqnet::AsyncFrontend::runExit()
