@@ -180,7 +180,7 @@ struct shared_semaphore
 // Generate pair of public / private keys
 static inline auto generate_curve_keypair()
 {
-#ifdef HAVE_ENCRYPTION
+#if HAVE_ENCRYPTION
 	char pub[41];
 	char sec[41];
 	errno = 0;
@@ -201,7 +201,7 @@ static inline auto generate_curve_keypair()
 static inline void set_curve_client(zmq::socket_t& socket,
 	std::string const& serverPub)
 {
-#ifdef HAVE_ENCRYPTION
+#if HAVE_ENCRYPTION
 	auto const [clientPub, clientSec] = generate_curve_keypair();
 	socket.set(zmq::sockopt::curve_publickey, clientPub);
 	socket.set(zmq::sockopt::curve_secretkey, clientSec);
@@ -212,7 +212,7 @@ static inline void set_curve_client(zmq::socket_t& socket,
 // Generate and set socket server keys
 static inline std::string set_curve_server(zmq::socket_t& socket)
 {
-#ifdef HAVE_ENCRYPTION
+#if HAVE_ENCRYPTION
 	auto [serverPub, serverSec] = net::generate_curve_keypair();
 
 	socket.set(zmq::sockopt::curve_server, 1);
@@ -481,7 +481,7 @@ public:
 
 		if (auth == zmqnet::Auth::Curve) {
 
-#ifdef HAVE_ENCRYPTION
+#if HAVE_ENCRYPTION
 			// Generate and set the same keys for both control and data endpoints
 			auto [pub, sec] = net::generate_curve_keypair();
 			control_socket.set(zmq::sockopt::curve_server, 1);

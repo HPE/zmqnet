@@ -57,7 +57,8 @@ esac
 AM_CONDITIONAL([ENABLE_ENCRYPTION], [test x$enable_encryption = xyes])
 
 AM_COND_IF([ENABLE_ENCRYPTION],
-  [AC_DEFINE( [HAVE_ENCRYPTION], [1], [Define to 1 if encryption enabled.])]
+  [AC_DEFINE( [HAVE_ENCRYPTION], [1], [Define to 1 if encryption enabled.])],
+  [AC_DEFINE( [HAVE_ENCRYPTION], [0], [Define to 0 if encryption disabled.])]
 )
 
 #

@@ -40,7 +40,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 	// Create auth file for commnode
 	auto authFile = temp_file();
 
-#ifdef HAVE_ENCRYPTION
+#if HAVE_ENCRYPTION
 	// Fill auth file if CURVE encryption enabled
 	if (auth == zmqnet::Auth::Curve) {
 
@@ -200,7 +200,7 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 	// Create auth file for commnode
 	auto authFile = temp_file();
 
-#ifdef HAVE_ENCRYPTION
+#if HAVE_ENCRYPTION
 	// Fill auth file if CURVE encryption enabled
 	if (auth == zmqnet::Auth::Curve) {
 		// Generate and set server keys for topology dealer socket
@@ -539,7 +539,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	};
 
 	// Select network encryption / logging type
-#ifdef HAVE_ENCRYPTION
+#if HAVE_ENCRYPTION
 	auto auth = zmqnet::Auth::Curve;
 #else
 	auto auth = zmqnet::Auth::None;
@@ -550,7 +550,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 
 			// Check build-time encryption build setting
 			if (std::stoi(libzmqnet_curve)) {
-#ifdef HAVE_ENCRYPTION
+#if HAVE_ENCRYPTION
 				auth = zmqnet::Auth::Curve;
 #else
 				fprintf(stderr, "warning: encryption was enabled using LIBZMQNET_CURVE, "
