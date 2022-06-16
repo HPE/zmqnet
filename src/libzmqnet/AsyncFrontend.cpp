@@ -156,10 +156,9 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 } // async
 
 zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-	Topology const& topology,
-	char const* const* leaf_argv, char const* const* leaf_env)
+	Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env, UserCallbacks&& cbacks)
 
-	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env}
+	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env, std::move(cbacks)}
 	, m_ctx{}
 	, m_callbackProcessors{}
 	, m_blocking_registration{std::make_unique<net::shared_semaphore>(false)}
@@ -171,7 +170,7 @@ zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id
 
 	// Launch callback distributor task
 	m_responseDistributor = std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, const char* ping_endpoint, 
+		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, const char* ping_endpoint,
 			net::shared_semaphore& blocking_registration) 
 		{
 			return workers::response_distributor(ctx, std::move(input_socket), ping_endpoint, blocking_registration);

@@ -114,6 +114,55 @@ struct Timeout
 
 using StreamSync = std::variant<sync::Immediate, sync::WaitForAll, sync::Timeout>;
 
+// Events that a callback can be hooked to
+enum class Event : size_t {
+	                       // called upon the occurance of...
+	InitialConnection = 0, // each initial connection during network construction
+	                       // ...more to come?
+	                       //
+	N                      // for use in sizing internal tables
+};
+
+class UserCallbacks
+{
+private:
+	template<typename> constexpr static bool alwaysFalse = false;
+public:
+	UserCallbacks() = default;
+	UserCallbacks(UserCallbacks&&) = default;
+	UserCallbacks(const UserCallbacks&) = delete;
+
+	template <Event e, typename F>
+	void registerCallback(F fn) {
+		if constexpr (e == Event::InitialConnection) {
+			m_uponInitialConnect = fn;
+		} else {
+			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
+		}
+	};
+
+	template <Event e, typename ...Args>
+	void invokeCallback(Args&&... args) {
+		if constexpr (e == Event::InitialConnection) {
+			if (m_uponInitialConnect)
+				m_uponInitialConnect(std::forward<Args>(args)...);
+		} else {
+			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
+		}
+	}
+
+	template <Event e>
+	void removeCallback() {
+		if constexpr (e == Event::InitialConnection) {
+			m_uponInitialConnect = nullptr;
+		} else {
+			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
+		}
+	}
+private:
+	std::function<void(int)> m_uponInitialConnect;
+};
+
 // Internal base Frontend and Backend objects
 namespace detail
 {
@@ -126,10 +175,13 @@ protected: // members
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::TcpDownstreamLink> m_downstream;
 	Communicator::Id m_next_communicatorId;
+	UserCallbacks m_uCallbacks;
 
 protected: // derived class interface
 	Frontend(int const app_id, long int const session_id, long int const manifest_id,
-		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env);
+		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env,
+		UserCallbacks&& callbacks
+	);
 	~Frontend();
 
 	Communicator createCommunicator(NodeSet const& nodes);
@@ -141,6 +193,12 @@ protected: // derived class interface
 	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
 	RankSet sendPing(Communicator const& comm, zmq::socket_t & listener, int timeoutMs, RankSet const& stopAfter);
 	bool confirmPing(Communicator const& comm, RankSet const& ranks, zmq::socket_t & listener);
+
+	template<Event e, typename FnT>
+	void registerCallback(FnT&& CBFn) { m_uCallbacks.registerCallback<e>(std::forward<FnT>(CBFn)); }
+	template<Event e>
+	void removeCallback() { m_uCallbacks.removeCallback<e>(); }
+
 	void sendExit();
 
 	RankSet toRankSet(NodeSet const& nodes);
@@ -264,7 +322,8 @@ public: // interface
 	// Additional environment variables can be added to the leaf binary launch by
 	// providing an optional leaf_env argument.
 	SyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env = nullptr);
+		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env = nullptr,
+		UserCallbacks&& callbacks = UserCallbacks());
 
 	// Get the default communicator to send a message to all nodes
 	Communicator getAllNodesCommunicator() const;
@@ -302,6 +361,14 @@ public: // interface
 	// reasonable amount of time has passed.
 	bool confirmPing(Communicator const& communicator, RankSet const& ranks);
 
+	// Register a callback function to be called after a specified zmqnet::Event.
+	// The event is passed as a template parameter,
+	// e.g. registerCallback<zmqnet::Event::InitialConnection>(myFn);
+	template<Event e, typename FnT>
+	void registerCallback(FnT&& CBFn) { Frontend::registerCallback<e>(std::forward<FnT>(CBFn)); }
+	template<Event e>
+	void removeCallback() { Frontend::removeCallback<e>(); }
+
 	// Notify all Backend instances that the network should exit. Returns once all Backend instances
 	// have exited.
 	void runExit();
@@ -330,7 +397,8 @@ public: // interface
 
 	// See zmqnet::SyncFrontend for description
 	AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env = nullptr);
+		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env = nullptr,
+		UserCallbacks&& callbacks = UserCallbacks());
 	~AsyncFrontend();
 
 	// Get the default communicator to send a message to all nodes
@@ -372,6 +440,14 @@ public: // interface
 	// return true if all `ranks` respond to a ping on `communicator` before a
 	// reasonable amount of time has passed.
 	bool confirmPing(Communicator const& communicator, RankSet const& ranks);
+
+	// Register a callback function to be called after a specified zmqnet::Event.
+	// The event is passed as a template parameter,
+	// e.g. registerCallback<zmqnet::Event::InitialConnection>(myFn);
+	template<Event e, typename FnT>
+	void registerCallback(FnT CBFn) { Frontend::registerCallback<e>(CBFn); }
+	template<Event e>
+	void removeCallback() { Frontend::removeCallback<e>(); }
 
 	// Notify all Backend instances that the network should exit. Returns once all Backend instances
 	// have exited.

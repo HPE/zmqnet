@@ -29,7 +29,7 @@ namespace launch
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
 // tree by the frontend.
 // Return max node ID, assigned node ID map
-static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
+static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
 	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
@@ -176,6 +176,8 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 			levelCap = (int)pow(fanout, level);
 		}
 		log("%d connected\n", seen);
+
+		uCbs.invokeCallback<zmqnet::Event::InitialConnection>(seen);
 	}
 
 	if (nodeIdMap.empty()) {
@@ -189,7 +191,8 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int 
 }
 
 // Return max node ID, assigned node ID map
-static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
+static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs,
+	int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
 	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
@@ -323,6 +326,8 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, in
 			levelCap = (int)pow(fanout, level);
 		}
 		log("%d connected\n", seen);
+
+		uCbs.invokeCallback<zmqnet::Event::InitialConnection>(seen);
 	}
 
 	if (nodeIdMap.empty()) {
@@ -513,13 +518,13 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 // Common frontend implementation
 
 zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, long int const manifest_id,
-	zmqnet::Topology const& topology,
-	char const* const* leaf_argv, char const* const* leaf_env)
+	zmqnet::Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env, UserCallbacks&& cbacks)
 	: m_max_node_id{}
 	, m_nodeIdMap{}
 	, m_ctx{}
 	, m_downstream{}
 	, m_next_communicatorId{1}
+	, m_uCallbacks{std::move(cbacks)}
 {
 	auto const start_ms = get_milliseconds();
 
@@ -583,7 +588,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	// Launch tree
 	if (topology.launch == Topology::Launch::Fcfs) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
-			launch::fcfsTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
+			launch::fcfsTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
 				topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement);
 	} else if (topology.launch == Topology::Launch::Layered) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
@@ -591,7 +596,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 				topology.fanout, auth, leaf_argv, leaf_env, commnodePath,*hostsPlacement);
 	} else if (topology.launch == Topology::Launch::Packed) {
 		std::tie(m_max_node_id, m_nodeIdMap) =
-			launch::packedTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
+			launch::packedTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
 				topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement);
 	}
 
@@ -819,9 +824,8 @@ zmqnet::RankSet zmqnet::detail::Frontend::toRankSet(zmqnet::NodeSet const& nodes
 // Synchronous frontend implementation
 
 zmqnet::SyncFrontend::SyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-	zmqnet::Topology const& topology,
-	char const* const* leaf_argv, char const* const* leaf_env)
-	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env}
+	zmqnet::Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env, UserCallbacks&& cbacks)
+	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env, std::move(cbacks)}
 {}
 
 zmqnet::Communicator zmqnet::SyncFrontend::getAllNodesCommunicator() const
