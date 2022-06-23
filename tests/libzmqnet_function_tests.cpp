@@ -61,7 +61,7 @@ protected:
 
 	// Launch a synchronous ZMQNet network using CTI
 	auto launchSyncNetwork(int num_procs, int num_nodes, zmqnet::Topology const& topology,
-		std::vector<std::string> const& backendArgs = {})
+		std::vector<std::string> const& backendArgs = {}, zmqnet::UserCallbacks&& ucbs = zmqnet::UserCallbacks())
 	{
 		// Launch app and save app ID
 		launchCtiApp(num_procs, num_nodes);
@@ -81,12 +81,12 @@ protected:
 
 		// Launch network
 		auto const raw_backend_argv = (const char* const*)backendArgv.get();
-		return zmqnet::SyncFrontend{app_id, session_id, manifest_id, topology, raw_backend_argv};
+		return zmqnet::SyncFrontend{app_id, session_id, manifest_id, topology, raw_backend_argv, nullptr, std::move(ucbs)};
 	}
 
 	// Launch an asynchronous ZMQNet network using CTI
 	auto launchAsyncNetwork(int num_procs, int num_nodes, zmqnet::Topology const& topology,
-		std::vector<std::string> const& backendArgs = {})
+		std::vector<std::string> const& backendArgs = {}, zmqnet::UserCallbacks&& ucbs = zmqnet::UserCallbacks())
 	{
 		// Launch app and save app ID
 		launchCtiApp(num_procs, num_nodes);
@@ -106,7 +106,7 @@ protected:
 
 		// Launch network
 		auto const raw_backend_argv = (const char* const*)backendArgv.get();
-		return zmqnet::AsyncFrontend{app_id, session_id, manifest_id, topology, raw_backend_argv};
+		return zmqnet::AsyncFrontend{app_id, session_id, manifest_id, topology, raw_backend_argv, nullptr, std::move(ucbs)};
 	}
 
 	// Clean up launched test application
@@ -735,6 +735,87 @@ TEST_F(ZmqnetFunctionTest, TimeoutTestAsync)
 
 	// Exit network
 	network.runExit();
+}
+
+// Test launch callbacks
+TEST_F(ZmqnetFunctionTest, CallbackLaunchTestFcfs) {
+    auto callbacks = zmqnet::UserCallbacks();
+
+    auto count = int{0};
+    auto count_them = [&count](int which_one) {
+        count++;
+    };
+
+    callbacks.registerCallback<zmqnet::Event::InitialConnection>(count_them);
+
+    auto net = launchSyncNetwork(4, 2,
+        zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 },
+        {} /* leaf args */, std::move(callbacks)
+    );
+
+    // in a Fcfs launch, the callback is invoked once per *node*
+    ASSERT_EQ(count, 2);
+}
+
+TEST_F(ZmqnetFunctionTest, CallbackLaunchTestPacked) {
+    auto callbacks = zmqnet::UserCallbacks();
+
+    auto count = int{0};
+    auto count_them = [&count](int which_one) {
+        count++;
+    };
+
+    callbacks.registerCallback<zmqnet::Event::InitialConnection>(count_them);
+
+    auto net = launchSyncNetwork(4, 2,
+        zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 1 },
+        {} /* leaf args */, std::move(callbacks)
+    );
+
+    // in a Packed launch, the callback is invoked once per *rank*
+    ASSERT_EQ(count, 4);
+}
+
+TEST_F(ZmqnetFunctionTest, CallbackLaunchTestFcfsAsync) {
+    auto callbacks = zmqnet::UserCallbacks();
+
+    auto count = int{0};
+    auto count_them = [&count](int which_one) {
+        count++;
+    };
+
+    callbacks.registerCallback<zmqnet::Event::InitialConnection>(count_them);
+
+    auto net = launchAsyncNetwork(4, 2,
+        zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 },
+        {} /* leaf args */, std::move(callbacks)
+    );
+
+    // in a Fcfs launch, the callback is invoked once per *node*
+    EXPECT_EQ(count, 2);
+
+    net.runExit();
+}
+
+TEST_F(ZmqnetFunctionTest, CallbackLaunchTestPackedAsync) {
+    auto callbacks = zmqnet::UserCallbacks();
+
+    auto count = int{0};
+    auto count_them = [&count](int which_one) {
+        count++;
+    };
+
+    callbacks.registerCallback<zmqnet::Event::InitialConnection>(count_them);
+
+    auto net = launchAsyncNetwork(4, 2,
+        zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 1 },
+        {} /* leaf args */, std::move(callbacks)
+    );
+
+    // in a Packed launch, the callback is invoked once per *rank*
+    EXPECT_EQ(count, 4);
+
+    net.runExit();
 }
 
 int main(int argc, char **argv)

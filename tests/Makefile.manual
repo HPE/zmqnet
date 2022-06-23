@@ -11,7 +11,7 @@
 # Use via "make -f Makefile.manual"
 
 CXX = g++
-CXXFLAGS = -g -O0 -Wl,-E -Wl,-rpath,$(LIBZMQNET_INSTALL_DIR)/lib -std=c++17 -I. -I..
+CXXFLAGS = -g -O0 -Wl,-E -Wl,-rpath,$(LIBZMQNET_INSTALL_DIR)/lib -std=c++17 -I. -I.. -I../include -I../external/cppzmq -I../external/libzmq/include -I../external/capnproto/c++/src
 
 COMMON_TOOLS_FE_CFLAGS := $(shell pkg-config common_tools_fe --cflags)
 COMMON_TOOLS_FE_LIBS := $(shell pkg-config common_tools_fe --libs)
@@ -42,7 +42,7 @@ libfilter.so: libfilter.cpp
 	$(CXX) $(CXXFLAGS) $(ZMQNET_CFLAGS) -fPIC -shared $(ZMQNET_LIBS) $< -o $@
 
 topotest: topotest.cpp
-	$(CXX) $(CXXFLAGS) $(COMMON_TOOLS_FE_CFLAGS) $(COMMON_TOOLS_BE_CFLAGS) $(ZMQNET_CFLAGS) $(COMMON_TOOLS_FE_LIBS) $(COMMON_TOOLS_BE_LIBS) $(ZMQNET_LIBS) $< -o $@
+	$(CXX) $(CXXFLAGS) $(COMMON_TOOLS_FE_CFLAGS) $(COMMON_TOOLS_BE_CFLAGS) $(ZMQNET_CFLAGS) $(ZMQNET_LIBS) $(COMMON_TOOLS_FE_LIBS) $(COMMON_TOOLS_BE_LIBS) $< -o $@
 
 test_backend: test_backend.cpp
 	$(CXX) $(CXXFLAGS) $(ZMQNET_CFLAGS) $(ZMQNET_LIBS) $< -o $@
