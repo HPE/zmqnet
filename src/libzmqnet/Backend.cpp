@@ -141,6 +141,11 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 
 			return std::make_tuple(zmqnet::Stream { .id = -1 }, ByteArray{});
 
+		// Last ditch kill signal
+		} else if (command.isKill()) {
+			log("backend %d: got kill.\n", m_node_id);
+			std::exit(-1);
+
 		// If ping, respond with local node bitset
 		} else if (command.isPing()) {
 			log("backend %d: got ping on communicator %d.\n", m_node_id, reader.getTag());
@@ -376,6 +381,11 @@ static zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& in
 
 			// Return control of the upstream control socket back to main thread
 			return std::move(input_socket);
+
+		// Last ditch kill signal
+		} else if (command.isKill()) {
+			log("backend %d: got kill.\n", node_id);
+			std::exit(-1);
 
 		// If ping, respond with local node bitset
 		} else if (command.isPing()) {

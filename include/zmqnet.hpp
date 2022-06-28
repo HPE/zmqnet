@@ -32,6 +32,31 @@ namespace net
 namespace zmqnet
 {
 
+namespace env
+{
+	// Where zmqnet will look for zmqnet related libraries and binaries.
+	// e.g. where zmqnet finds its commnode binary.
+	constexpr auto INSTALL_DIR = "LIBZMQNET_INSTALL_DIR";
+
+	// If set to a number other than "0", explicitly enables encryption.
+	constexpr auto CURVE = "LIBZMQNET_CURVE";
+
+	// If set, enables debug behavior (e.g. logging, disabling encryption).
+	constexpr auto DEBUG = "CTI_DEBUG";
+
+	// If set to a valid path and DEBUG is enabled,
+	// zmqnet will write debug log files to the directory.
+	constexpr auto LOG_DIR = "CTI_LOG_DIR";
+
+	// During zmqnet network startup, there are a number of "handshakes"
+	// that need to be done between the frontend, the commnodes, and the backends.
+	// This variable is the amount of seconds that a process (frontend, commnode, or backend)
+	// will wait for the other side of any given startup handshake before quitting.
+	// If set to -1, the startup handshake timeout will be disabled.
+	// If not set, the default value is 300 seconds.
+	constexpr auto STARTUP_TIMEOUT = "LIBZMQNET_STARTUP_TIMEOUT";
+} // namespace env
+
 // Command data is provided via ByteArray
 // Extract bytes with .begin() and size with .size()
 using ByteArray = kj::Array<kj::byte>;
@@ -180,7 +205,7 @@ protected: // members
 protected: // derived class interface
 	Frontend(int const app_id, long int const session_id, long int const manifest_id,
 		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env,
-		UserCallbacks&& callbacks
+		UserCallbacks&& callbacks, const std::atomic<bool>* killSwitch
 	);
 	~Frontend();
 
@@ -323,7 +348,8 @@ public: // interface
 	// providing an optional leaf_env argument.
 	SyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
 		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env = nullptr,
-		UserCallbacks&& callbacks = UserCallbacks());
+		UserCallbacks&& callbacks = UserCallbacks(), const std::atomic<bool>* killSwitch = nullptr
+	);
 
 	// Get the default communicator to send a message to all nodes
 	Communicator getAllNodesCommunicator() const;
@@ -398,7 +424,8 @@ public: // interface
 	// See zmqnet::SyncFrontend for description
 	AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
 		Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env = nullptr,
-		UserCallbacks&& callbacks = UserCallbacks());
+		UserCallbacks&& callbacks = UserCallbacks(), const std::atomic<bool>* killSwitch = nullptr
+	);
 	~AsyncFrontend();
 
 	// Get the default communicator to send a message to all nodes

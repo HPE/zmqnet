@@ -756,6 +756,9 @@ static auto fcfs(zmq::context_t& ctx,
 		net::set_curve_client(dealer_socket, dealerPublicKey);
 	}
 	dealer_socket.connect(dealerEndpoint);
+	if (startup_handshake_timeout() != -1) {
+		dealer_socket.set(zmq::sockopt::rcvtimeo, startup_handshake_timeout() * 1000); // milliseconds
+	}
 	log("connected to topology server %s\n", dealerEndpoint.c_str());
 
 	// Create topology request message
@@ -772,8 +775,14 @@ static auto fcfs(zmq::context_t& ctx,
 	}
 
 	// Receive this node's topology info from topology server
-	auto reader = net::recv_MessageReader(dealer_socket);
-	auto topologyResponse = reader.getRoot<TopologyResponse>();
+	auto maybeReader = net::recv_MessageReader_timeout(dealer_socket);
+	if (!maybeReader) {
+		// Should never happen in a normal launch. User might have aborted
+		// the launch on the frontend.
+		log("topology request timed out. Exiting.\n");
+		std::exit(-1);
+	}
+	auto topologyResponse = maybeReader->getRoot<TopologyResponse>();
 	log("topology server reported id %d parent %s / %s / %s, %d children\n",
 		topologyResponse.getNodeId(),
 		topologyResponse.getParentControlEndpoint().cStr(),
@@ -1018,11 +1027,30 @@ int main(int argc, char* const argv[])
 		{ { net::communicator_ids::AllNodes, lrle_bitset{} }
 	};
 
+	// Temporary timeout during startup
+	if (startup_handshake_timeout() != -1) {
+		downstream.data_socket.set(zmq::sockopt::rcvtimeo, startup_handshake_timeout() * 1000); // milliseconds;
+	}
+
 	// Wait for all children to connect and send ready
 	for (int i = 0; i < num_children; i++) {
 		log("waiting for child %d / %d\n", i + 1, num_children);
-		auto reader = net::recv_MessageReader(downstream.data_socket);
-		auto response = reader.getRoot<NetworkResponse>();
+		auto maybeReader = net::recv_MessageReader_timeout(downstream.data_socket);
+		if (!maybeReader) {
+			log("timed out waiting for children. Exiting.\n");
+			
+			auto builder = capnp::MallocMessageBuilder{};
+			auto killSignal = builder.initRoot<NetworkCommand>();
+			killSignal.setKill();
+
+			net::send_MessageBuilder(downstream.control_socket, net::communicator_ids::AllNodes, builder);
+
+			// ensure that all pending outgoing messages get sent
+			ctx.close();
+
+			std::exit(-1);
+		}
+		auto response = maybeReader->getRoot<NetworkResponse>();
 		assert(response.isReady());
 
 		// Add nodes to children node bitset
@@ -1031,6 +1059,8 @@ int main(int argc, char* const argv[])
 			response_node_bitset.begin(),
 			response_node_bitset.size());
 	}
+
+	downstream.data_socket.set(zmq::sockopt::rcvtimeo, -1);
 
 	// Send ready to parent
 	log("sending ready to parent\n");
@@ -1097,6 +1127,18 @@ int main(int argc, char* const argv[])
 			net::send_MessageReader(downstream.control_socket, std::move(reader));
 
 			break;
+
+		// Last ditch kill signal
+		} else if (command.isKill()) {
+			log("got kill command\n");
+
+			// Relay command to children
+			net::send_MessageReader(downstream.control_socket, std::move(reader));
+
+			// ensure that all pending outgoing messages get sent
+			ctx.close();
+
+			std::exit(-1);
 
 		} else if (command.isStartLeaves()) {
 			log("unexpected: startLeaves\n");
@@ -1220,7 +1262,6 @@ int main(int argc, char* const argv[])
 
 	rc = 0;
 
-cleanup_main:
 	// Wait on stream relay thread
 	log("waiting for result relay thread\n");
 	downstream.data_socket = responseDistributor.get();
@@ -1234,7 +1275,7 @@ cleanup_main:
 	// Construct exit message for proxy
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto response = builder.initRoot<NetworkResponse>();
-		auto exitResponse = response.initExit();
+		response.initExit();
 
 		// Send exit message to proxy
 		net::send_MessageBuilder(result_socket, net::communicator_ids::AllNodes, builder);

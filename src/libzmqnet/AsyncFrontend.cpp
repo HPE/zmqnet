@@ -156,9 +156,10 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 } // async
 
 zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-	Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env, UserCallbacks&& cbacks)
+	Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env,
+	UserCallbacks&& cbacks, const std::atomic<bool>* killSwitch)
 
-	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env, std::move(cbacks)}
+	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env, std::move(cbacks), killSwitch}
 	, m_ctx{}
 	, m_callbackProcessors{}
 	, m_blocking_registration{std::make_unique<net::shared_semaphore>(false)}

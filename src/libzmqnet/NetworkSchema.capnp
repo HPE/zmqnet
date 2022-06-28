@@ -21,6 +21,8 @@ struct NetworkCommand {
   union {
     exit @0 :Void;
 
+    kill @13 :Void;
+
     startLeaves @1 :Void;
 
     ping @12 :Void;

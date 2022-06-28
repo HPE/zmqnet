@@ -26,11 +26,30 @@
 namespace launch
 {
 
+// Simulates a blocking recv on `socket`, checking killSwitch every so often.
+// If killSwitch is ever true, throws a std::runtime_error.
+auto killSwitchRecv(zmq::socket_t& socket, const std::atomic<bool>* killSwitch) {
+	while (true) {
+		if (killSwitch && *killSwitch) {
+			log("Detected killswitch.\n");
+			throw std::runtime_error("Launch interrupted");
+		}
+
+		// It is assumed that `socket` has had zmq::sockopt::rcvtimeo already set.
+		// Otherwise, this is just a run of the mill blocking recv.
+		if (auto maybeReader = net::recv_MessageReader_timeout(socket)) {
+			return std::move(*maybeReader);
+		}
+	}
+}
+
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
 // tree by the frontend.
 // Return max node ID, assigned node ID map
-static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs, int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
-	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
+static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs,
+	int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
+	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath,
+	cti_hostsList_t const& hostsPlacement, const std::atomic<bool>* killSwitch)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
 
@@ -91,6 +110,9 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqn
 			commnodeArgv.add(cti::Argv::Argument{*argptr});
 		}
 
+		// Before we start anything crazy...
+		if (killSwitch && *killSwitch) throw std::runtime_error("Launch interrupted");
+
 		// Launch commnode daemon
 		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, leaf_env)) {
 			throw std::runtime_error(cti_error_str());
@@ -119,7 +141,11 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqn
 		auto const node_id = next_node_id++;
 
 		// Receive topology request from new node
-		{ auto requestReader = net::recv_MessageReader(dealer_socket, zmq::recv_flags::none);
+		try {
+			// this timeout is not absolute, it's the interval that killSwitch is checked in killSwitchRecv
+			dealer_socket.set(zmq::sockopt::rcvtimeo, 3000);
+			// throws if killSwitch is flipped to true
+			auto requestReader = killSwitchRecv(dealer_socket, killSwitch);
 			auto topologyRequest = requestReader.getRoot<TopologyRequest>();
 
 			// Assign node ID
@@ -137,6 +163,15 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqn
 				topologyRequest.getNodeControlEndpoint().cStr(),
 				topologyRequest.getNodeDataEndpoint().cStr(),
 				topologyRequest.getNodePublicKey().cStr());
+		} catch (std::runtime_error& e) {
+			// Killswitch was flipped.
+			// If any commnodes made it to their main loop, shut them down.
+			log("Sending kill to started commnodes.\n");
+			auto builder = capnp::MallocMessageBuilder{};
+			auto killSignal = builder.initRoot<NetworkCommand>();
+			killSignal.setKill();
+			net::send_MessageBuilder(rootLink.control_socket, net::communicator_ids::AllNodes, builder);
+			throw;
 		}
 
 		// Determine the number of children of current node
@@ -193,7 +228,8 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqn
 // Return max node ID, assigned node ID map
 static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs,
 	int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
-	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath, cti_hostsList_t const& hostsPlacement)
+	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath,
+	cti_hostsList_t const& hostsPlacement, const std::atomic<bool>* killSwitch)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
 
@@ -253,6 +289,9 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zm
 			commnodeArgv.add(cti::Argv::Argument{*argptr});
 		}
 
+		// Before we start anything crazy...
+		if (killSwitch && *killSwitch) throw std::runtime_error("Launch interrupted");
+
 		// Launch commnode daemon
 		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, leaf_env)) {
 			throw std::runtime_error(cti_error_str());
@@ -280,7 +319,11 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zm
 		auto const node_id = next_node_id++;
 
 		// Receive topology request from new node
-		{ auto requestReader = net::recv_MessageReader(dealer_socket, zmq::recv_flags::none);
+		try {
+			// this timeout is not absolute, it is the interval that killSwitch is checked in killSwitchRecv.
+			dealer_socket.set(zmq::sockopt::rcvtimeo, 3000);
+			// throws if killSwitch is flipped to true
+			auto requestReader = killSwitchRecv(dealer_socket, killSwitch);
 			auto topologyRequest = requestReader.getRoot<TopologyRequest>();
 
 			// Assign node ID
@@ -292,6 +335,15 @@ static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zm
 				topologyRequest.getNodeDataEndpoint().cStr(),
 				topologyRequest.getNodePublicKey().cStr()
 			);
+		} catch (std::runtime_error& e) {
+			// Killswitch was flipped.
+			// If any commnodes made it to their main loop, shut them down.
+			log("Sending kill to started commnodes.\n");
+			auto builder = capnp::MallocMessageBuilder{};
+			auto killSignal = builder.initRoot<NetworkCommand>();
+			killSignal.setKill();
+			net::send_MessageBuilder(rootLink.control_socket, net::communicator_ids::AllNodes, builder);
+			throw;
 		}
 
 		// Determine the number of children of current node
@@ -518,7 +570,8 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 // Common frontend implementation
 
 zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, long int const manifest_id,
-	zmqnet::Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env, UserCallbacks&& cbacks)
+	zmqnet::Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env,
+	UserCallbacks&& cbacks, const std::atomic<bool>* killSwitch)
 	: m_max_node_id{}
 	, m_nodeIdMap{}
 	, m_ctx{}
@@ -529,8 +582,8 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	auto const start_ms = get_milliseconds();
 
 	// Find commnode path
-	auto const commnodePath = std::getenv("LIBZMQNET_INSTALL_DIR") ?
-		std::string{std::getenv("LIBZMQNET_INSTALL_DIR")} + "/libexec/commnode"
+	auto const commnodePath = std::getenv(env::INSTALL_DIR) ?
+		std::string{std::getenv(env::INSTALL_DIR)} + "/libexec/commnode"
 		:
 		std::string{LIBZMQNET_PREFIX} + "/libexec/commnode"
 	;
@@ -550,7 +603,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	auto auth = zmqnet::Auth::None;
 #endif
 
-	if (auto const libzmqnet_curve = ::getenv("LIBZMQNET_CURVE")) {
+	if (auto const libzmqnet_curve = ::getenv(env::CURVE)) {
 		try {
 
 			// Check build-time encryption build setting
@@ -558,9 +611,9 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 #if HAVE_ENCRYPTION
 				auth = zmqnet::Auth::Curve;
 #else
-				fprintf(stderr, "warning: encryption was enabled using LIBZMQNET_CURVE, "
+				fprintf(stderr, "warning: encryption was enabled using %s, "
 					"but it was disabled during the library build. Encryption will remain "
-					"disabled for this run.\n");
+					"disabled for this run.\n", env::CURVE);
 #endif
 
 			// Encryption disabled by user
@@ -569,8 +622,8 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 			}
 
 		} catch (std::exception const& ex) {
-			throw std::runtime_error("Invalid setting for LIBZMQNET_CURVE (expected 0 or 1): "
-				+ std::string{libzmqnet_curve});
+			throw std::runtime_error(std::string{"Invalid setting for "} + env::CURVE
+                + " (expected 0 or 1): " + std::string{libzmqnet_curve});
 		}
 	}
 
@@ -586,19 +639,24 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	log("launch started: %5ldms\n", startup_ms - start_ms);
 
 	// Launch tree
-	if (topology.launch == Topology::Launch::Fcfs) {
-		std::tie(m_max_node_id, m_nodeIdMap) =
-			launch::fcfsTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement);
-	} else if (topology.launch == Topology::Launch::Layered) {
-		std::tie(m_max_node_id, m_nodeIdMap) =
-			launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, leaf_env, commnodePath,*hostsPlacement);
-	} else if (topology.launch == Topology::Launch::Packed) {
-		std::tie(m_max_node_id, m_nodeIdMap) =
-			launch::packedTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
-				topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement);
-	}
+    try {
+        if (topology.launch == Topology::Launch::Fcfs) {
+            std::tie(m_max_node_id, m_nodeIdMap) =
+                launch::fcfsTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
+                    topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement, killSwitch);
+        } else if (topology.launch == Topology::Launch::Layered) {
+            std::tie(m_max_node_id, m_nodeIdMap) =
+                launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
+                    topology.fanout, auth, leaf_argv, leaf_env, commnodePath,*hostsPlacement);
+        } else if (topology.launch == Topology::Launch::Packed) {
+            std::tie(m_max_node_id, m_nodeIdMap) =
+                launch::packedTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
+                    topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement, killSwitch);
+        }
+    } catch (std::runtime_error& e) {
+        m_ctx.shutdown();
+        throw;
+    }
 
 	auto const launch_ms = get_milliseconds();
 	log("all commnodes connected: %5ldms\n", launch_ms - startup_ms);
@@ -824,8 +882,9 @@ zmqnet::RankSet zmqnet::detail::Frontend::toRankSet(zmqnet::NodeSet const& nodes
 // Synchronous frontend implementation
 
 zmqnet::SyncFrontend::SyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
-	zmqnet::Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env, UserCallbacks&& cbacks)
-	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env, std::move(cbacks)}
+	zmqnet::Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env,
+	UserCallbacks&& cbacks, const std::atomic<bool>* killSwitch)
+	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env, std::move(cbacks), killSwitch}
 {}
 
 zmqnet::Communicator zmqnet::SyncFrontend::getAllNodesCommunicator() const

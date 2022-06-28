@@ -46,7 +46,7 @@ static inline auto get_milliseconds()
 static inline bool debug_enabled()
 {
 	static const auto _enabled = []() {
-		return bool{::getenv("CTI_DEBUG")};
+		return bool{::getenv(zmqnet::env::DEBUG)};
 	}();
 	return _enabled;
 }
@@ -63,13 +63,30 @@ static inline void log(const char* format, ...)
 	}
 }
 
+static inline int startup_handshake_timeout() {
+	static const auto timeout = []() {
+		int r = 300; // default, in seconds
+		using namespace zmqnet::env;
+		if (::getenv(STARTUP_TIMEOUT) && ::atoi(::getenv(STARTUP_TIMEOUT)) >= -1) {
+			r = atoi(::getenv(STARTUP_TIMEOUT));
+			log("Got a startup handshake timeout of %d from the environment.\n", r);
+		} else if (debug_enabled()) {
+			log("Disabling startup handshake timeout because debugging is enabled.\n");
+			log("To enable it anyway, set %s.\n", STARTUP_TIMEOUT);
+			r = -1;
+		}
+		return r;
+	}();
+	return timeout;
+}
+
 static inline void enable_individual_logfile(std::string filename = "") 
 {
 	if (!debug_enabled()) return;
 
 	if (filename == "") filename = "zmqnet_" + std::to_string(getpid()) + ".log";
 
-	const char *dir = getenv("CTI_LOG_DIR");
+	const char *dir = getenv(zmqnet::env::LOG_DIR);
 	if (!dir) {
 		dir = "/tmp";
 	}
