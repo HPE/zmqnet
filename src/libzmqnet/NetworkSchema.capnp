@@ -50,10 +50,17 @@ struct NetworkCommand {
   }
 }
 
+enum NodeType {
+  unset @0;
+  leaf @1;
+  commnode @2;
+}
+
 struct NetworkResponse {
   union {
     exit :group {
       nodes @0 :Data;
+      nodeType @10 :NodeType = unset;
     }
 
     ready :group {

@@ -34,6 +34,10 @@
 // External interface
 #include "zmqnet.hpp"
 
+// required for pthread_sigmask etc.
+static_assert(std::is_same<std::thread::native_handle_type, pthread_t>::value,
+	"zmqnet signal handling will not work for a non-pthread thread implementation.");
+
 // Logging
 
 static inline auto get_milliseconds()
@@ -275,6 +279,12 @@ public:
 		// Bind to first end of capture socket
 		proxy_capture.bind(proxyCaptureEndpoint);
 
+		// Tasks should ignore all signals
+		sigset_t all_signals;
+		sigset_t old_signals;
+		sigfillset(&all_signals);
+		pthread_sigmask(SIG_BLOCK, &all_signals, &old_signals);
+
 		// Start capture task
 		captureTask = std::thread{[&](std::string logLinePrefix) {
 
@@ -326,6 +336,8 @@ public:
 			}
 		}};
 
+		// Restore old signal mask
+		pthread_sigmask(SIG_BLOCK, &old_signals, nullptr);
 	}
 
 	// Log messages coming from upstream into control socket
@@ -712,7 +724,8 @@ static inline zmq::socket_t collect_network_responses(zmq::context_t& ctx, std::
 		auto response = reader.getRoot<NetworkResponse>();
 
 		// If exit message, return socket back to caller for cleanup
-		if (response.isExit()) {
+		if (response.isExit() && response.getExit().getNodeType() == NodeType::UNSET) {
+			log("collect_network_responses: %s: returning! (got nodetype:UNSET)\n", resultEndpoint.c_str());
 			return std::move(output_socket);
 		}
 

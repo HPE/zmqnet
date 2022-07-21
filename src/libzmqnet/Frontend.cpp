@@ -623,7 +623,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 
 		} catch (std::exception const& ex) {
 			throw std::runtime_error(std::string{"Invalid setting for "} + env::CURVE
-                + " (expected 0 or 1): " + std::string{libzmqnet_curve});
+				+ " (expected 0 or 1): " + std::string{libzmqnet_curve});
 		}
 	}
 
@@ -639,24 +639,27 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	log("launch started: %5ldms\n", startup_ms - start_ms);
 
 	// Launch tree
-    try {
-        if (topology.launch == Topology::Launch::Fcfs) {
-            std::tie(m_max_node_id, m_nodeIdMap) =
-                launch::fcfsTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
-                    topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement, killSwitch);
-        } else if (topology.launch == Topology::Launch::Layered) {
-            std::tie(m_max_node_id, m_nodeIdMap) =
-                launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
-                    topology.fanout, auth, leaf_argv, leaf_env, commnodePath,*hostsPlacement);
-        } else if (topology.launch == Topology::Launch::Packed) {
-            std::tie(m_max_node_id, m_nodeIdMap) =
-                launch::packedTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
-                    topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement, killSwitch);
-        }
-    } catch (std::runtime_error& e) {
-        m_ctx.shutdown();
-        throw;
-    }
+	try {
+		if (topology.launch == Topology::Launch::Fcfs) {
+			std::tie(m_max_node_id, m_nodeIdMap) =
+				launch::fcfsTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
+				topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement, killSwitch);
+		} else if (topology.launch == Topology::Launch::Layered) {
+			std::tie(m_max_node_id, m_nodeIdMap) =
+				launch::layeredTree(m_ctx, *m_downstream, app_id, session_id, manifest_id,
+				topology.fanout, auth, leaf_argv, leaf_env, commnodePath,*hostsPlacement);
+		} else if (topology.launch == Topology::Launch::Packed) {
+			std::tie(m_max_node_id, m_nodeIdMap) =
+				launch::packedTree(m_ctx, *m_downstream, m_uCallbacks, app_id, session_id, manifest_id,
+				topology.fanout, auth, leaf_argv, leaf_env, commnodePath, *hostsPlacement, killSwitch);
+		} else {
+			// should never happen
+			throw std::runtime_error("invalid topology");
+		}
+	} catch (std::runtime_error& e) {
+		m_ctx.shutdown();
+		throw;
+	}
 
 	auto const launch_ms = get_milliseconds();
 	log("all commnodes connected: %5ldms\n", launch_ms - startup_ms);
@@ -680,11 +683,17 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	// Wait for communicator acknowledgement
 	{ auto reader = net::recv_MessageReader(m_downstream->data_socket);
 		auto response = reader.getRoot<NetworkResponse>();
-		assert(response.isCommunicator() && (response.getCommunicator().getCommunicatorId() == net::communicator_ids::AllNodes));
+		assert(response.isCommunicator());
+		auto communicator = response.getCommunicator();
+		assert(communicator.getCommunicatorId() == net::communicator_ids::AllNodes);
+
+		auto descendants_buf = response.getCommunicator().getNodes().asBytes();
+		m_allDescendants = std::make_unique<lrle_bitset>(descendants_buf.begin(), descendants_buf.size());
 	}
 
 	auto const leaf_ms = get_milliseconds();
 	log("all leaves connected: %5ldms\n", leaf_ms - launch_ms);
+	log("all descendants: %s\n", m_allDescendants->to_string().c_str());
 }
 
 zmqnet::detail::Frontend::~Frontend()

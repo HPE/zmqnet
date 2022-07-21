@@ -29,6 +29,8 @@ namespace net
 	class UpstreamLink;
 }
 
+class lrle_bitset;
+
 namespace zmqnet
 {
 
@@ -141,11 +143,9 @@ using StreamSync = std::variant<sync::Immediate, sync::WaitForAll, sync::Timeout
 
 // Events that a callback can be hooked to
 enum class Event : size_t {
-	                       // called upon the occurance of...
-	InitialConnection = 0, // each initial connection during network construction
-	                       // ...more to come?
-	                       //
-	N                      // for use in sizing internal tables
+	                   // called upon the occurance of...
+	InitialConnection, // each initial connection during network construction
+	LeafExit           // an unexpected exit of a zmqnet leaf program
 };
 
 class UserCallbacks
@@ -161,6 +161,8 @@ public:
 	void registerCallback(F fn) {
 		if constexpr (e == Event::InitialConnection) {
 			m_uponInitialConnect = fn;
+		} else if constexpr (e == Event::LeafExit) {
+			m_uponLeafExit = fn;
 		} else {
 			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
 		}
@@ -171,6 +173,9 @@ public:
 		if constexpr (e == Event::InitialConnection) {
 			if (m_uponInitialConnect)
 				m_uponInitialConnect(std::forward<Args>(args)...);
+		} else if constexpr (e == Event::LeafExit) {
+			if (m_uponLeafExit)
+				m_uponLeafExit(std::forward<Args>(args)...);
 		} else {
 			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
 		}
@@ -180,12 +185,15 @@ public:
 	void removeCallback() {
 		if constexpr (e == Event::InitialConnection) {
 			m_uponInitialConnect = nullptr;
+		} else if constexpr (e == Event::LeafExit) {
+			m_uponLeafExit = nullptr;
 		} else {
 			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
 		}
 	}
 private:
 	std::function<void(int)> m_uponInitialConnect;
+	std::function<void(int)> m_uponLeafExit;
 };
 
 // Internal base Frontend and Backend objects
@@ -201,6 +209,7 @@ protected: // members
 	std::unique_ptr<net::TcpDownstreamLink> m_downstream;
 	Communicator::Id m_next_communicatorId;
 	UserCallbacks m_uCallbacks;
+	std::unique_ptr<lrle_bitset> m_allDescendants;
 
 protected: // derived class interface
 	Frontend(int const app_id, long int const session_id, long int const manifest_id,

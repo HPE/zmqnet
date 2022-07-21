@@ -13,6 +13,11 @@
 
 // Internal helpers and classes
 #include "libzmqnet.hpp"
+#include "lrle_bitset_impl.hpp"
+
+static int bitsetToInt(const lrle_bitset& bitset) {
+	return lrle_next_set_bit(bitset.compressed.data(), bitset.compressed.size(), nullptr);
+}
 
 // Static asynchronous frontend functions to be run in own threads
 namespace workers
@@ -68,11 +73,13 @@ static void callback_processor(zmq::context_t& ctx, zmqnet::Stream const& stream
 // Stream tasks are created by main thread.
 // Completed when received an exit message.
 // Returns control of input socket upon completion.
-static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket, const char* ping_endpoint, net::shared_semaphore& blocking_registration)
+static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket, const char* ping_endpoint, const lrle_bitset& allDescendants, net::shared_semaphore& blocking_registration, zmqnet::UserCallbacks& uCbs)
 {
 	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
 	auto pingSocket = zmq::socket_t{ctx, zmq::socket_type::push};
 	pingSocket.connect(ping_endpoint);
+
+	auto exitedDescendants = lrle_bitset{};
 
 	while (true) {
 		// Receive next message
@@ -81,17 +88,33 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 		auto response = reader.getRoot<NetworkResponse>();
 		auto const communicatorId = reader.getTag();
 
-		// If exit, clean up
+		// If exit, record exited nodes and clean up when all have exited
 		if (response.isExit()) {
-			log("distributor: exit\n");
+			auto type = response.getExit().getNodeType();
+			auto nodes_buf = response.getExit().getNodes().asBytes();
+			auto nodes = lrle_bitset(nodes_buf.begin(), nodes_buf.size());
+			log("distributor: exit (%d, %s)\n", type, nodes.to_string().c_str());
 
-			// Relay exit message to task sockets
-			for (auto&& [streamId, task_socket] : taskSockets) {
-				net::send_MessageReader_copy(task_socket, reader);
+			if (type == NodeType::LEAF) {
+				// Call user callback
+				uCbs.invokeCallback<zmqnet::Event::LeafExit>(bitsetToInt(nodes));
+			} else if (type == NodeType::COMMNODE) {
+				// Record exited nodes
+				exitedDescendants |= nodes;
+				if (exitedDescendants == allDescendants) {
+					log("distributor: all descendants exited. cleaning up.\n");
+					// Relay exit message to task sockets
+					for (auto&& [streamId, task_socket] : taskSockets) {
+						net::send_MessageReader_copy(task_socket, reader);
+					}
+
+					// Return control of the upstream control socket back to main thread
+					return std::move(input_socket);
+				}
+			} else {
+				// should never happen
+				throw std::runtime_error("bad NodeType in exit response");
 			}
-
-			// Return control of the upstream control socket back to main thread
-			return std::move(input_socket);
 		}
 
 		// If ping, forward to ping endpoint
@@ -170,12 +193,8 @@ zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id
 	m_pingSocket.bind(m_pingEndpoint);
 
 	// Launch callback distributor task
-	m_responseDistributor = std::async(std::launch::async,
-		[](zmq::context_t& ctx, zmq::socket_t&& input_socket, const char* ping_endpoint,
-			net::shared_semaphore& blocking_registration) 
-		{
-			return workers::response_distributor(ctx, std::move(input_socket), ping_endpoint, blocking_registration);
-		}, std::ref(m_ctx), std::move(m_downstream->data_socket), m_pingEndpoint, std::ref(*m_blocking_registration));
+	m_responseDistributor = std::async(std::launch::async, workers::response_distributor,
+		std::ref(m_ctx), std::move(m_downstream->data_socket), m_pingEndpoint, std::ref(*m_allDescendants), std::ref(*m_blocking_registration), std::ref(m_uCallbacks));
 }
 
 zmqnet::AsyncFrontend::~AsyncFrontend()

@@ -127,7 +127,8 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 				auto response = builder.initRoot<NetworkResponse>();
 				auto exit = response.initExit();
 
-				// Set node bitset
+				// Set exit information
+				exit.setNodeType(NodeType::LEAF);
 				exit.setNodes(kj::ArrayPtr<kj::byte const>
 					{ (unsigned char const*)m_node_bitset.data()
 					, m_node_bitset.size()
@@ -621,7 +622,9 @@ void zmqnet::AsyncBackend::waitForExit()
 	auto response = builder.initRoot<NetworkResponse>();
 	auto exit = response.initExit();
 
-	// Set node bitset
+	// Set exit information
+	// Collector proxy is rigged to shut down when it sees UNSET
+	exit.setNodeType(NodeType::UNSET);
 	exit.setNodes(kj::ArrayPtr<kj::byte const>
 		{ (unsigned char const*)m_node_bitset.data()
 		, m_node_bitset.size()
@@ -633,6 +636,9 @@ void zmqnet::AsyncBackend::waitForExit()
 	// Reacquire upstream data socket from exiting proxy
 	log("backend %d: waiting for proxy\n", m_node_id);
 	m_upstream->data_socket = m_responseCollector.get();
+
+	// Change to correct LEAF value, for upstream
+	exit.setNodeType(NodeType::LEAF);
 
 	// Send exit acknowledgement to parent
 	log("backend %d: notifying parent of exit\n", m_node_id);
