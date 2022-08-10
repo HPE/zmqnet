@@ -44,7 +44,7 @@ namespace env
 	constexpr auto CURVE = "LIBZMQNET_CURVE";
 
 	// If set, enables debug behavior (e.g. logging, disabling encryption).
-	constexpr auto DEBUG = "CTI_DEBUG";
+	constexpr auto ENABLEDEBUG = "CTI_DEBUG";
 
 	// If set to a valid path and DEBUG is enabled,
 	// zmqnet will write debug log files to the directory.

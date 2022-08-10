@@ -50,7 +50,7 @@ static inline auto get_milliseconds()
 static inline bool debug_enabled()
 {
 	static const auto _enabled = []() {
-		return bool{::getenv(zmqnet::env::DEBUG)};
+		return bool{::getenv(zmqnet::env::ENABLEDEBUG)};
 	}();
 	return _enabled;
 }
