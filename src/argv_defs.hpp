@@ -27,11 +27,10 @@ struct CommnodeArgv : public cti::Argv {
     static constexpr Parameter AuthType { "auth-type", 'k' };
     static constexpr Parameter DealerEndpoint    { "dealer-endpoint",     'd' };
     static constexpr Parameter NodeConnectionMap { "node-connection-map", 'c' };
-    static constexpr Parameter PackedNodeId { "packed-node-id", 'n' };
 
     static constexpr GNUOption long_options[] = {
         Help, Packed,
-        AuthFile, AuthType, DealerEndpoint, NodeConnectionMap, PackedNodeId,
+        AuthFile, AuthType, DealerEndpoint, NodeConnectionMap,
         long_options_done
     };
 };

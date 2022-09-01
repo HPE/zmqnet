@@ -46,10 +46,10 @@ auto killSwitchRecv(zmq::socket_t& socket, const std::atomic<bool>* killSwitch) 
 // Build fanout tree in first-come first-served order. Does not require any precomputing of topology
 // tree by the frontend.
 // Return max node ID, assigned node ID map
-static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs,
+static auto fcfsTreeImpl(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs,
 	int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
 	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath,
-	cti_hostsList_t const& hostsPlacement, const std::atomic<bool>* killSwitch)
+	cti_hostsList_t const& hostsPlacement, const std::atomic<bool>* killSwitch, bool packed)
 {
 	auto nodeIdMap = std::unordered_map<std::string, int>{};
 
@@ -105,6 +105,9 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqn
 			commnodeArgv.add(CommnodeArgv::AuthFile, authFilePath);
 		}
 
+		// in packed mode, one leaf binary will be launched per *rank* instead of per node
+		if (packed) commnodeArgv.add(CommnodeArgv::Packed);
+
 		// Add provided leaf arguments
 		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
 			commnodeArgv.add(cti::Argv::Argument{*argptr});
@@ -130,7 +133,7 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqn
 	auto num_nodes = hostsPlacement.numHosts;
 	endpoints.reserve(num_nodes + 1);
 	auto next_node_id = int{0};
-	auto cursor = 0;
+	auto cursor = int{0};
 
 	int level = 0;
 	int levelFilled = 0;
@@ -225,171 +228,28 @@ static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqn
 	return std::make_tuple(max_node_id, std::move(nodeIdMap));
 }
 
+// The only difference between Fcfs and Packed is that in fcfs, each commnode
+// (one per node) will fork/exec one leaf process, and in packed, each commnode
+// (still one per node) will fork/exec n leaf processes, where n is the number
+// of individual ranks on the node that the commnode lives on.
+
+static auto fcfsTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs,
+	int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
+	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath,
+	cti_hostsList_t const& hostsPlacement, const std::atomic<bool>* killSwitch)
+{
+	return fcfsTreeImpl(ctx, rootLink, uCbs, app_id, session_id, manifest_id, fanout, auth,
+		leaf_argv, leaf_env, commnodePath, hostsPlacement, killSwitch, /* packed? */ false);
+}
+
 // Return max node ID, assigned node ID map
 static auto packedTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, zmqnet::UserCallbacks& uCbs,
 	int app_id, int session_id, int manifest_id, int fanout, zmqnet::Auth const& auth,
 	char const* const* leaf_argv, char const* const* leaf_env, std::string const& commnodePath,
 	cti_hostsList_t const& hostsPlacement, const std::atomic<bool>* killSwitch)
 {
-	auto nodeIdMap = std::unordered_map<std::string, int>{};
-
-	// Start topology socket to send its connection info to commnode daemon
-	auto dealer_socket = zmq::socket_t{ctx, zmq::socket_type::rep};
-	
-	// Create auth file for commnode
-	auto authFile = temp_file();
-
-#if HAVE_ENCRYPTION
-	// Fill auth file if CURVE encryption enabled
-	if (auth == zmqnet::Auth::Curve) {
-		// Generate and set server keys for topology dealer socket
-		auto const dealerPub = net::set_curve_server(dealer_socket);
-
-		// Write dealer public key to file
-		::fprintf(authFile.get(), "%s\n", dealerPub.c_str());
-		authFile.close();
-
-		// Add auth file to manifest
-		if (cti_addManifestFile(manifest_id, authFile.path())) {
-			throw std::runtime_error("failed to add authfile to manifest: " + 
-				std::string{cti_error_str()});
-		}
-	}
-#endif
-
-	// Bind topology dealer socket
-	dealer_socket.bind("tcp://*:*");
-	auto const dealerEndpoint = net::replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
-	log("topology dealer listening on %s\n", dealerEndpoint.c_str());
-
-	cti_addManifestBinary(manifest_id, commnodePath.c_str());
-
-	// Set up commnode daemon arguments with topology connection info and leaf process arguments
-	{ auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{commnodePath};
-		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
-
-		// Set authentication type argument
-		commnodeArgv.add(CommnodeArgv::AuthType, std::to_string(static_cast<int>(auth)));
-
-		// Add keyfile path if CURVE set
-		if (auth == zmqnet::Auth::Curve) {
-			// Generate path to auth file
-			auto fileDir = std::unique_ptr<char, decltype(&::free)> {
-				cti_getSessionFileDir(session_id), ::free };
-			auto const authFileName = std::string{
-				::basename(::strdup(authFile.path()))};
-			auto const authFilePath = std::string{fileDir.get()} + "/" + authFileName;
-			commnodeArgv.add(CommnodeArgv::AuthFile, authFilePath);
-		}
-
-		commnodeArgv.add(CommnodeArgv::Packed);
-
-		// Add provided leaf arguments
-		for (auto argptr = leaf_argv; *argptr != nullptr; argptr++) {
-			commnodeArgv.add(cti::Argv::Argument{*argptr});
-		}
-
-		// Before we start anything crazy...
-		if (killSwitch && *killSwitch) throw std::runtime_error("Launch interrupted");
-
-		// Launch commnode daemon
-		if (cti_execToolDaemon(manifest_id, commnodePath.c_str(), commnodeArgv.get() + 1, leaf_env)) {
-			throw std::runtime_error(cti_error_str());
-		}
-	}
-
-	// Remove temporary auth file
-	authFile.reset();
-
-	// Set up fanout topology and wait for all children to connect
-	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
-	auto endpoints = std::vector<std::tuple<std::string, std::string, std::string>> {
-		{rootControlEndpoint, rootDataEndpoint, rootLink.getPublicKey()}
-	};
-	auto num_nodes = cti_getNumAppPEs(app_id);
-	endpoints.reserve(num_nodes + 1);
-	auto next_node_id = int{0};
-	auto cursor = int{0};
-
-	int level = 0;
-	int levelFilled = 0;
-	int levelCap = 1;
-
-	for (int seen = 0; seen < num_nodes; seen++) {
-		auto const node_id = next_node_id++;
-
-		// Receive topology request from new node
-		try {
-			// this timeout is not absolute, it is the interval that killSwitch is checked in killSwitchRecv.
-			dealer_socket.set(zmq::sockopt::rcvtimeo, 3000);
-			// throws if killSwitch is flipped to true
-			auto requestReader = killSwitchRecv(dealer_socket, killSwitch);
-			auto topologyRequest = requestReader.getRoot<TopologyRequest>();
-
-			// Assign node ID
-			nodeIdMap[topologyRequest.getNodeHostname().cStr()] = node_id;
-
-			// Register topology information
-			endpoints.emplace_back(
-				topologyRequest.getNodeControlEndpoint().cStr(), 
-				topologyRequest.getNodeDataEndpoint().cStr(),
-				topologyRequest.getNodePublicKey().cStr()
-			);
-		} catch (std::runtime_error& e) {
-			// Killswitch was flipped.
-			// If any commnodes made it to their main loop, shut them down.
-			log("Sending kill to started commnodes.\n");
-			auto builder = capnp::MallocMessageBuilder{};
-			auto killSignal = builder.initRoot<NetworkCommand>();
-			killSignal.setKill();
-			net::send_MessageBuilder(rootLink.control_socket, net::communicator_ids::AllNodes, builder);
-			throw;
-		}
-
-		// Determine the number of children of current node
-		auto const remain = num_nodes - (seen + 1);
-		levelFilled++;
-		auto const rightFill = levelCap - levelFilled;
-		auto const leftFill = (levelFilled - 1) * fanout;
-		auto const num_children = std::min(fanout, std::max(0, remain - (rightFill + leftFill)));
-
-		// Create topology response
-		{ auto builder = capnp::MallocMessageBuilder{};
-			auto topologyResponse = builder.initRoot<TopologyResponse>();
-
-			auto const& [parentControlEndpoint, parentDataEndpoint, parentPublicKey] = endpoints[cursor];
-			topologyResponse.setNodeId(node_id);
-			topologyResponse.setParentControlEndpoint(parentControlEndpoint);
-			topologyResponse.setParentDataEndpoint(parentDataEndpoint);
-			topologyResponse.setParentPublicKey(parentPublicKey);
-			topologyResponse.setNumChildren(num_children);
-
-			// Send topology response
-			net::send_MessageBuilder(dealer_socket, net::communicator_ids::AllNodes, builder);
-		}
-
-		// Advance to next node
-		if (seen % fanout == 0) {
-			cursor++;
-		}
-		if (levelFilled == (int)pow(fanout, level)) {
-			level++;
-			levelFilled = 0;
-			levelCap = (int)pow(fanout, level);
-		}
-		log("%d connected\n", seen);
-
-		uCbs.invokeCallback<zmqnet::Event::InitialConnection>(seen);
-	}
-
-	if (nodeIdMap.empty()) {
-		throw std::runtime_error("no nodes in network");
-	}
-
-	assert(next_node_id > 0);
-	auto const max_node_id = next_node_id - 1;
-
-	return std::make_tuple(max_node_id, std::move(nodeIdMap));
+	return fcfsTreeImpl(ctx, rootLink, uCbs, app_id, session_id, manifest_id, fanout, auth,
+		leaf_argv, leaf_env, commnodePath, hostsPlacement, killSwitch, /* packed? */ true);
 }
 
 // Return max node ID, assigned node ID map

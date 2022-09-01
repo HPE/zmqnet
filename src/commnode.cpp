@@ -38,7 +38,6 @@ static auto parse_argv(int argc, char* const argv[])
 	auto dealerEndpoint = std::string{};
 	auto nodeConnectionMap = std::string{};
 	auto packed_mode = false;
-	auto packed_node_id = int{-1};
 
 	using CA = CommnodeArgv;
 	auto parsedArgv = cti::IncomingArgv<CA>{argc, argv};
@@ -70,10 +69,6 @@ static auto parse_argv(int argc, char* const argv[])
 			nodeConnectionMap = std::move(value);
 			break;
 
-		case CA::PackedNodeId.val:
-			packed_node_id = std::stoi(value);
-			break;
-
 		case '?':
 		default:
 			throw std::runtime_error("bad arg");
@@ -88,7 +83,7 @@ static auto parse_argv(int argc, char* const argv[])
 	return std::make_tuple(
 		std::move(authFile), authType,
 		std::move(dealerEndpoint), std::move(nodeConnectionMap),
-		packed_mode, packed_node_id,
+		packed_mode,
 		leaf_argc, leaf_argv);
 }
 
@@ -1296,14 +1291,6 @@ int main(int argc, char* const argv[])
 	auto num_children = int{};
 	auto node_id = int{};
 
-	auto const first_pe = (packed_node_id < 0)
-		? cti_be_getNodeFirstPE()
-		: packed_node_id;
-
-	if (packed_mode) {
-		enable_individual_logfile("zmqnet_leaf_commnode_" + std::to_string(first_pe) + ".log");
-	}
-
 	// Use either FCFS or leveled tree launch based on arguments
 	if (!dealerEndpoint.empty()) {
 
@@ -1358,65 +1345,24 @@ int main(int argc, char* const argv[])
 		std::ref(ctx), std::ref(exitFlag), std::ref(childPids)
 	);
 
-	// Determine number of local children, one per PE on node
-	auto const local_pes = 1;
-	num_children += local_pes;
+	// Determine number of leaf binaries
+	// - in packed: one per rank
+	// - in fcfs: one per node
+	auto const num_leaves = packed_mode ? cti_be_getNodePEs() : 1;
+	// num_children is number of child commnodes + number of child leaves
+	num_children += num_leaves;
 
-	// If running packed mode and no node was provided, start other packed commnodes
-	if (packed_mode && (packed_node_id < 0)) {
-		auto const packed_commnodes = cti_be_getNodePEs() - 1;
-		log("forking %d local packed commnodes\n", packed_commnodes);
-
-		// Set up commnode daemon arguments with topology connection info and leaf process arguments
-		auto commnodeArgv = cti::OutgoingArgv<CommnodeArgv>{argv[0]};
-		commnodeArgv.add(CommnodeArgv::DealerEndpoint, dealerEndpoint);
-		commnodeArgv.add(CommnodeArgv::AuthFile, authFile);
-		commnodeArgv.add(CommnodeArgv::AuthType, std::to_string(static_cast<int>(authType)));
-		commnodeArgv.add(CommnodeArgv::Packed);
-		commnodeArgv.add(cti::Argv::Argument{"-n"});
-		commnodeArgv.add(cti::Argv::Argument{"-1"}); // Add seperately from option so it can be replaced via pointer
-
-		// Add provided leaf arguments
-		for (int i = 0; i < leaf_argc; i++) {
-			commnodeArgv.add(cti::Argv::Argument{leaf_argv[i]});
-		}
-
-		// Get pointer to node argument
-		auto commnode_argv = commnodeArgv.get();
-		auto node_arg_ptr = (char**)&commnode_argv[6]; // should point to "-1"
-
-		// Launch packed commnodes
-		for (int i = 0; i < packed_commnodes; i++) {
-			log("%d / %d\n", i + 1, packed_commnodes);
-
-			if (auto const forkedPid = fork()) {
-				// Add launched process to cleanup list
-				const auto CommnodeT = CommChild::Type::Commnode;
-				childPids.insert(CommChild(CommnodeT, forkedPid, -1));
-
-			} else {
-				// Set node argument
-				auto const node = first_pe + local_pes + i;
-				auto const nodeString = std::to_string(node);
-				*node_arg_ptr = (char*)nodeString.c_str();
-
-				// Exec commnode binary
-				execvp(argv[0], commnode_argv);
-				perror("execvp");
-				_exit(-1);
-			}
-		}
-	}
-
-	// Launch local children with provided leaf binary
+	// Launch leaf binary(s)
 	{ auto const leafPath = std::string{cti_be_getBinDir()} + "/" + leaf_argv[0];
 		auto const [controlEndpoint, dataEndpoint] = net::formatEndpoints(downstream, cti_be_getNodeHostname());
-		log("forking %d local leaf processes %s\n", local_pes, leafPath.c_str());
+		log("forking %d local leaf processes %s\n", num_leaves, leafPath.c_str());
 
 		// Prepend pubkey with '~' to prevent keys with leading '-' from
 		// interfering with the leaf program's argument parsing. '~' is not used
 		// in the Z85 encoding scheme that the key is currently encoded as.
 		auto pubkey = std::string{"~"} + downstream.getPublicKey();
+
+		auto const first_pe = cti_be_getNodeFirstPE();
 
 		// Prepend endpoints and node number to provided leaf arguments
 		auto completeLeafArgv = cti::ManagedArgv
@@ -1425,7 +1371,7 @@ int main(int argc, char* const argv[])
 			, controlEndpoint
 			, dataEndpoint
 			, pubkey
-			, ""
+			, "" // will hold rank id
 		};
 
 		// Copy provided arguments
@@ -1433,21 +1379,21 @@ int main(int argc, char* const argv[])
 			completeLeafArgv.add(leaf_argv[i]);
 		}
 
-		// Get pointer to node argument
+		// Get pointer to rank argument
 		auto complete_leaf_argv = completeLeafArgv.get();
 		auto node_arg_ptr = &complete_leaf_argv[5];
 
-		for (int node = first_pe; node < first_pe + local_pes; node++) {
-			log("%d / %d\n", node - first_pe + 1, local_pes);
+		for (int rank = first_pe; rank < first_pe + num_leaves; rank++) {
+			log("%d / %d\n", rank - first_pe + 1, num_leaves);
 
 			if (auto const forkedPid = fork()) {
 				// Add launched process to cleanup list
 				const auto LeafT = CommChild::Type::Leaf;
-				childPids.insert({LeafT, forkedPid, node});
+				childPids.insert({LeafT, forkedPid, rank});
 
 			} else {
-				// Set node argument
-				auto const nodeString = std::to_string(node);
+				// Set rank argument
+				auto const nodeString = std::to_string(rank);
 				*node_arg_ptr = (char*)nodeString.c_str();
 
 				// Exec leaf binary

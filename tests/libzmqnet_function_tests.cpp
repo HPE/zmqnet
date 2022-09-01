@@ -757,25 +757,6 @@ TEST_F(ZmqnetFunctionTest, CallbackLaunchTestFcfs) {
     ASSERT_EQ(count, 2);
 }
 
-TEST_F(ZmqnetFunctionTest, CallbackLaunchTestPacked) {
-    auto callbacks = zmqnet::UserCallbacks();
-
-    auto count = int{0};
-    auto count_them = [&count](int which_one) {
-        count++;
-    };
-
-    callbacks.registerCallback<zmqnet::Event::InitialConnection>(count_them);
-
-    auto net = launchSyncNetwork(4, 2,
-        zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 1 },
-        {} /* leaf args */, std::move(callbacks)
-    );
-
-    // in a Packed launch, the callback is invoked once per *rank*
-    ASSERT_EQ(count, 4);
-}
-
 TEST_F(ZmqnetFunctionTest, CallbackLaunchTestFcfsAsync) {
     auto callbacks = zmqnet::UserCallbacks();
 
@@ -793,27 +774,6 @@ TEST_F(ZmqnetFunctionTest, CallbackLaunchTestFcfsAsync) {
 
     // in a Fcfs launch, the callback is invoked once per *node*
     EXPECT_EQ(count, 2);
-
-    net.runExit();
-}
-
-TEST_F(ZmqnetFunctionTest, CallbackLaunchTestPackedAsync) {
-    auto callbacks = zmqnet::UserCallbacks();
-
-    auto count = int{0};
-    auto count_them = [&count](int which_one) {
-        count++;
-    };
-
-    callbacks.registerCallback<zmqnet::Event::InitialConnection>(count_them);
-
-    auto net = launchAsyncNetwork(4, 2,
-        zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 1 },
-        {} /* leaf args */, std::move(callbacks)
-    );
-
-    // in a Packed launch, the callback is invoked once per *rank*
-    EXPECT_EQ(count, 4);
 
     net.runExit();
 }
