@@ -1281,7 +1281,7 @@ int main(int argc, char* const argv[])
 	// Read arguments from frontend
 	auto [authFile, authType,
 		dealerEndpoint, nodeConnectionMap,
-		packed_mode, packed_node_id,
+		packed_mode,
 		leaf_argc, leaf_argv] = parse_argv(argc, argv);
 
 	// Start network connection process
