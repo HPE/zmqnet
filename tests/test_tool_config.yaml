@@ -1,0 +1,72 @@
+---
+
+# apply at test build time
+build:
+  # ensure these environment variables are present
+  env-vars-present:
+  - LIBZMQNET_INSTALL_DIR
+  # build targets
+  targets:
+    # make all
+    all:
+      j: 8 # build this many tests in parallel (make -j)
+      # load these modules
+      modules:
+      - cray-cti-devel
+      file: "Makefile.manual" # make -f <file>
+
+# apply to all wlm invocations, including pre-test sanity checks
+launch:
+  # allocate with these parameters
+  allocation:
+    nodes: "4"
+    always: True
+
+# options having to do with the test tool itself
+meta:
+  avocado-version: latest # version of avocado and avocado plugins to install
+
+# add system specific overrides here
+pea2k:
+  build:
+    prepend-env-vars:
+      PATH: /opt/gcc/10.3.0/bin
+      LD_LIBRARY_PATH: /opt/gcc/10.3.0/snos/lib64
+
+pinoak*:
+  test:
+    parallel-jobs: 2
+  launch:
+    allocation:
+      nodes: 8
+
+horizon:
+  test:
+    parallel-jobs: 5
+  launch:
+    allocation:
+      nodes: 20
+
+kay:
+  launch:
+    allocation:
+      nodelist: "place=scatter:shared,select=1:nodetype=mom-x86_64+%%n%%:nodetype=BW36:ncpus=8"
+
+uan01:
+  launch:
+    environment:
+      CTI_WLM_IMPL: slurm
+
+pegasus:
+  build:
+    prepend-env-vars:
+      PATH: /opt/gcc/10.3.0/bin
+      LD_LIBRARY_PATH: ${LIBZMQNET_INSTALL_DIR}/lib:/opt/gcc/10.3.0/snos/lib64
+  launch:
+    args:
+      # Multi-node MPI launches break if they include node007 or node008
+      slurm: "--exclusive --exclude=node007,node008"
+  test:
+    modules:
+    - cray-cti
+

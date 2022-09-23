@@ -18,3 +18,6 @@
 	path = tests/googletest
 	url = git@github.hpe.com:hpe/hpc-pe-cdst-googletest.git
 	branch = cdst_external
+[submodule "tests/cdst-test"]
+	path = tests/cdst-test
+	url = git@github.hpe.com:hpe/hpc-pe-cdst-cdst-test.git

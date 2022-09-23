@@ -1,0 +1,9 @@
+---
+# Value to set CTI_DEBUG to before the test. CTI_DEBUG changes
+# encryption and timeout behaviors.
+debug: !mux
+  yes:
+    debug: True
+  no:
+    debug: False
+

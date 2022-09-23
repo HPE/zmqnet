@@ -42,6 +42,11 @@ protected:
 
 		switch (wlm_type) {
 
+		case CTI_WLM_ALPS:
+		case CTI_WLM_PALS:
+			launcherArgs.add("-N " + std::to_string(num_procs / num_nodes));
+			break;
+
 		case CTI_WLM_SLURM:
 			launcherArgs.add("-N " + std::to_string(num_nodes));
 			break;
@@ -113,6 +118,7 @@ protected:
 	virtual void TearDown()
 	{
 		if (app_id > 0) {
+			cti_killApp(app_id, SIGTERM);
 			cti_deregisterApp(app_id);
 			app_id = 0;
 		}

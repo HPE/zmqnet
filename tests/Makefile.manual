@@ -28,7 +28,7 @@ GTEST_LIBS = -pthread
 
 BINARIES = topotest stop test_backend libzmqnet_unit_tests libzmqnet_function_tests libfilter.so
 
-check: env $(BINARIES)
+all: env $(BINARIES)
 
 env:
 ifndef LIBZMQNET_INSTALL_DIR
