@@ -80,12 +80,27 @@ AC_SUBST([CPPZMQ_CFLAGS], ["$CPPZMQ_CFLAGS"])
 AC_SUBST([LIBZMQNET_PREFIX], ["$prefix"])
 AC_DEFINE_UNQUOTED([LIBZMQNET_PREFIX], ["$LIBZMQNET_PREFIX"], [Library installation location])
 
+# --enable-install-directly-in-lib=true will cause zmqnet and all of its
+# components to be installed in the /lib directory of its install prefix.
+# otherwise, its supporting components (capnp, libzmq, etc) will get their own
+# /support directory in the install prefix.
+#
+# XXX: when all products use standalone zmqnet, this can be removed.
+AC_ARG_ENABLE([install-directly-in-lib],
+[  --enable-install-directly-in-lib   Install all components in /lib instead of a /support directory],
+[case "${enableval}" in
+  yes) install_directly_in_lib=true ;;
+  no)  install_directly_in_lib=false ;;
+  *) AC_MSG_ERROR([bad value ${enableval} for --enable-install-directly-in-lib]) ;;
+esac],[install_directly_in_lib=false])
+AM_CONDITIONAL([INSTALL_DIRECTLY_IN_LIB], [test x$install_directly_in_lib = xtrue])
+
 AC_CONFIG_FILES([
 	libzmqnet.pc
 	Makefile
 	src/Makefile
 	src/libzmqnet/Makefile
-	tests/Makefile
+	tests/unit/Makefile
 ])
 
 AC_OUTPUT

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2010-2021 Hewlett Packard Enterprise Development LP.
+# Copyright 2010-2022 Hewlett Packard Enterprise Development LP.
 #
 
 echo "############################################"
@@ -10,6 +10,12 @@ echo "############################################"
 top_level=$PWD
 
 source ./external/cdst_build_library/build_lib
+
+# Clean environment on Jenkins
+if [[ ! -z $BRANCH_NAME ]]; then
+    echo "Cleaning build env..."
+    rm -rf /opt/cray/pe/zmqnet
+fi
 
 setup_modules
 
@@ -21,7 +27,11 @@ check_exit_status
 
 # Create install directory
 source $top_level/release_versioning
-zmqnet_version="$major.$minor.$revision"
+if [ "$branch_type" != "release" ]; then
+  zmqnet_version="$major.$minor.$revision.$build_number"
+else
+  zmqnet_version="$major.$minor.$revision"
+fi
 echo "zmqnet version: \"$zmqnet_version\""
 install_dir="/opt/cray/pe/zmqnet/$zmqnet_version"
 echo "Install dir: \"$install_dir\""
@@ -45,7 +55,7 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-CFLAGS="-g -O2 -Wall" ./configure --prefix=$install_dir
+CFLAGS="-g -O2 -Wall" ./configure --prefix=$install_dir/support
 check_exit_status
 
 make $cdst_j_flags
@@ -78,7 +88,7 @@ check_exit_status
 pushd build
 check_exit_status
 
-CFLAGS="-g -O2 -Wall" PKG_CONFIG_PATH=$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH cmake -DCMAKE_INSTALL_PREFIX:PATH=$install_dir -DCPPZMQ_BUILD_TESTS=OFF ..
+CFLAGS="-g -O2 -Wall" PKG_CONFIG_PATH=$install_dir/support/lib/pkgconfig:$PKG_CONFIG_PATH cmake -DCMAKE_INSTALL_PREFIX:PATH=$install_dir/support -DCPPZMQ_BUILD_TESTS=OFF ..
 check_exit_status
 
 make $cdst_j_flags
@@ -108,7 +118,7 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-./configure --prefix=$install_dir
+./configure --prefix=$install_dir/support
 check_exit_status
 
 make $cdst_j_flags
@@ -136,7 +146,7 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-./configure --prefix=$install_dir
+./configure --prefix=$install_dir/support
 check_exit_status
 
 make $cdst_j_flags
@@ -156,7 +166,7 @@ echo $PWD
 autoreconf -ifv
 check_exit_status
 
-PKG_CONFIG_PATH=$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH ./configure --prefix=$install_dir
+PKG_CONFIG_PATH=$install_dir/support/lib/pkgconfig:$PKG_CONFIG_PATH ./configure --prefix=$install_dir
 check_exit_status
 
 make $cdst_j_flags

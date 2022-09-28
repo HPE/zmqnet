@@ -1,12 +1,10 @@
 # Copyright 2022 Hewlett Packard Enterprise Development LP.
 
-# Standard, autotools-free makefile to use to build zmqnet tests on
-# machines other than a build VM.
-# Separate name to avoid collisions with the autotools generated Makefile.
-#
 # Requirements:
-# - export LIBZMQNET_INSTALL_DIR
+# - load cray-zmqnet-devel
 # - load cray-cti-devel
+# - export LIBZMQNET_INSTALL_DIR
+#   - (you can do this by loading cray-zmqnet)
 #
 # Use via "make -f Makefile.manual"
 
@@ -18,22 +16,17 @@ COMMON_TOOLS_FE_LIBS := $(shell pkg-config common_tools_fe --libs)
 COMMON_TOOLS_BE_CFLAGS := $(shell pkg-config common_tools_be --cflags)
 COMMON_TOOLS_BE_LIBS := $(shell pkg-config common_tools_be --libs)
 
-ZMQNET_LIBS := -L$(LIBZMQNET_INSTALL_DIR)/lib -lzmq -lzmqnet -lkj -Wl,-rpath,$(LIBZMQNET_INSTALL_DIR)/lib -pthread 
-ZMQNET_CFLAGS := -I$(LIBZMQNET_INSTALL_DIR)/include
+ZMQNET_CFLAGS := $(shell pkg-config libzmqnet --cflags)
+ZMQNET_LIBS := $(shell pkg-config libzmqnet --libs)
 
 # Googletest library support
 GTEST = $(PWD)/googletest/googletest
 GTEST_CFLAGS = -I$(GTEST)/include -I$(GTEST)
 GTEST_LIBS = -pthread
 
-BINARIES = topotest stop test_backend libzmqnet_unit_tests libzmqnet_function_tests libfilter.so
+BINARIES = topotest stop test_backend libzmqnet_function_tests libfilter.so
 
-all: env $(BINARIES)
-
-env:
-ifndef LIBZMQNET_INSTALL_DIR
-	$(error Please export LIBZMQNET_INSTALL_DIR)
-endif
+all: $(BINARIES)
 
 stop: stop.c
 	cc -g stop.c -o stop
@@ -47,10 +40,7 @@ topotest: topotest.cpp
 test_backend: test_backend.cpp
 	$(CXX) $(CXXFLAGS) $(ZMQNET_CFLAGS) $(ZMQNET_LIBS) $< -o $@
 
-libzmqnet_unit_tests: libzmqnet_unit_tests.cpp googletest/googletest/src/gtest-all.cc 
-	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) $(ZMQNET_CFLAGS) $(GTEST_LIBS) $(ZMQNET_LIBS) $^ -o $@
-
-libzmqnet_function_tests: libzmqnet_function_tests.cpp googletest/googletest/src/gtest-all.cc 
+libzmqnet_function_tests: libzmqnet_function_tests.cpp googletest/googletest/src/gtest-all.cc
 	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) $(ZMQNET_CFLAGS) $(COMMON_TOOLS_FE_CFLAGS) $(GTEST_LIBS) $(ZMQNET_LIBS) $(COMMON_TOOLS_FE_LIBS) $^ -o $@
 
 clean:

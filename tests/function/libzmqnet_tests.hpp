@@ -8,7 +8,7 @@
  * in any form.
  */
 
-#include "src/cti_argv.hpp"
+#include "cti_argv.hpp"
 #include "zmqnet.hpp"
 
 struct BackendArgv : public cti::Argv {

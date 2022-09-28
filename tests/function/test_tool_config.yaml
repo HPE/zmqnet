@@ -13,7 +13,7 @@ build:
       # load these modules
       modules:
       - cray-cti-devel
-      file: "Makefile.manual" # make -f <file>
+      - cray-zmqnet-devel
 
 # apply to all wlm invocations, including pre-test sanity checks
 launch:

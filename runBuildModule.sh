@@ -168,7 +168,7 @@ echo $PWD
 autoreconf -ifv
 check_exit_status
 
-PKG_CONFIG_PATH=$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH ./configure --prefix=$install_dir
+PKG_CONFIG_PATH=$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH ./configure --prefix=$install_dir --enable-install_directly_in_lib
 check_exit_status
 
 make $cdst_j_flags

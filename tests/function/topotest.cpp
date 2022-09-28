@@ -18,7 +18,7 @@
 #include "common_tools_fe.h"
 #include "common_tools_be.h"
 
-#include "src/cti_argv.hpp"
+#include "cti_argv.hpp"
 
 struct TopotestArgv : public cti::Argv {
 	using Option    = cti::Argv::Option;

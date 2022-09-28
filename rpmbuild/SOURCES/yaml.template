@@ -1,0 +1,97 @@
+---
+#----------------------------------------------------------------------------
+# IMPORTANT: do not rename sections! The installer uses section names
+# to detect changes made to sections, using the MD5 algorithm.
+#----------------------------------------------------------------------------
+section-1:
+    ACCELERATOR           : NONE
+    EFFECTIVE_DATE        : NONE
+    EMAILS                : karen.glaser@hpe.com
+    EMAIL_BUILDER         : NO
+    HOSTS                 : <H_HW> 
+    INSTALL_DEFAULT_HOSTS : NONE
+    NETWORK_TYPE          : NONE
+    OPERATION             : INSTALL
+    OS_VERSION            : <OS_HW_TAG>
+    RPM_LIST              : <RPM_LST>
+    SYSTEM_TYPE           : <SYS_HW_TAG>
+
+section-2:
+    ACCELERATOR           : NONE
+    EFFECTIVE_DATE        : NONE
+    EMAILS                : karen.glaser@hpe.com
+    EMAIL_BUILDER         : NO
+    HOSTS                 : <H_WB>
+    INSTALL_DEFAULT_HOSTS : NONE
+    NETWORK_TYPE          : NONE
+    OPERATION             : INSTALL
+    OS_VERSION            : <OS_WB_TAG>
+    RPM_LIST              : <RPM_LST>
+    SYSTEM_TYPE           : <SYS_WB_TAG>
+
+section-3:
+    ACCELERATOR           : NONE
+    EFFECTIVE_DATE        : NONE
+    EMAILS                : karen.glaser@hpe.com
+    EMAIL_BUILDER         : NO
+    HOSTS                 : <H_HW>
+    INSTALL_DEFAULT_HOSTS : NONE
+    NETWORK_TYPE          : NONE
+    OPERATION             : UPDATE
+    OS_VERSION            : <OS_HW_TAG>
+    RPM_LIST              : <RPM_LST>
+    SYSTEM_TYPE           : <SYS_HW_TAG>
+    COMMANDS: |
+            /opt/cray/pe/admin-pe/set_default_files/set_default_<PRODUCT>_<VERSION>
+
+section-4:
+    ACCELERATOR           : NONE
+    EFFECTIVE_DATE        : NONE
+    EMAILS                : karen.glaser@hpe.com
+    EMAIL_BUILDER         : NO
+    HOSTS                 : <H_WB>
+    INSTALL_DEFAULT_HOSTS : NONE
+    NETWORK_TYPE          : NONE
+    OPERATION             : UPDATE
+    OS_VERSION            : <OS_WB_TAG>
+    RPM_LIST              : <RPM_LST>
+    SYSTEM_TYPE           : <SYS_WB_TAG>
+    COMMANDS: |
+            /opt/cray/pe/admin-pe/set_default_files/set_default_<PRODUCT>_<VERSION>
+
+section-5:
+    ACCELERATOR           : NONE
+    EFFECTIVE_DATE        : <REMOVAL_DATE>
+    EMAILS                : karen.glaser@hpe.com
+    EMAIL_BUILDER         : NO
+    HOSTS                 : <H_HW>,<H_WB>
+    INSTALL_DEFAULT_HOSTS : NONE
+    NETWORK_TYPE          : NONE
+    OPERATION             : REMOVE
+    OS_VERSION            : <OS_HW_TAG>,<OS_WB_TAG>
+    RPM_LIST              : <RPM_LST>
+    SYSTEM_TYPE           : <SYS_HW_TAG>,<SYS_WB_TAG>
+    COMMANDS: |
+        rpm -e --nodeps <TESTS_RPM_NAME>
+        rpm -e --nodeps <DEVEL_RPM_NAME> 
+        rpm -e --nodeps <PRODUCT>-<VERSION>-<BUILD_METADATA>-<RELEASE>.<ARCH>
+
+--- |
+#Remove previous versions of this rpm
+for package in  $(rpm -qa | grep <PRODUCT>-tests-<VERSION>-)
+do
+  rpm -e --nodeps $package
+done
+for package in  $(rpm -qa | grep <PRODUCT>-devel-<VERSION>-)
+do
+  rpm -e --nodeps $package
+done
+for package in  $(rpm -qa | grep ^<PRODUCT>-<VERSION>-)
+do
+  rpm -e --nodeps $package
+done
+
+CRAY_INSTALL_DEFAULT=<SET_DEFAULT_VALUE>
+rpm -ivh --oldpackage <PRODUCT>-<VERSION>-<BUILD_METADATA>-<RELEASE>.<ARCH>.rpm
+rpm -ivh --oldpackage <DEVEL_RPM_NAME>.rpm
+rpm -ivh --oldpackage <TESTS_RPM_NAME>.rpm

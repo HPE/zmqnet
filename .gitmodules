@@ -15,9 +15,15 @@
 	path = external/libzmq
 	url = git@github.hpe.com:hpe/hpc-pe-cdst-libzmq.git
 [submodule "tests/googletest"]
-	path = tests/googletest
+	path = tests/support/googletest
 	url = git@github.hpe.com:hpe/hpc-pe-cdst-googletest.git
 	branch = cdst_external
 [submodule "tests/cdst-test"]
-	path = tests/cdst-test
+	path = tests/function/cdst-test
 	url = git@github.hpe.com:hpe/hpc-pe-cdst-cdst-test.git
+[submodule "external/changelog"]
+	path = external/changelog
+	url = git@github.hpe.com:hpe/hpc-pe-cdst-changelog.git
+[submodule "rpmbuild/SOURCES/set_default"]
+	path = rpmbuild/SOURCES/set_default
+	url = git@github.hpe.com:hpe/hpc-pe-cenv-set_default.git
