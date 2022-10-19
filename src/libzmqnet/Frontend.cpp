@@ -702,7 +702,7 @@ bool zmqnet::detail::Frontend::confirmPing(Communicator const& comm, RankSet con
 	auto tries_left = int{0};
 	auto timeout = 50; // milliseconds
 	
-	for (tries_left = 5; tries_left >= 0; tries_left--, timeout *= 2) {
+	for (tries_left = 5; tries_left > 0; tries_left--, timeout *= 2) {
 		log("confirming ping on communicator %d. (%d tries left, %d ms timeout)\n",
 			comm.id, tries_left, timeout);
 		auto ping_result = sendPing(comm, listener, timeout, ranks);
