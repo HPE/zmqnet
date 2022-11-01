@@ -3,7 +3,7 @@
 SUBDIRS = libzmqnet
 
 SRC = $(top_srcdir)/src
-AM_CPPFLAGS = -I$(SRC) -I$(prefix)/include -I$(top_srcdir)/include
+AM_CPPFLAGS = -I$(SRC) -I$(top_srcdir)/include -I$(prefix)/include
 
 libexec_PROGRAMS = commnode
 

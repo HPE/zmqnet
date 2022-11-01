@@ -24,6 +24,13 @@ def google_test(test):
             test.assertTrue(p.returncode == 0, f"{testname} returned non-zero ({p.returncode})")
         except subprocess.TimeoutExpired:
             p.kill()
+
+            # XXX: on pinoak, jobs can randomly fail due to MPI errors.
+            with open(tmpfile, "r") as tmpfr:
+                for line in tmpfr.readlines():
+                    if "MPICH ERROR" in line:
+                        test.cancel("Timed out due to MPICH ERROR")
+
             test.fail("Timed out")
 
 class ZmqnetTest(Test):

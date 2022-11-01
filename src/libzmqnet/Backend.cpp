@@ -48,36 +48,78 @@ void zmqnet::detail::Backend::notifyReady()
 		net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
 	}
 
-	{   // Process incoming broadcast communicator command
-		auto reader = net::recv_MessageReader(m_upstream->control_socket);
-		auto command = reader.getRoot<NetworkCommand>();
-		assert(command.isCommunicator());
+	// Process initial commands:
+	// First, the frontend will send pings until all nodes report back. If one of our sibling
+	// backends misses the initial ping, the frontend will keep sending pings until they are
+	// online. Once all nodes report back, the frontend will create the broadcast communicator.
 
-		auto const communicatorId = command.getCommunicator().getCommunicatorId();
-		log("backend %d: new communicator %02x\n", m_node_id, communicatorId);
-		assert(communicatorId == net::communicator_ids::AllNodes);
+	// We temporarily set a timeout on the upstream control socket just in case something goes
+	// wrong and we never get a single ping command.
+	auto oldTimeout = m_upstream->control_socket.get(zmq::sockopt::rcvtimeo);
+	// default 300000 ms, 5 minutes.
+	if (auto timeoutSec = startup_handshake_timeout() != -1)
+		m_upstream->control_socket.set(zmq::sockopt::rcvtimeo, timeoutSec * 1000);
 
-		// subscribe to subset tag
-		log("backend %d: in communicator %02x, subscribing\n", m_node_id, communicatorId);
+	while (true) {
+		log("backend %d: waiting for startup command...\n", m_node_id);
+		if (auto maybeReader = net::recv_MessageReader_timeout(m_upstream->control_socket)) {
+			auto& reader = *maybeReader;
+			auto command = reader.getRoot<NetworkCommand>();
 
-		// Subscribe to subset tag
-		net::subscribe_to_tag(m_upstream->control_socket, communicatorId);
+			if (command.isPing()) {
+				log("backend %d: got startup ping\n", m_node_id);
 
-		// Create acknowledgement
-		auto builder = capnp::MallocMessageBuilder{};
-		auto response = builder.initRoot<NetworkResponse>();
-		auto communicatorAck = response.initCommunicator();
-		communicatorAck.setCommunicatorId(communicatorId);
+				auto builder = capnp::MallocMessageBuilder{};
+				auto response = builder.initRoot<NetworkResponse>();
+				auto pong = response.initPing();
 
-		// Set node bitset
-		communicatorAck.setNodes(kj::ArrayPtr<kj::byte const>
-			{ (unsigned char const*)m_node_bitset.data()
-			, m_node_bitset.size()
-		});
+				pong.setNodeId(m_node_id);
+				net::send_MessageBuilder(m_upstream->data_socket, reader.getTag(), builder);
+			} else if (command.isCommunicator()) {
+				auto const communicatorId = command.getCommunicator().getCommunicatorId();
+				log("backend %d: new communicator %02x\n", m_node_id, communicatorId);
+				assert(communicatorId == net::communicator_ids::AllNodes);
 
-		// Send acknowledgement
-		net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
+				// subscribe to subset tag
+				log("backend %d: in communicator %02x, subscribing\n", m_node_id, communicatorId);
+
+				// Subscribe to subset tag
+				net::subscribe_to_tag(m_upstream->control_socket, communicatorId);
+
+				// Create acknowledgement
+				auto builder = capnp::MallocMessageBuilder{};
+				auto response = builder.initRoot<NetworkResponse>();
+				auto communicatorAck = response.initCommunicator();
+				communicatorAck.setCommunicatorId(communicatorId);
+
+				// Set node bitset
+				communicatorAck.setNodes(kj::ArrayPtr<kj::byte const>
+					{ (unsigned char const*)m_node_bitset.data()
+					, m_node_bitset.size()
+				});
+
+				// Send acknowledgement
+				net::send_MessageBuilder(m_upstream->data_socket, net::communicator_ids::AllNodes, builder);
+
+				break;
+			} else if (command.isKill()) {
+				log("backend %d: Killed\n", m_node_id);
+				assert(false);
+				std::exit(-1);
+			} else {
+				log("backend %d: Invalid command sent during startup\n", m_node_id);
+				assert(false);
+				std::exit(-1);
+			}
+		} else {
+			log("backend %d: Timed out waiting for startup commands\n", m_node_id);
+			assert(false);
+			std::exit(-1);
+		}
 	}
+
+	// Restore old timeout
+	m_upstream->control_socket.set(zmq::sockopt::rcvtimeo, oldTimeout);
 }
 
 void zmqnet::detail::Backend::sendResult(zmqnet::Stream const& stream, char const* result_buffer, size_t result_len)

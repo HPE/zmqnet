@@ -49,6 +49,9 @@ protected:
 
 		case CTI_WLM_SLURM:
 			launcherArgs.add("-N " + std::to_string(num_nodes));
+			launcherArgs.add("--exclusive");
+			launcherArgs.add("-t");
+			launcherArgs.add("5:00");
 			break;
 
 		default:
@@ -422,6 +425,64 @@ TEST_F(ZmqnetFunctionTest, PingTestAsync)
 	network.runExit();
 }
 
+TEST_F(ZmqnetFunctionTest, PingTestPacked)
+{
+	auto allRanks = zmqnet::RankSet{0, 1, 2, 3};
+	auto halfRanks = zmqnet::RankSet{0, 2};
+
+	auto network = launchSyncNetwork(allRanks.size(), 2,
+		zmqnet::Topology {.launch = zmqnet::Topology::Packed, .fanout = 2});
+
+	auto halfComm = network.registerCommunicator(halfRanks);
+	auto allComm = network.getAllNodesCommunicator();	
+
+	// Invalid combination of timeout/ranks should return empty set immediately
+	ASSERT_EQ(network.sendPing(allComm, -1, {}), zmqnet::RankSet{}); 
+	
+	// Ping until no response for 1000 ms
+	auto responded = network.sendPing(allComm, 1000, {});
+	ASSERT_EQ(responded, allRanks);
+
+	// Blocking ping until ranks in halfRanks respond
+	responded = network.sendPing(halfComm, -1, halfRanks);
+	ASSERT_EQ(responded, halfRanks);
+
+	// Ping only half the ranks, but pass all ranks. Should timeout
+	responded = network.sendPing(halfComm, 1000, allRanks);
+	ASSERT_EQ(responded, halfRanks);	
+	
+	network.runExit();
+}
+
+// Test ping function on an Async network
+TEST_F(ZmqnetFunctionTest, PingTestAsyncPacked)
+{
+	auto allRanks = zmqnet::RankSet{0, 1, 2, 3};
+	auto halfRanks = zmqnet::RankSet{0, 2};
+
+	auto network = launchAsyncNetwork(allRanks.size(), 2,
+		zmqnet::Topology {.launch = zmqnet::Topology::Packed, .fanout = 2});
+
+	auto halfComm = network.registerCommunicator(halfRanks);
+	auto allComm = network.getAllNodesCommunicator();	
+
+	// Invalid combination of timeout/ranks should return empty set immediately
+	ASSERT_EQ(network.sendPing(allComm, -1, {}), zmqnet::RankSet{}); 
+	
+	// Ping until no response for 1000 ms
+	auto responded = network.sendPing(allComm, 1000, {});
+	ASSERT_EQ(responded, allRanks);
+
+	// Blocking ping until ranks in halfRanks respond
+	responded = network.sendPing(halfComm, -1, halfRanks);
+	ASSERT_EQ(responded, halfRanks);
+
+	// Ping only half the ranks, but pass all ranks. Should timeout
+	responded = network.sendPing(halfComm, 1000, allRanks);
+	ASSERT_EQ(responded, halfRanks);	
+
+	network.runExit();
+}
 
 // Test sending command to a stream subset across multiple nodes, check result
 TEST_F(ZmqnetFunctionTest, SubsetCommandTest)

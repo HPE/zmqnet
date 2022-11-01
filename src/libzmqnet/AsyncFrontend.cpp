@@ -183,7 +183,6 @@ zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id
 	UserCallbacks&& cbacks, const std::atomic<bool>* killSwitch)
 
 	: Frontend{app_id, session_id, manifest_id, topology, leaf_argv, leaf_env, std::move(cbacks), killSwitch}
-	, m_ctx{}
 	, m_callbackProcessors{}
 	, m_blocking_registration{std::make_unique<net::shared_semaphore>(false)}
 	, m_responseDistributor{}
@@ -194,7 +193,8 @@ zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id
 
 	// Launch callback distributor task
 	m_responseDistributor = std::async(std::launch::async, workers::response_distributor,
-		std::ref(m_ctx), std::move(m_downstream->data_socket), m_pingEndpoint, std::ref(*m_allDescendants), std::ref(*m_blocking_registration), std::ref(m_uCallbacks));
+		std::ref(m_ctx), std::move(m_downstream->data_socket), m_pingEndpoint,
+		std::ref(*m_allDescendants), std::ref(*m_blocking_registration), std::ref(m_uCallbacks));
 }
 
 zmqnet::AsyncFrontend::~AsyncFrontend()
@@ -204,7 +204,7 @@ zmqnet::AsyncFrontend::~AsyncFrontend()
 
 zmqnet::Communicator zmqnet::AsyncFrontend::getAllNodesCommunicator() const
 {
-	return Communicator { .id = net::communicator_ids::AllNodes };
+	return Frontend::getAllNodesCommunicator();
 }
 
 zmqnet::Communicator zmqnet::AsyncFrontend::registerCommunicator(zmqnet::NodeSet const& nodes)
@@ -307,7 +307,7 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, std::strin
 	return sendCommand(stream, command.c_str(), command.length() + 1);
 }
 
-zmqnet::RankSet zmqnet::AsyncFrontend::sendPing(Communicator const& comm, int timeoutMs, zmqnet::RankSet const& stopAfter) 
+zmqnet::RankSet zmqnet::AsyncFrontend::sendPing(Communicator const& comm, int timeoutMs, zmqnet::RankSet const& stopAfter)
 {
 	// response_distributor thread will forward ping responses to m_pingSocket
 	return Frontend::sendPing(comm, m_pingSocket, timeoutMs, stopAfter);

@@ -55,6 +55,9 @@ namespace env
 	// If set to -1, the startup handshake timeout will be disabled.
 	// If not set, the default value is 300 seconds.
 	constexpr auto STARTUP_TIMEOUT = "LIBZMQNET_STARTUP_TIMEOUT";
+
+	// If set to a positive integer, zmqnet commnodes will sleep for n seconds when they start.
+	constexpr auto DEBUG_COMMNODE_STARTUP_SLEEP = "LIBZMQNET_DEBUG_COMMNODE_STARTUP_SLEEP";
 } // namespace env
 
 // Command data is provided via ByteArray
@@ -216,6 +219,7 @@ protected: // derived class interface
 	);
 	~Frontend();
 
+	Communicator getAllNodesCommunicator() const;
 	Communicator createCommunicator(NodeSet const& nodes);
 	Communicator createCommunicator(const RankSet &ranks);
 	Stream createStream(Communicator const& communicator, Stream::Id const& streamId,
@@ -419,7 +423,6 @@ public: // types
 	using CallbackFunc = std::function<void(Stream::Id const&, ByteArrayPtr)>;
 
 private: // members
-	zmq::context_t m_ctx;
 	std::unordered_map<Stream::Id, std::future<void>> m_callbackProcessors;
 	std::unique_ptr<net::shared_semaphore> m_blocking_registration;
 	std::future<zmq::socket_t> m_responseDistributor;

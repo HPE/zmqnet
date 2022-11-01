@@ -1275,6 +1275,11 @@ static void layered(zmq::context_t& ctx,
 int main(int argc, char* const argv[])
 {
 	auto const start_ms = get_milliseconds();
+
+	if (const auto slp = ::getenv(zmqnet::env::DEBUG_COMMNODE_STARTUP_SLEEP); slp && ::atoi(slp) >= 1) {
+		sleep(::atoi(slp));
+	}
+
 	int rc = -1;
 	auto ctx = zmq::context_t{};
 

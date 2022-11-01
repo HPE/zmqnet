@@ -9,6 +9,7 @@
 
 #include <unordered_map>
 #include <set>
+#include <numeric>
 
 #include <cstdlib>
 
@@ -530,6 +531,67 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	auto response = reader.getRoot<NetworkResponse>();
 	assert(response.isReady());
 
+	// Wait for all children to subscribe to the control socket
+	{
+		log("waiting for all nodes/backends to subscribe to control socket\n");
+		auto numBackends = [&topology, &hostsPlacement](){
+			switch(topology.launch) {
+				case Topology::Launch::Fcfs:
+				case Topology::Launch::Layered: {
+					// one backend per node
+					return hostsPlacement->numHosts;
+				}
+				case Topology::Launch::Packed: {
+					// one backend per rank
+					return std::accumulate(hostsPlacement->hosts, hostsPlacement->hosts + hostsPlacement->numHosts, 0,
+						[](const auto& ranks, const auto& host){ return ranks + host.numPes; });
+				}
+				default:
+					throw std::runtime_error("Invalid launch style");
+			}
+		}();
+
+		auto success = [this, numBackends]() {
+			const auto totalWaitMs = 10000; // 10 seconds
+			const auto intervalMs = 200;
+			static_assert(totalWaitMs % intervalMs == 0);
+			const auto totalTries = totalWaitMs / intervalMs;
+
+			log("pinging backends every %dms with a total wait time of %dms\n", intervalMs, totalWaitMs);
+
+			for (auto triesRemaining = totalTries; triesRemaining > 0; --triesRemaining) {
+				log("sending ping (%d tries left)\n", triesRemaining);
+				auto responded = sendPing(this->getAllNodesCommunicator(), m_downstream->data_socket, intervalMs, {});
+
+				if (debug_enabled()) {
+					auto oss = std::ostringstream{};
+					for (auto rank: responded) {
+						oss << rank << ", ";
+					}
+					auto str = oss.str();
+					if (str.size() >= 2) str = str.substr(0, str.size() - 2); // chop last comma
+					log("Got %d responses: { %s }\n", responded.size(), str.c_str());
+				}
+
+				if (responded.size() == static_cast<size_t>(numBackends)) return true;
+			}
+			return false;
+		}();
+
+		if (!success) {
+			// Kill any commnodes that will listen. Commnodes/backends that made it to their
+			// main loops will shut down, and stuck backends will hit an assertion failure and die.
+			log("sending last ditch kill signal\n");
+			auto builder = capnp::MallocMessageBuilder{};
+			auto killSignal = builder.initRoot<NetworkCommand>();
+			killSignal.setKill();
+
+			net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllNodes, builder);
+
+			throw std::runtime_error("Failed to connect to all backends during startup.\n");
+		}
+	}
+
 	// Create broadcast communicator
 	{ auto builder = capnp::MallocMessageBuilder{};
 		auto communicatorCommand = builder.initRoot<NetworkCommand>().initCommunicator();
@@ -559,6 +621,10 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 zmqnet::detail::Frontend::~Frontend()
 {
 	m_ctx.shutdown();
+}
+
+zmqnet::Communicator zmqnet::detail::Frontend::getAllNodesCommunicator() const {
+	return Communicator { .id = net::communicator_ids::AllNodes };
 }
 
 zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmqnet::NodeSet const& nodes)
@@ -758,7 +824,7 @@ zmqnet::SyncFrontend::SyncFrontend(int const app_id, long int const session_id, 
 
 zmqnet::Communicator zmqnet::SyncFrontend::getAllNodesCommunicator() const
 {
-	return Communicator { .id = net::communicator_ids::AllNodes };
+	return Frontend::getAllNodesCommunicator();
 }
 
 zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(zmqnet::NodeSet const& nodes)
