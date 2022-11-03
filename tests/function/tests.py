@@ -5,8 +5,7 @@ from avocado import Test
 import os
 import subprocess
 
-def google_test(test):
-    testname = test.__class__.__name__
+def google_test(test, testname):
     debugstr = "_debug" if test.debug == True else ""
     cmd = ["./libzmqnet_function_tests", "--gtest_filter=ZmqnetFunctionTest." + testname]
     tmpdir = os.getcwd() + "/tmp/"
@@ -20,16 +19,20 @@ def google_test(test):
     with open(tmpfile, "w") as tmpf:
         try:
             p = subprocess.Popen(cmd, stdout = tmpf, stderr = tmpf)
-            p.wait(60)
+            p.wait(90)
             test.assertTrue(p.returncode == 0, f"{testname} returned non-zero ({p.returncode})")
         except subprocess.TimeoutExpired:
             p.kill()
 
-            # XXX: on pinoak, jobs can randomly fail due to MPI errors.
+            launch_complete = False
             with open(tmpfile, "r") as tmpfr:
                 for line in tmpfr.readlines():
-                    if "MPICH ERROR" in line:
-                        test.cancel("Timed out due to MPICH ERROR")
+                    if "Launch complete" in line:
+                        launch_complete = True
+                        break
+
+            if not launch_complete:
+                test.cancel("Timed out after never successfully launching a job")
 
             test.fail("Timed out")
 
@@ -44,87 +47,78 @@ class ZmqnetTest(Test):
             if "CTI_DEBUG" in os.environ:
                 del os.environ["CTI_DEBUG"]
 
-class LaunchExitTest(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_LaunchExitTest(self):
+        google_test(self, "LaunchExitTest")
 
-class SingleNodeLaunchTest(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_LaunchExitTest4(self):
+        google_test(self, "LaunchExitTest4")
 
-class SingleNodeStreamTest(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_LaunchExitTest4Packed(self):
+        google_test(self, "LaunchExitTest4Packed")
 
-class SingleNodeCommandTest(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SingleNodeLaunchTest(self):
+        google_test(self, "SingleNodeLaunchTest")
 
-class SingleNodeCommandTestAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SingleNodeStreamTest(self):
+        google_test(self, "SingleNodeStreamTest")
 
-class MultiNodeCommandTest(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SingleNodeCommandTest(self):
+        google_test(self, "SingleNodeCommandTest")
 
-class MultiNodeCommandTestAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SingleNodeCommandTestAsync(self):
+        google_test(self, "SingleNodeCommandTestAsync")
 
-class SubsetCreationTest(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_MultiNodeCommandTest(self):
+        google_test(self, "MultiNodeCommandTest")
 
-class SubsetCreationTestByRank(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_MultiNodeCommandTestAsync(self):
+        google_test(self, "MultiNodeCommandTestAsync")
 
-class PingTest(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SubsetCreationTest(self):
+        google_test(self, "SubsetCreationTest")
 
-class PingTestAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SubsetCreationTestByRank(self):
+        google_test(self, "SubsetCreationTestByRank")
 
-class SubsetCommandTest(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_PingTest(self):
+        google_test(self, "PingTest")
 
-class SubsetCommandTestByRank(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_PingTestAsync(self):
+        google_test(self, "PingTestAsync")
 
-class SubsetCreationTestAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_PingTestPacked(self):
+        google_test(self, "PingTestPacked")
 
-class SubsetCreationTestByRankAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_PingTestAsyncPacked(self):
+        google_test(self, "PingTestAsyncPacked")
 
-class SubsetCommandTestAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SubsetCommandTest(self):
+        google_test(self, "SubsetCommandTest")
 
-class SubsetCommandTestAsyncByRank(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SubsetCommandTestByRank(self):
+        google_test(self, "SubsetCommandTestByRank")
 
-class ImmediateTestAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SubsetCreationTestAsync(self):
+        google_test(self, "SubsetCreationTestAsync")
 
-class TimeoutTestAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SubsetCreationTestByRankAsync(self):
+        google_test(self, "SubsetCreationTestByRankAsync")
 
-class CallbackLaunchTestFcfs(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SubsetCommandTestAsync(self):
+        google_test(self, "SubsetCommandTestAsync")
 
-class CallbackLaunchTestFcfsAsync(ZmqnetTest):
-    def test(self):
-        google_test(self)
+    def test_SubsetCommandTestAsyncByRank(self):
+        google_test(self, "SubsetCommandTestAsyncByRank")
+
+    def test_ImmediateTestAsync(self):
+        google_test(self, "ImmediateTestAsync")
+
+    def test_TimeoutTestAsync(self):
+        google_test(self, "TimeoutTestAsync")
+
+    def test_CallbackLaunchTestFcfs(self):
+        google_test(self, "CallbackLaunchTestFcfs")
+
+    def test_CallbackLaunchTestFcfsAsync(self):
+        google_test(self, "CallbackLaunchTestFcfsAsync")
 

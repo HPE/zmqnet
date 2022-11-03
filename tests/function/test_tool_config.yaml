@@ -2,18 +2,24 @@
 
 # apply at test build time
 build:
+  modules:
+  - cray-cti-devel
+  - cray-zmqnet-devel
   # ensure these environment variables are present
   env-vars-present:
   - LIBZMQNET_INSTALL_DIR
   # build targets
   targets:
-    # make all
-    all:
-      j: 8 # build this many tests in parallel (make -j)
-      # load these modules
+    non-mpi:
       modules:
-      - cray-cti-devel
-      - cray-zmqnet-devel
+      - gcc/10.3.0
+      j: 1 # build this many tests in parallel (make -j)
+    mpi:
+      j: 4
+
+test:
+  modules:
+  - gcc/10.3.0
 
 # apply to all wlm invocations, including pre-test sanity checks
 launch:
@@ -26,12 +32,31 @@ launch:
 meta:
   avocado-version: latest # version of avocado and avocado plugins to install
 
-# add system specific overrides here
+# add system specific overrides here -------------------------------------------
+#
+# the biggest functional tests use 4 nodes. a good rule of thumb for allocation
+# numbers and parallel jobs is to allocate roughly 1/3rd of the system's nodes
+# and divide that number by 4 to get your parallel-jobs amount.
+
 pea2k:
-  build:
-    prepend-env-vars:
-      PATH: /opt/gcc/10.3.0/bin
-      LD_LIBRARY_PATH: /opt/gcc/10.3.0/snos/lib64
+  test:
+    parallel-jobs: 2
+  launch:
+    allocation:
+      nodes: 8
+
+pegasus:
+  test:
+    parallel-jobs: 1
+  launch:
+    allocation:
+      nodes: 4
+    args:
+      # Multi-node MPI launches break if they include node007 or node008.
+      # These partitions contain all nodes except node007 and node008.
+      slurm: "-p amdMI60,amdnaples,bdw18,romeMI60,skx26"
+    environment:
+      SLURM_PARTITION: "amdMI60,amdnaples,bdw18,romeMI60,skx26"
 
 pinoak*:
   test:
@@ -39,34 +64,61 @@ pinoak*:
   launch:
     allocation:
       nodes: 8
+    args:
+      slurm: "--exclusive"
+    environment:
+      SLURM_EXCLUSIVE: "" # Must be empty string
 
 horizon:
   test:
-    parallel-jobs: 5
+    parallel-jobs: 24
   launch:
     allocation:
-      nodes: 20
+      nodes: 96
+
+horizon-aarch:
+  build:
+    modules:
+    - cray-cti-devel/2.17.1.58
+    - cray-cti/2.17.1.58
+      # the latest cti version currently installed. it should be removed
+      # next time horizon-aarch is updated with a newer cti.
+    - cray-zmqnet-devel
+  test:
+    parallel-jobs: 2
+  launch:
+    allocation:
+      nodes: 8
+    args:
+      slurm: "-p aarch"
+    environment:
+      SLURM_PARTITION: "aarch"
 
 kay:
+  test:
+    parallel-jobs: 8
   launch:
     allocation:
-      nodelist: "place=scatter:shared,select=1:nodetype=mom-x86_64+%%n%%:nodetype=BW36:ncpus=8"
+      nodes: 32
+      nodelist: "place=scatter:shared,select=1:nodetype=mom-x86_64+%%n%%:ncpus=8"
 
-uan01:
-  launch:
-    environment:
-      CTI_WLM_IMPL: slurm
-
-pegasus:
+cfa6k*:
   build:
-    prepend-env-vars:
-      PATH: /opt/gcc/10.3.0/bin
-      LD_LIBRARY_PATH: ${LIBZMQNET_INSTALL_DIR}/lib:/opt/gcc/10.3.0/snos/lib64
-  launch:
-    args:
-      # Multi-node MPI launches break if they include node007 or node008
-      slurm: "--exclusive --exclude=node007,node008"
-  test:
     modules:
-    - cray-cti
+    - cray-pals
+    - cray-cti-devel/2.17.0
+    - cray-zmqnet-devel
+  test:
+    parallel-jobs: 1
+    modules:
+    - gcc/10.3.0
+    - cray-pals
+    - cray-cti/2.17.0
+  launch:
+    modules:
+    - cray-pals
+    allocation:
+      nodes: 4
+    environment:
+      CTI_PALS_BARRIER_RELEASE_DELAY: 5
 

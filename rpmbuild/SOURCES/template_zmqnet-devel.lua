@@ -5,13 +5,12 @@
     ALL RIGHTS RESERVED.
 ]]--
 
--- local vars: define & assign --
-load("cray-zmqnet")
-
 -- template variables ----------------------------------------------------------
 local INSTALL_ROOT       = "[@%PREFIX_PATH%@]"
 local MOD_LEVEL          = "[@%MODULE_VERSION%@]"
 --------------------------------------------------------------------------------
+
+load("cray-zmqnet/" .. MOD_LEVEL)
 
 local NICKNAME  = "zmqnet"
 local PE_DIR    = INSTALL_ROOT .. "/" .. NICKNAME .. "/" .. MOD_LEVEL

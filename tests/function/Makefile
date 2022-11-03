@@ -24,9 +24,15 @@ GTEST = $(PWD)/googletest/googletest
 GTEST_CFLAGS = -I$(GTEST)/include -I$(GTEST)
 GTEST_LIBS = -pthread
 
-BINARIES = topotest stop test_backend libzmqnet_function_tests libfilter.so
+MPI_BINARIES = stop
+NON_MPI_BINARIES = topotest test_backend libzmqnet_function_tests libfilter.so
 
-all: $(BINARIES)
+all:
+	@echo Use \"make non-mpi\" or \"make mpi\"
+
+non-mpi: $(NON_MPI_BINARIES)
+
+mpi: $(MPI_BINARIES)
 
 stop: stop.c
 	cc -g stop.c -o stop
@@ -44,4 +50,4 @@ libzmqnet_function_tests: libzmqnet_function_tests.cpp googletest/googletest/src
 	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) $(ZMQNET_CFLAGS) $(COMMON_TOOLS_FE_CFLAGS) $(GTEST_LIBS) $(ZMQNET_LIBS) $(COMMON_TOOLS_FE_LIBS) $^ -o $@
 
 clean:
-	rm -f $(BINARIES)
+	rm -f $(MPI_BINARIES) $(NON_MPI_BINARIES)

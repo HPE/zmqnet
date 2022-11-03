@@ -12,6 +12,7 @@
 #include <vector>
 #include <set>
 #include <algorithm>
+#include <iostream>
 
 #include "gtest/gtest.h"
 
@@ -43,13 +44,17 @@ protected:
 		switch (wlm_type) {
 
 		case CTI_WLM_ALPS:
-		case CTI_WLM_PALS:
 			launcherArgs.add("-N " + std::to_string(num_procs / num_nodes));
+			break;
+
+		case CTI_WLM_PALS:
+			// assuming mpiexec
+			launcherArgs.add("--ppn");
+			launcherArgs.add(std::to_string(num_procs / num_nodes));
 			break;
 
 		case CTI_WLM_SLURM:
 			launcherArgs.add("-N " + std::to_string(num_nodes));
-			launcherArgs.add("--exclusive");
 			launcherArgs.add("-t");
 			launcherArgs.add("5:00");
 			break;
@@ -65,6 +70,8 @@ protected:
 		if (app_id == 0) {
 			throw std::runtime_error(cti_error_str());
 		}
+
+		std::cerr << "Launch complete" << std::endl;
 	}
 
 	// Launch a synchronous ZMQNet network using CTI
@@ -153,6 +160,28 @@ TEST_F(ZmqnetFunctionTest, LaunchExitTest)
 	// Launch network with one node
 	auto network = launchSyncNetwork(1, 1,
 		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 });
+
+	// Exit network
+	network.runExit();
+}
+
+// Test synchronous network instantiation
+TEST_F(ZmqnetFunctionTest, LaunchExitTest4)
+{
+	// Launch network with one node
+	auto network = launchSyncNetwork(4, 4,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 2 });
+
+	// Exit network
+	network.runExit();
+}
+
+// Test synchronous network instantiation
+TEST_F(ZmqnetFunctionTest, LaunchExitTest4Packed)
+{
+	// Launch network with one node
+	auto network = launchSyncNetwork(4, 2,
+		zmqnet::Topology { .launch = zmqnet::Topology::Packed, .fanout = 2 });
 
 	// Exit network
 	network.runExit();

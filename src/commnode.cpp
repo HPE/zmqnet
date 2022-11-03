@@ -1670,8 +1670,6 @@ int main(int argc, char* const argv[])
 	upstream.control_socket = upstreamSource.get();
 	downstream.data_socket = downstreamSource.get();
 
-	upstream.control_socket.set(zmq::sockopt::linger, 0);
-
 	log("commnode cleaned up and exiting\n");
 	fprintf(stderr, "%05lu: exiting\n", get_milliseconds() - start_ms);
 
