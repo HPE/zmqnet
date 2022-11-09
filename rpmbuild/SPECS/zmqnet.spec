@@ -304,6 +304,8 @@ Test files for Cray zmqnet
 %{__cp} -a %{tests_source_dir}/stop.c ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/tests
 %{__cp} -a %{tests_source_dir}/test_backend.cpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/tests
 %{__cp} -a %{tests_source_dir}/tests.py ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/tests
+%{__cp} -a %{tests_source_dir}/cleanup.sh ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/tests
+%{__cp} -a %{tests_source_dir}/node_cleanup.sh ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/tests
 %{__cp} -a %{tests_source_dir}/test_tool_config.yaml ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/tests
 # test_tool.py pulled from cdst-test:
 %{__cp} -a %{tests_source_dir}/cdst-test/test_tool.py ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/tests

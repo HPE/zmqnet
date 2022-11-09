@@ -4,6 +4,7 @@ from avocado import Test
 
 import os
 import subprocess
+import socket
 
 def google_test(test, testname):
     debugstr = "_debug" if test.debug == True else ""
@@ -20,7 +21,21 @@ def google_test(test, testname):
         try:
             p = subprocess.Popen(cmd, stdout = tmpf, stderr = tmpf)
             p.wait(90)
-            test.assertTrue(p.returncode == 0, f"{testname} returned non-zero ({p.returncode})")
+
+            # If the test returned non-zero, before marking it as a failure, make sure
+            # there was no CANCEL: strings emitted indicating that a prerequisite couldn't be met
+            if p.returncode != 0:
+                skipped = False
+                with open(tmpfile, "r") as tmpfr:
+                    for line in tmpfr.readlines():
+                        if "CANCEL:" in line:
+                            skipped = True
+                            break
+
+                if skipped:
+                    test.cancel("Couldn't meet a prerequisite. Check logs.")
+
+                test.assertTrue(p.returncode == 0, f"{testname} returned non-zero ({p.returncode}). Check logs.")
         except subprocess.TimeoutExpired:
             p.kill()
 
@@ -121,4 +136,33 @@ class ZmqnetTest(Test):
 
     def test_CallbackLaunchTestFcfsAsync(self):
         google_test(self, "CallbackLaunchTestFcfsAsync")
+
+class CleanupTest(Test):
+    def test_cleanup(self):
+        # XXX: Compute nodes on slice have extremely small /tmp directories.
+        #      A single test suite run will fill them up about 20% with CTI files.
+        #      Until CTI gets proper clean up strategies, we try to mitigate it here.
+
+        if socket.gethostname() == "uan01": # slice's uan
+            # The full test suite will run this "test" twice, we only want to clean up once.
+            # Checking for debug == False instead of True means that cleanup will also be
+            # run when running the small test suite.
+
+            debug = self.params.get("debug")
+            if debug == None or debug == False:
+                # Attempt to clean up the cti_* directories we created on compute nodes
+                p = subprocess.run(["./cleanup.sh"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                print(p.stdout.decode())
+                print(p.stderr.decode())
+
+                # Dump into /tmp so nightly test picks results up as logs
+                with open(os.getcwd() + "/tmp/cleanup.out", "w") as outf:
+                    outf.write(p.stdout.decode())
+                    outf.write(p.stderr.decode())
+            else:
+                self.cancel("Don't run cleanup twice")
+        else:
+            self.cancel("Not running cleanup on non-slice")
+
+        self.cancel("Cleanup complete")
 

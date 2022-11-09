@@ -68,7 +68,7 @@ protected:
 		// Launch application
 		app_id = cti_launchApp(launcherArgs.get(), -1, -1, nullptr, nullptr, nullptr);
 		if (app_id == 0) {
-			throw std::runtime_error(cti_error_str());
+			throw std::runtime_error(std::string{"CANCEL: "} + cti_error_str());
 		}
 
 		std::cerr << "Launch complete" << std::endl;
