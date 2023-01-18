@@ -30,7 +30,7 @@ launch:
 
 # options having to do with the test tool itself
 meta:
-  avocado-version: latest # version of avocado and avocado plugins to install
+  avocado-version: "100.0" # version of avocado and avocado plugins to install
 
 # add system specific overrides here -------------------------------------------
 #
