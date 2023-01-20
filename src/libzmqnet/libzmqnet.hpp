@@ -92,9 +92,9 @@ struct temp_file
 
 	static auto generate_template()
 	{
-		// If TMPDIR is not set, or formatting fails, use current directory
+		// If TMPDIR is not set, or formatting fails, use /tmp
 		auto result = decltype(temp_file::temp_path) {
-			::strdup("./temp-XXXXXX"), ::free };
+			::strdup("/tmp/temp-XXXXXX"), ::free };
 
 		// Try in TMPDIR
 		if (auto const tmp_dir = ::getenv("TMPDIR")) {
@@ -109,7 +109,7 @@ struct temp_file
 
 	temp_file()
 		: temp_path{generate_template()}
-		, fd{::mkstemp(temp_path.get())}
+		, fd{::mkstemp(temp_path.get())} // 0600 permissions
 		, file{::fdopen(fd, "w")}
 	{
 		if (fd < 0) {

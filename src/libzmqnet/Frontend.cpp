@@ -123,9 +123,6 @@ static auto fcfsTreeImpl(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, 
 		}
 	}
 
-	// Remove temporary auth file
-	authFile.reset();
-
 	// Set up fanout topology and wait for all children to connect
 	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
 	auto endpoints = std::vector<std::tuple<std::string, std::string, std::string>> {
