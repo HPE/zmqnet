@@ -14,7 +14,7 @@ echo "############################################"
 
 top_level=$PWD
 
-source ./external/cdst_build_library/build_lib
+source ./external/cdst_build_library/build_lib_gcc
 
 setup_modules
 
