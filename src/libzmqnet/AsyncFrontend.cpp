@@ -191,6 +191,10 @@ zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id
 	// Create socket for distributor task to forward pings to
 	m_pingSocket.bind(m_pingEndpoint);
 
+	// Callback distributor thread shouldn't handle any signals. Signal mask will be
+	// inherited when thread is launched.
+	auto signal_blocker = ThreadSignalBlocker();
+
 	// Launch callback distributor task
 	m_responseDistributor = std::async(std::launch::async, workers::response_distributor,
 		std::ref(m_ctx), std::move(m_downstream->data_socket), m_pingEndpoint,
@@ -255,6 +259,10 @@ void zmqnet::AsyncFrontend::registerStreamCallback(Stream::Id const& streamId, z
 
 	// Reconstitute stream object
 	auto const stream = zmqnet::Stream { .communicatorId = net::communicator_ids::AllNodes, .id = streamId };
+
+	// Worker thread shouldn't handle any signals. Signal mask will be inherited when thread
+	// is launched.
+	auto signal_blocker = ThreadSignalBlocker();
 
 	// Launch worker thread
 	m_callbackProcessors.emplace(streamId, std::async(std::launch::async,
@@ -335,5 +343,41 @@ void zmqnet::AsyncFrontend::runExit()
 	// Shut down all sockets
 	m_ctx.shutdown();
 
-	log("exit completed\n");
+	log("sync exit completed\n");
+}
+
+void zmqnet::AsyncFrontend::forceDisconnect()
+{
+	// Send exit command to try to get the backends to clean up.
+	sendExit();
+
+	// Shut down all sockets. This will cause threads in m_callbackProcessors and
+	// m_responseDistributor to throw ETERM exceptions next time they recv and they will
+	// exit.
+	m_ctx.shutdown();
+
+	// Wait for stream workers. ETERM exception will be rethrown on .get()
+	for (auto&& [streamId, callbackWorker] : m_callbackProcessors) {
+		try {
+			(void)callbackWorker.get();
+		} catch (const zmq::error_t& e) {
+			if (e.num() != ETERM) {
+				// unexpected error
+				throw;
+			}
+		}
+	}
+
+	// Reacquire downstream data socket from exiting callback processor. ETERM exception
+	// will be thrown on .get()
+	try {
+		m_downstream->data_socket = m_responseDistributor.get();
+	} catch (const zmq::error_t& e) {
+		if (e.num() != ETERM) {
+			// unexpected error
+			throw;
+		}
+	}
+
+	log("forced exit completed\n");
 }

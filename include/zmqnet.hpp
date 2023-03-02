@@ -486,9 +486,14 @@ public: // interface
 	template<Event e>
 	void removeCallback() { Frontend::removeCallback<e>(); }
 
-	// Notify all Backend instances that the network should exit. Returns once all Backend instances
-	// have exited.
+	// Notify all Backend instances that the network should exit and wait for their exit
+	// to complete. Returns once all Backend instances have exited.
 	void runExit();
+
+	// Immediately disconnect from network with no guarantees about cleanup. Commnodes and
+	// leaf nodes might still be left running after this, but frontend communication
+	// channels with them will be cleaned up and the AsyncFrontend can be destroyed.
+	void forceDisconnect();
 };
 
 // Backend nodes are automatically launched by intermediate commnode instances during network

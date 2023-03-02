@@ -38,6 +38,24 @@
 static_assert(std::is_same<std::thread::native_handle_type, pthread_t>::value,
 	"zmqnet signal handling will not work for a non-pthread thread implementation.");
 
+struct ThreadSignalBlocker {
+	// blocks all signal handling in the thread that this object is created in. when the
+	// object is destroyed, restores the signal mask to m_exit_scope_mask, which is
+	// initially set to the mask that was that was present at the time of construction.
+
+	ThreadSignalBlocker() {
+		sigset_t all_signals;
+		sigfillset(&all_signals);
+		pthread_sigmask(SIG_BLOCK, &all_signals, &m_exit_scope_mask);
+	}
+
+	~ThreadSignalBlocker() {
+		pthread_sigmask(SIG_BLOCK, &m_exit_scope_mask, nullptr);
+	}
+
+	sigset_t m_exit_scope_mask;
+};
+
 // Logging
 
 static inline auto get_milliseconds()
@@ -255,10 +273,7 @@ public:
 		proxy_capture.bind(proxyCaptureEndpoint);
 
 		// Tasks should ignore all signals
-		sigset_t all_signals;
-		sigset_t old_signals;
-		sigfillset(&all_signals);
-		pthread_sigmask(SIG_BLOCK, &all_signals, &old_signals);
+		auto signal_blocker = ThreadSignalBlocker();
 
 		// Start capture task
 		captureTask = std::thread{[&](std::string logLinePrefix) {
@@ -310,9 +325,6 @@ public:
 				throw;
 			}
 		}};
-
-		// Restore old signal mask
-		pthread_sigmask(SIG_BLOCK, &old_signals, nullptr);
 	}
 
 	// Log messages coming from upstream into control socket
