@@ -1,29 +1,29 @@
 [submodule "external/cdst_build_library"]
 	path = external/cdst_build_library
-	url = git@github.hpe.com:hpe/hpc-pe-cdst-cdst_build_library.git
+	url = git@github.hpe.com:/hpcde/cdst-cdst_build_library.git
 [submodule "external/capnproto"]
 	path = external/capnproto
-	url = git@github.hpe.com:hpe/hpc-pe-cdst-capnproto.git
+	url = git@github.hpe.com:/hpcde/cdst-capnproto.git
 	branch = cdst-external
 [submodule "external/cppzmq"]
 	path = external/cppzmq
-	url = git@github.hpe.com:hpe/hpc-pe-cdst-cppzmq.git
+	url = git@github.hpe.com:/hpcde/cdst-cppzmq.git
 [submodule "external/lrle_bitset"]
 	path = external/lrle_bitset
-	url = git@github.hpe.com:hpe/hpc-pe-cdst-lrle_bitset.git
+	url = git@github.hpe.com:/hpcde/cdst-lrle_bitset.git
 [submodule "external/libzmq"]
 	path = external/libzmq
-	url = git@github.hpe.com:hpe/hpc-pe-cdst-libzmq.git
+	url = git@github.hpe.com:/hpcde/cdst-libzmq.git
 [submodule "tests/googletest"]
 	path = tests/support/googletest
-	url = git@github.hpe.com:hpe/hpc-pe-cdst-googletest.git
+	url = git@github.hpe.com:/hpcde/cdst-googletest.git
 	branch = cdst_external
 [submodule "tests/cdst-test"]
 	path = tests/function/cdst-test
-	url = git@github.hpe.com:hpe/hpc-pe-cdst-cdst-test.git
+	url = git@github.hpe.com:/hpcde/cdst-cdst-test.git
 [submodule "external/changelog"]
 	path = external/changelog
-	url = git@github.hpe.com:hpe/hpc-pe-cdst-changelog.git
+	url = git@github.hpe.com:/hpcde/cdst-changelog.git
 [submodule "rpmbuild/SOURCES/set_default"]
 	path = rpmbuild/SOURCES/set_default
 	url = git@github.hpe.com:hpe/hpc-pe-cenv-set_default.git
