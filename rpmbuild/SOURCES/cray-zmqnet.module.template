@@ -1,7 +1,7 @@
 #%Module######################################################################
 #
 #       Module <CRAY_NAME>
-#       Copyright 2020-2022 Hewlett Packard Enterprise Development LP.
+#       <COPYRIGHT>
 #       UNPUBLISHED PROPRIETARY INFORMATION.
 #       ALL RIGHTS RESERVED.
 #
@@ -25,8 +25,8 @@ setenv PE_ZMQNET_MODULE_NAME  <CRAY_NAME>
 prepend-path CRAY_LD_LIBRARY_PATH $ZMQNET_BASEDIR/lib
 prepend-path LD_LIBRARY_PATH $ZMQNET_BASEDIR/lib
 
-if { [ file exists ${ZMQNET_BASEDIR}/release_info ] } {
-      set REL_INFO [ exec cat ${ZMQNET_BASEDIR}/release_info ]
+if { [ file exists ${ZMQNET_BASEDIR}/release_notes.md ] } {
+      set REL_INFO [ exec cat ${ZMQNET_BASEDIR}/release_notes.md ]
    } else {
       set REL_INFO ""
    }

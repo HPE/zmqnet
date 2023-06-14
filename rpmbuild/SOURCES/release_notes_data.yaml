@@ -1,0 +1,57 @@
+---
+# Copyright 2023 Hewlett Packard Enterprise Development LP
+
+# FORMATTING CONVENTION FOR THIS YAML
+## <VARIABLE> - Leave as is. It is automatically updated via spec file.
+##
+## key:value pairs are used.  
+## To include a value that consists of 1 to many elements in a list:
+## 1. Itemize each element of a list by prepending with ' - '
+##
+## To include a value that consists of 1 to many paragraphs:
+## 1. The first line of the paragraph must include a vertical bar followed by a return char.
+## 2. Itemize each paragraph by prepending with ' - '
+## 3. Add your paragragh content including a line break where needed for proper formatting/look.
+##    Word wrap is supported.  But may not provide the look and feel you want.  
+##    Note that a ':' in your text must be wrapped in quotes for jinja to process it as a string.'
+## 4. Spaces are supported for desired formatting for the lines in the paragraph.
+## 5. If you have more then 1 paragraph, you can seperate each paragragh with a blank line.
+## 6. The prepending "-" for a paragraph should be orange, where the prepending "-" 
+##    for a list is white.
+##    Or differently colored. It's easier to distinguish the difference if you edit in an editor
+##    which supports it.
+## 7. The 'static_release_history' key is only temporary.  Upon initial implementation, there likely
+##    will be little/no changelog history in the expected format.  Insert 3 of the latest release
+##    content, from the previous release notes.  This field, will be removed three releases after
+##    the initial implementation, as the expected changelog info will now be available in github
+##    history.  If left empty, it will be ignored.
+
+name: <NAME>
+version: <VERSION>
+release_date: <RELEASE_DATE>
+copyright: <COPYRIGHT>
+product_description: |
+  - zmqnet is a library for creating a network tree between applications
+    and HPC jobs using zmq.
+known_issues:
+notes:
+product_dependencies:
+ - cray-cti <cti_version_range> installed
+ - cdst-support <cdst_version_range> installed
+os_dependencies:
+ - HPE/Cray Shasta systems with SLES 15 SP3 and SP4
+ - HPE Apollo systems with Slurm and RH 8.6
+documentation: |
+installation_instructions: |
+  - rpm -ivh <NAME>-<VERSION>-<RELEASE>.<ARCH>.rpm
+
+    To make <NAME> <VERSION> the default version of <NAME>, execute:
+    <CRAY_PREFIX>/admin-pe/set_default_files/set_default_<NAME>_<VERSION>
+attributions_file: <ATTRIBUTIONS_FILE_PATH>
+static_release_history: |
+  =======================================================================
+  ## [1.0.0] - 2022-9-26   (22.10)
+  =======================================================================
+
+  * Initial release
+  

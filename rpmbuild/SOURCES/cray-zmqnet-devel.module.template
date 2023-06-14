@@ -1,7 +1,7 @@
 #%Module######################################################################
 #
 #       Module <CRAY_NAME>
-#       Copyright 2020-2022 Hewlett Packard Enterprise Development LP.
+#       <COPYRIGHT>
 #       UNPUBLISHED PROPRIETARY INFORMATION.
 #       ALL RIGHTS RESERVED.
 #
@@ -21,8 +21,8 @@ prepend-path PE_PKGCONFIG_PRODUCTS PE_ZMQNET
 prepend-path PKG_CONFIG_PATH $ZMQNET_BASEDIR/lib/pkgconfig
 prepend-path PKG_CONFIG_PATH $ZMQNET_BASEDIR/support/lib/pkgconfig
 
-if { [ file exists ${ZMQNET_BASEDIR}/release_info ] } {
-      set REL_INFO [ exec cat ${ZMQNET_BASEDIR}/release_info ]
+if { [ file exists ${ZMQNET_BASEDIR}/release_notes.md ] } {
+      set REL_INFO [ exec cat ${ZMQNET_BASEDIR}/release_notes.md ]
    } else {
       set REL_INFO ""
    }

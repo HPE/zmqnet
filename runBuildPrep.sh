@@ -2,7 +2,7 @@
 #
 # runBuildPrep.sh - Preps the build environment
 #
-# Copyright 2019-2022 Hewlett Packard Enterprise Development LP.
+# Copyright 2019-2023 Hewlett Packard Enterprise Development LP.
 #
 # Unpublished Proprietary Information.
 # This unpublished work is protected to trade secret, copyright and other laws.
@@ -38,6 +38,7 @@ if [[ "$target_pm" == "$cdst_pm_zypper" ]]; then
         cmake \
         libuuid-devel \
         openssl-devel \
+        python3-pip \
         rpm-build
     check_exit_status
 elif [[ "$target_pm" == "$cdst_pm_yum" ]]; then
@@ -50,6 +51,7 @@ elif [[ "$target_pm" == "$cdst_pm_yum" ]]; then
         cmake \
         libuuid-devel \
         openssl-devel \
+        python3-pip \
         rpm-build
     check_exit_status
 fi
