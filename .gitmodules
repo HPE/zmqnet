@@ -23,7 +23,7 @@
 	url = git@github.hpe.com:hpcde/cdst-cdst-test.git
 [submodule "external/changelog"]
 	path = external/changelog
-	url = git@github.hpe.com:hpcde/devops-changelog.git
+	url = git@github.hpe.com:hpcde/devops-changlog.git
 [submodule "rpmbuild/SOURCES/set_default"]
 	path = rpmbuild/SOURCES/set_default
 	url = git@github.hpe.com:hpcde/cdeux-set-default.git
