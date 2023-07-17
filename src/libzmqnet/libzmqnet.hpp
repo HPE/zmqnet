@@ -625,7 +625,10 @@ public:
 		auto const messageWordsLen = (message.size() / sizeof(capnp::word)) - 1;
 
 		auto messageArray = kj::arrayPtr(messageWords, messageWordsLen);
-		return std::make_pair(tag, capnp::UnalignedFlatArrayMessageReader(messageArray));
+		auto readerOptions = capnp::ReaderOptions
+			{ .traversalLimitInWords = 1 << 30 // Don't limit traversal depth
+		};
+		return std::make_pair(tag, capnp::UnalignedFlatArrayMessageReader(messageArray, readerOptions));
 	}
 
 	ReaderStorage(ReaderStorage&& expiring)
