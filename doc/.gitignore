@@ -1,0 +1,6 @@
+zmqnet.3
+zmqnet.3.md
+sphinx/_build
+sphinx/make.bat
+sphinx-venv
+pandoc

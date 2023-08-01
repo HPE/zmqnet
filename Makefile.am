@@ -2,7 +2,7 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = src tests/unit
+SUBDIRS = src tests/unit doc
 
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libzmqnet.pc

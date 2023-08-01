@@ -101,6 +101,7 @@ AC_CONFIG_FILES([
 	src/Makefile
 	src/libzmqnet/Makefile
 	tests/unit/Makefile
+	doc/Makefile
 ])
 
 AC_OUTPUT
