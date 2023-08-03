@@ -93,16 +93,14 @@
 
 # Dist tags for SuSE need to be manually set
 %if 0%{?suse_version}
-%if 0%{?sle_version} == 150300
-%global dist .sles15sp3
-%global OS_HW_TAG 7.0
-%global OS_WB_TAG sles15
-%endif
 %if 0%{?sle_version} == 150400
 %global dist .sles15sp4
+%endif
+%if 0%{?sle_version} == 150500
+%global dist .sles15sp5
+%endif
 %global OS_HW_TAG 7.0
 %global OS_WB_TAG sles15
-%endif
 %endif
 
 %if %{_arch} == aarch64
@@ -128,7 +126,7 @@ Release:    %(echo ${BUILD_NUMBER})%{dist}
 Release:    1%{dist}
 %endif
 Prefix:     %{cray_prefix}
-License:    %{copyright}
+License:    HPE Proprietary
 Vendor:     Hewlett Packard Enterprise Development LP
 Group:      Development/Tools/Debuggers
 Provides:   %{cray_name} = %{pkgversion}
@@ -143,8 +141,7 @@ Source2:    %{pkgconfig_template}
 Source9:    %{yaml_template}
 
 %description
-Cray zmqnet %{pkgversion}
-Certain components, files or programs contained within this package or product are %{copyright}
+ZMQNet is a scalable, high performance networking library, implementing a tree-type command distribution and data aggregation network.
 
 %package -n %{cray_name}-devel-%{pkgversion}
 Summary:    Cray zmqnet development files
