@@ -52,7 +52,8 @@ elif [[ "$target_pm" == "$cdst_pm_yum" ]]; then
         libuuid-devel \
         openssl-devel \
         python3-pip \
-        rpm-build
+        rpm-build \
+        wget
     check_exit_status
 fi
 
