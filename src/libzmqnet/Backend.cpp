@@ -57,8 +57,9 @@ void zmqnet::detail::Backend::notifyReady()
 	// wrong and we never get a single ping command.
 	auto oldTimeout = m_upstream->control_socket.get(zmq::sockopt::rcvtimeo);
 	// default 300000 ms, 5 minutes.
-	if (auto timeoutSec = startup_handshake_timeout() != -1)
+	if (auto timeoutSec = startup_handshake_timeout(); timeoutSec > 0) {
 		m_upstream->control_socket.set(zmq::sockopt::rcvtimeo, timeoutSec * 1000);
+	}
 
 	while (true) {
 		log("backend %d: waiting for startup command...\n", m_node_id);

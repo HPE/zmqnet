@@ -16,6 +16,7 @@
 #include <string>
 #include <tuple>
 #include <optional>
+#include <chrono>
 
 // Logging
 
@@ -68,7 +69,7 @@ static inline auto get_milliseconds()
 static inline bool debug_enabled()
 {
 	static const auto _enabled = []() {
-		return bool{::getenv(zmqnet::env::ENABLEDEBUG)};
+		return (::getenv(zmqnet::env::ENABLEDEBUG) != nullptr);
 	}();
 	return _enabled;
 }
@@ -682,14 +683,40 @@ static inline auto recv_MessageReader(zmq::socket_t& socket, zmq::recv_flags con
 static inline auto recv_MessageReader_timeout(zmq::socket_t& socket, zmq::recv_flags const sockopt = zmq::recv_flags::none)
 {
 	auto received_result = zmq::message_t{};
+	auto original_timeout = socket.get(zmq::sockopt::rcvtimeo);
 
-	// Nonzero return value indicates successful result
-	if (socket.recv(received_result, sockopt)) {
-		return std::make_optional(ReaderStorage{std::move(received_result)});
+	while (true) {
 
-	// Zero value indicates timeout
-	} else {
-		return std::optional<ReaderStorage>{};
+		// ZMQ socket timeout may return early, before timeout hit
+		auto started = std::chrono::system_clock::now();
+
+		// Nonzero return value indicates successful result
+		if (socket.recv(received_result, sockopt)) {
+			socket.set(zmq::sockopt::rcvtimeo, original_timeout);
+			return std::make_optional(ReaderStorage{std::move(received_result)});
+
+		// Zero value indicates timeout
+		} else {
+
+			// Check elapsed milliseconds
+			auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::system_clock::now() - started).count();
+
+			// If timeout was set, check timeout
+			if (auto old_timeout = socket.get(zmq::sockopt::rcvtimeo); old_timeout > 0) {
+
+				// If more time left, update timeout and continue wait
+				if (elapsed < old_timeout) {
+					auto new_timeout = old_timeout - elapsed;
+					socket.set(zmq::sockopt::rcvtimeo, (int)new_timeout);
+					continue;
+				}
+			}
+
+			// Timed out, return empty
+			socket.set(zmq::sockopt::rcvtimeo, original_timeout);
+			return std::optional<ReaderStorage>{};
+		}
 	}
 }
 

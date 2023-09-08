@@ -1175,8 +1175,8 @@ static auto fcfs(zmq::context_t& ctx,
 		net::set_curve_client(dealer_socket, dealerPublicKey);
 	}
 	dealer_socket.connect(dealerEndpoint);
-	if (startup_handshake_timeout() != -1) {
-		dealer_socket.set(zmq::sockopt::rcvtimeo, startup_handshake_timeout() * 1000); // milliseconds
+	if (auto timeoutSec = startup_handshake_timeout(); timeoutSec > 0) {
+		dealer_socket.set(zmq::sockopt::rcvtimeo, timeoutSec * 1000); // milliseconds
 	}
 	log("connected to topology server %s\n", dealerEndpoint.c_str());
 
@@ -1190,7 +1190,7 @@ static auto fcfs(zmq::context_t& ctx,
 
 		// Send this node's endpoints to topology server
 		net::send_MessageBuilder(dealer_socket, net::communicator_ids::AllNodes, builder);
-		log("registered endpoints with topology server\n");
+		log("registered endpoints with topology server %s\n", dealerEndpoint.c_str());
 	}
 
 	// Receive this node's topology info from topology server
