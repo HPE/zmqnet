@@ -118,8 +118,14 @@ struct temp_file
 		// Try in TMPDIR
 		if (auto const tmp_dir = ::getenv("TMPDIR")) {
 			char *raw = nullptr;
-			if (::asprintf(&raw, "%s/temp-XXXXXX", tmp_dir) > 0) {
-				result.reset(raw);
+
+			// Ensure TMPDIR exists and is writable
+			if (::access(tmp_dir, W_OK) == 0) {
+
+				// Format tmpdir path
+				if (::asprintf(&raw, "%s/temp-XXXXXX", tmp_dir) > 0) {
+					result.reset(raw);
+				}
 			}
 		}
 
