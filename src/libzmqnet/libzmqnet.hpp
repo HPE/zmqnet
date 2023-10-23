@@ -17,6 +17,7 @@
 #include <tuple>
 #include <optional>
 #include <chrono>
+#include <string_view>
 
 // Logging
 
@@ -261,6 +262,86 @@ static inline std::string generate_uuid()
 	return std::string{uuid_str};
 }
 
+static inline std::string generate_tcp_endpoint()
+{
+	if (auto port_base = ::getenv(zmqnet::env::PORT_BASE)) {
+
+		auto port = int{};
+
+		// Parse port base
+		try {
+			port = std::stoi(port_base);
+		} catch (...) {
+			throw std::runtime_error(std::string{"Could not parse port base, "}
+				+ zmqnet::env::PORT_BASE + " was set to " + port_base);
+		}
+
+		return "tcp://*:" + std::to_string(port);
+	}
+
+	// No port base set, allow ZMQ to assign arbitrary port
+	return "tcp://*:*";
+}
+
+// Extract port from generated endpoint
+static inline auto get_endpoint_port(std::string_view endpoint)
+{
+	endpoint = endpoint.substr(endpoint.find("://") + 3);
+	endpoint = endpoint.substr(endpoint.find(":") + 1);
+
+	return std::string{endpoint};
+}
+
+static inline auto replace_tcp_endpoint_host(std::string_view endpoint, std::string const& hostname)
+{
+	return "tcp://" + hostname + ":" + get_endpoint_port(endpoint);
+};
+
+static inline auto next_tcp_port(std::string_view endpoint)
+{
+	try {
+		auto port = std::stoi(get_endpoint_port(endpoint));
+		return "tcp://*:" + std::to_string(port + 1);
+	} catch (...) {
+		throw std::runtime_error("Could not extract port from endpoint " + std::string{endpoint});
+	}
+}
+
+// Retry binding to subsequent ports up to PORT_MAX
+// Return actual endpoint on successful bind
+static inline auto retry_bind(zmq::socket_t& socket, std::string endpoint)
+{
+	// Get maximum port to try
+	auto max_retry = 10;
+	try {
+		auto parsed_retry = std::stoi(zmqnet::env::PORT_MAX);
+		if (parsed_retry > 0) {
+			max_retry = parsed_retry;
+		}
+	} catch (...) {
+		// Ignore failed parse
+	}
+
+	for (auto i = 0; i < max_retry; i++) {
+		try {
+
+			// Attempt to bind
+			socket.bind(endpoint);
+
+			// Bind successful
+			return socket.get(zmq::sockopt::last_endpoint);
+
+		} catch (std::exception const& ex) {
+
+			// Advance to next port
+			endpoint = next_tcp_port(endpoint);
+		}
+	}
+
+	throw std::runtime_error("Tried " + std::to_string(max_retry) + " ports, up to "
+		+ endpoint + ", but all were in use");
+}
+
 class PubSubLoggingProxy
 {
 public:
@@ -358,9 +439,7 @@ public:
 		proxy_incoming.connect(proxyIncomingEndpoint);
 
 		// Messages leave proxy and are sent to downstream control endpoint
-		proxy_outgoing.bind(controlEndpoint);
-
-		return proxy_outgoing.get(zmq::sockopt::last_endpoint);
+		return retry_bind(proxy_outgoing, controlEndpoint);
 	}
 
 	~PubSubLoggingProxy()
@@ -445,13 +524,11 @@ public:
 
 		// Bind control socket directly without proxy
 		} else {
-			control_socket.bind(controlEndpoint);
-			controlEndpoint = control_socket.get(zmq::sockopt::last_endpoint);
+			controlEndpoint = retry_bind(control_socket, controlEndpoint);
 		}
 
 		// Bind data socket
-		data_socket.bind(dataEndpoint);
-		dataEndpoint = data_socket.get(zmq::sockopt::last_endpoint);
+		dataEndpoint = retry_bind(data_socket, dataEndpoint);
 
 		log("control endpoint: %s, data endpoint: %s\n", controlEndpoint.c_str(), dataEndpoint.c_str());
 	}
@@ -495,8 +572,8 @@ public:
 	TcpDownstreamLink(zmq::context_t& ctx, zmqnet::Auth const& auth)
 		: DownstreamLink
 			{ ctx
-			, "tcp://*:*" // control endpoint
-			, "tcp://*:*" // data endpoint
+			, generate_tcp_endpoint()
+			, generate_tcp_endpoint()
 			, auth
 		}
 		, publicKey{}
@@ -528,21 +605,12 @@ public:
 	auto const& getPublicKey() const { return publicKey; }
 };
 
-static inline auto replace_endpoint_host(std::string endpoint, std::string const& hostname)
-{
-	// Extract port from generated endpoint
-	endpoint = endpoint.substr(endpoint.find("://") + 3);
-	endpoint = endpoint.substr(endpoint.find(":") + 1);
-
-	return "tcp://" + hostname + ":" + std::move(endpoint);
-};
-
 // Replace the sockets' endpoints with e.g. known-accessible hostname from CTI
 static inline auto formatEndpoints(TcpDownstreamLink const& downstream, std::string const& hostname)
 {
 	return std::make_tuple(
-		replace_endpoint_host(downstream.controlEndpoint, hostname),
-		replace_endpoint_host(downstream.dataEndpoint,	  hostname)
+		replace_tcp_endpoint_host(downstream.controlEndpoint, hostname),
+		replace_tcp_endpoint_host(downstream.dataEndpoint, hostname)
 	);
 }
 

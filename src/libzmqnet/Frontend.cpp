@@ -80,8 +80,9 @@ static auto fcfsTreeImpl(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, 
 #endif
 
 	// Bind topology dealer socket
-	dealer_socket.bind("tcp://*:*");
-	auto const dealerEndpoint = net::replace_endpoint_host(dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
+	net::retry_bind(dealer_socket, net::generate_tcp_endpoint());
+	auto const dealerEndpoint = net::replace_tcp_endpoint_host(
+			dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
 	log("topology dealer listening on %s\n",
 		dealerEndpoint.c_str());
 

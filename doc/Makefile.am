@@ -14,8 +14,8 @@ htmldestdir = $(datadir)/doc
 
 man3_MANS = zmqnet.3
 
-MARKDOWN_IN = sphinx/description.md sphinx/cti.md sphinx/topology.md sphinx/filters.md \
-	sphinx/streams_and_communicators.md sphinx/frontend.md sphinx/backend.md \
+MARKDOWN_IN = sphinx/description.md sphinx/environment.md sphinx/cti.md sphinx/topology.md \
+	sphinx/filters.md sphinx/streams_and_communicators.md sphinx/frontend.md sphinx/backend.md \
 	sphinx/examples/capnp.md sphinx/see_also.md
 
 all: $(MARKDOWN_IN)

@@ -10,7 +10,7 @@
 
 #include "gtest/gtest.h"
 
-#include "libzmqnet_tests.hpp"
+#include "zmqnet.hpp"
 
 class ZmqnetUnitTest : public ::testing::Test
 {

@@ -58,6 +58,12 @@ namespace env
 
 	// If set to a positive integer, zmqnet commnodes will sleep for n seconds when they start.
 	constexpr auto DEBUG_COMMNODE_STARTUP_SLEEP = "LIBZMQNET_DEBUG_COMMNODE_STARTUP_SLEEP";
+
+	// If set, use this as the port number base for allocating ports
+	constexpr auto PORT_BASE = "LIBZMQNET_PORT_BASE";
+
+	// Maximum port offsets to try (default 10)
+	constexpr auto PORT_MAX = "LIBZMQNET_PORT_MAX";
 } // namespace env
 
 // Command data is provided via ByteArray
