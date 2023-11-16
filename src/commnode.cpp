@@ -1357,6 +1357,16 @@ int main(int argc, char* const argv[])
 	// num_children is number of child commnodes + number of child leaves
 	num_children += num_leaves;
 
+	// In packed mode, assign a rank and PID to each leaf
+	auto localPidList = std::unique_ptr<cti_pidList_t, decltype(&cti_be_destroyPidList)>
+		{nullptr, cti_be_destroyPidList};
+	if (packed_mode) {
+		localPidList = {cti_be_findAppPids(), cti_be_destroyPidList};
+		if (!localPidList) {
+			throw std::runtime_error("Failed to get local PID list");
+		}
+	}
+
 	// Launch leaf binary(s)
 	{ auto const leafPath = std::string{cti_be_getBinDir()} + "/" + leaf_argv[0];
 		auto const [controlEndpoint, dataEndpoint] = net::formatEndpoints(downstream, cti_be_getNodeHostname());
@@ -1376,7 +1386,9 @@ int main(int argc, char* const argv[])
 			, controlEndpoint
 			, dataEndpoint
 			, pubkey
-			, "" // will hold rank id
+			, "" // will hold node id
+			, "-1" // will hold rank id in packed mode
+			, "-1" // will hold target PID in packed mode
 		};
 
 		// Copy provided arguments
@@ -1384,22 +1396,36 @@ int main(int argc, char* const argv[])
 			completeLeafArgv.add(leaf_argv[i]);
 		}
 
-		// Get pointer to rank argument
+		// Get pointer to node, rank, PID argument
 		auto complete_leaf_argv = completeLeafArgv.get();
 		auto node_arg_ptr = &complete_leaf_argv[5];
+		auto rank_arg_ptr = &complete_leaf_argv[6];
+		auto pid_arg_ptr = &complete_leaf_argv[7];
 
-		for (int rank = first_pe; rank < first_pe + num_leaves; rank++) {
-			log("%d / %d\n", rank - first_pe + 1, num_leaves);
+		for (auto i = 0; i < num_leaves; i++) {
+			log("%d / %d\n", i + 1, num_leaves);
+
+			// In packed mode, node IDs can conflict if assigned in ascending order
+			// from first PE
+			auto node_id = (packed_mode)
+				? localPidList->pids[i].rank
+				: first_pe + i;
 
 			if (auto const forkedPid = fork()) {
 				// Add launched process to cleanup list
 				const auto LeafT = CommChild::Type::Leaf;
-				childPids.insert({LeafT, forkedPid, rank});
+				childPids.insert({LeafT, forkedPid, node_id});
 
 			} else {
-				// Set rank argument
-				auto const nodeString = std::to_string(rank);
+				// Set node, rank, PID argument
+				auto nodeString = std::to_string(node_id);
 				*node_arg_ptr = (char*)nodeString.c_str();
+				if (packed_mode) {
+					auto rankString = std::to_string(localPidList->pids[i].rank);
+					*rank_arg_ptr = (char*)rankString.c_str();
+					auto pidString = std::to_string(localPidList->pids[i].pid);
+					*pid_arg_ptr = (char*)pidString.c_str();
+				}
 
 				// Exec leaf binary
 				execvp(leafPath.c_str(), complete_leaf_argv);

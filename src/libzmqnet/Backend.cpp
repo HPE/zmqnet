@@ -20,6 +20,8 @@ zmqnet::detail::Backend::Backend(BackendParams const& backendParams)
 		backendParams.authType,
 		backendParams.upstreamPublicKey)}
 	, m_node_id{backendParams.node_id}
+	, m_rank_id{backendParams.rank_id}
+	, m_target_pid{backendParams.target_pid}
 	, m_node_bitset{std::move(lrle_bitset{(size_t)m_node_id}.compressed)}
 {
 	net::subscribe_to_tag(m_upstream->control_socket, net::communicator_ids::AllNodes);
@@ -28,6 +30,24 @@ zmqnet::detail::Backend::Backend(BackendParams const& backendParams)
 zmqnet::detail::Backend::~Backend()
 {
 	m_ctx.shutdown();
+}
+
+int zmqnet::detail::Backend::getRank() const
+{
+	if (m_rank_id < 0) {
+		throw std::logic_error("Used Backend::getRank, but backend was not started in packed mode");
+	}
+
+	return m_rank_id;
+}
+
+pid_t zmqnet::detail::Backend::getTargetPid() const
+{
+	if (m_target_pid < 0) {
+		throw std::logic_error("Used Backend::getTargetPid, but backend was not started in packed mode");
+	}
+
+	return m_target_pid;
 }
 
 void zmqnet::detail::Backend::notifyReady()

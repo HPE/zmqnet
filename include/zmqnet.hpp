@@ -253,13 +253,15 @@ public: // types
 	{
 		Auth authType;
 		std::string upstreamControlEndpoint, upstreamDataEndpoint, upstreamPublicKey;
-		int node_id;
+		int node_id, rank_id;
+		pid_t target_pid;
 	};
 
 protected: // members
 	zmq::context_t m_ctx;
 	std::unique_ptr<net::UpstreamLink> m_upstream;
-	int m_node_id;
+	int m_node_id, m_rank_id;
+	pid_t m_target_pid;
 	std::vector<unsigned char> m_node_bitset;
 
 protected: // derived class interface
@@ -281,9 +283,11 @@ protected: // derived class interface
 				, .upstreamDataEndpoint = argv[3]
 				, .upstreamPublicKey = upstreamPubkey
 				, .node_id = std::stoi(argv[5])
+				, .rank_id = std::stoi(argv[6])
+				, .target_pid = std::stoi(argv[7])
 			},
-			argc - 6, // Rest of arguments count
-			argv + 6); // Rest of arguments array
+			argc - 8, // Rest of arguments count
+			argv + 8); // Rest of arguments array
 	}
 
 	Backend(BackendParams const& backendParams);
@@ -292,6 +296,9 @@ protected: // derived class interface
 	void notifyReady();
 
 	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
+
+	int getRank() const;
+	pid_t getTargetPid() const;
 };
 
 class CallbackProcessorManager {
@@ -528,6 +535,12 @@ public: // interface
 	// to the user binary calling SyncBackend.
 	SyncBackend(detail::Backend::BackendParams const& backendParams);
 
+	// If started in packed mode, each backend will be assigned a rank and target PID by
+	// the commnode. This supports launching one leaf to analyze each rank on the node.
+	// If not launched in packed mode, these functions will throw.
+	int getRank() const { return detail::Backend::getRank(); }
+	pid_t getTargetPid() const { return detail::Backend::getTargetPid(); }
+
 	// Block and wait for the next incoming command. The Stream on which this command was received
 	// is provided, containing the user-provided Stream ID that was used when creating the Stream
 	// on the Frontend object.
@@ -584,6 +597,12 @@ public: // interface
 	// from the leaf binary arguments by zmqnet::Backend::getParams.
 	AsyncBackend(detail::Backend::BackendParams const& backendParams);
 	~AsyncBackend();
+
+	// If started in packed mode, each backend will be assigned a rank and target PID by
+	// the commnode. This supports launching one leaf to analyze each rank on the node.
+	// If not launched in packed mode, these functions will throw.
+	int getRank() const { return detail::Backend::getRank(); }
+	pid_t getTargetPid() const { return detail::Backend::getTargetPid(); }
 
 	// Before initialization of the async. backend can complete, callbacks must be registered for
 	// all possible incoming stream IDs.
