@@ -428,6 +428,9 @@ public: // interface
 // the contents of every incoming message for that stream.
 class AsyncFrontend : private detail::Frontend
 {
+private: // types
+	class HeartbeatManager;
+
 public: // types
 
 	// Command callbacks take a pair of Stream ID and ByteArray, where the Stream ID corresponds
@@ -441,6 +444,7 @@ private: // members
 	std::future<zmq::socket_t> m_responseDistributor;
 	constexpr static auto m_pingEndpoint = "inproc://ping";
 	zmq::socket_t m_pingSocket;
+	std::unique_ptr<HeartbeatManager> m_heartbeatManager;
 
 public: // interface
 
@@ -507,6 +511,16 @@ public: // interface
 	// leaf nodes might still be left running after this, but frontend communication
 	// channels with them will be cleaned up and the AsyncFrontend can be destroyed.
 	void forceDisconnect();
+
+	// Start a monitor thread, sends a ping to `communicator` every `interval_ms`
+	void startHeartbeat(int interval_ms);
+
+	// Whether the heartbeat thread is running
+	bool heartbeatRunning();
+
+	// Query the network heartbeat state. If monitor thread was not started,
+	// this will return false
+	bool heartbeatLive();
 };
 
 // Backend nodes are automatically launched by intermediate commnode instances during network

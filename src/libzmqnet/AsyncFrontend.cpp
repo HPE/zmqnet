@@ -5,6 +5,7 @@
 #include <config.h>
 
 #include <cassert>
+#include <thread>
 
 #include <unordered_map>
 
@@ -178,6 +179,81 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 
 } // async
 
+// Implementation for heartbeat monitor
+class zmqnet::AsyncFrontend::HeartbeatManager
+{
+
+	void heartbeatThread(zmqnet::AsyncFrontend& frontend, zmqnet::Communicator communicator, int interval_ms)
+	{
+		// Check interval timeout
+		if (interval_ms <= 0) {
+			m_live.store(false, std::memory_order_relaxed);
+			return;
+		}
+
+		m_cancel.store(false, std::memory_order_relaxed);
+
+		try {
+
+			while (!m_cancel.load(std::memory_order_relaxed)) {
+
+				// Next check interval
+				auto wait_until = std::chrono::steady_clock::now()
+					+ std::chrono::milliseconds{interval_ms};
+
+				// Send ping command on communicator and update state
+				auto any_response = !frontend.sendPing(communicator, interval_ms, {}).empty();
+				m_live.store(any_response, std::memory_order_relaxed);
+
+				// Wait for the rest of the check interval
+				std::this_thread::sleep_until(wait_until);
+			}
+
+		// Frontend exit commands will reset ZMQ context, which causes the sendPing operation to throw
+		// if it is in progress
+		} catch (std::exception const& ex) {
+			log("Heartbeat exception: %s\n", ex.what());
+			m_live.store(false, std::memory_order_relaxed);
+			m_cancel.store(true, std::memory_order_relaxed);
+		}
+	}
+
+	std::atomic<bool> m_live, m_cancel;
+	std::mutex m_mtx;
+	std::condition_variable m_cv;
+	std::thread m_heartbeatThread;
+
+	public: // interface
+
+	HeartbeatManager(zmqnet::AsyncFrontend& frontend, zmqnet::Communicator communicator, int interval_ms)
+		: m_live{true}
+		, m_cancel{true}
+		, m_heartbeatThread{&HeartbeatManager::heartbeatThread, this, std::ref(frontend), communicator, interval_ms}
+	{
+		// Check timeout interval
+		if (interval_ms <= 0) {
+			throw std::invalid_argument("Heartbeat interval must be positive non-zero");
+		}
+	}
+
+	~HeartbeatManager()
+	{
+		// Cancel and wait for heartbeat thread
+		m_cancel.store(true, std::memory_order_relaxed);
+		m_heartbeatThread.join();
+	}
+
+	bool running()
+	{
+		return !m_cancel.load(std::memory_order_relaxed);
+	}
+
+	bool live()
+	{
+		return m_live.load(std::memory_order_relaxed);
+	}
+};
+
 zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id, long int const manifest_id,
 	Topology const& topology, char const* const* leaf_argv, char const* const* leaf_env,
 	UserCallbacks&& cbacks, const std::atomic<bool>* killSwitch)
@@ -187,6 +263,7 @@ zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id
 	, m_blocking_registration{std::make_unique<net::shared_semaphore>(false)}
 	, m_responseDistributor{}
 	, m_pingSocket(m_ctx, zmq::socket_type::pull)
+	, m_heartbeatManager{nullptr}
 {
 	// Create socket for distributor task to forward pings to
 	m_pingSocket.bind(m_pingEndpoint);
@@ -343,6 +420,9 @@ void zmqnet::AsyncFrontend::runExit()
 	// Shut down all sockets
 	m_ctx.shutdown();
 
+	// Cancel heartbeat
+	m_heartbeatManager.reset();
+
 	log("sync exit completed\n");
 }
 
@@ -355,6 +435,9 @@ void zmqnet::AsyncFrontend::forceDisconnect()
 	// m_responseDistributor to throw ETERM exceptions next time they recv and they will
 	// exit.
 	m_ctx.shutdown();
+
+	// Cancel heartbeat
+	m_heartbeatManager.reset();
 
 	// Wait for stream workers. ETERM exception will be rethrown on .get()
 	for (auto&& [streamId, callbackWorker] : m_callbackProcessors) {
@@ -380,4 +463,26 @@ void zmqnet::AsyncFrontend::forceDisconnect()
 	}
 
 	log("forced exit completed\n");
+}
+
+void zmqnet::AsyncFrontend::startHeartbeat(int interval_ms)
+{
+	if (!m_heartbeatManager) {
+		auto communicator = getAllNodesCommunicator();
+		m_heartbeatManager = std::make_unique<HeartbeatManager>(*this, communicator, interval_ms);
+	}
+}
+
+bool zmqnet::AsyncFrontend::heartbeatRunning()
+{
+	return (m_heartbeatManager)
+		? m_heartbeatManager->running()
+		: false;
+}
+
+bool zmqnet::AsyncFrontend::heartbeatLive()
+{
+	return (m_heartbeatManager)
+		? m_heartbeatManager->live()
+		: false;
 }
