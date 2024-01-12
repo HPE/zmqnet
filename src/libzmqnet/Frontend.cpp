@@ -559,7 +559,7 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 
 			for (auto triesRemaining = totalTries; triesRemaining > 0; --triesRemaining) {
 				log("sending ping (%d tries left)\n", triesRemaining);
-				auto responded = sendPing(this->getAllNodesCommunicator(), m_downstream->data_socket, intervalMs, {});
+				auto responded = sendPing(this->getAllNodesCommunicator(), m_downstream->control_socket, m_downstream->data_socket, intervalMs, {});
 
 				if (debug_enabled()) {
 					auto oss = std::ostringstream{};
@@ -625,12 +625,12 @@ zmqnet::Communicator zmqnet::detail::Frontend::getAllNodesCommunicator() const {
 	return Communicator { .id = net::communicator_ids::AllNodes };
 }
 
-zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmqnet::NodeSet const& nodes)
+zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmq::socket_t& sender, zmqnet::NodeSet const& nodes)
 {
-	return createCommunicator(toRankSet(nodes));
+	return createCommunicator(sender, toRankSet(nodes));
 }
 
-zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(const std::set<size_t> &ranksSet) {
+zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(zmq::socket_t& sender, const std::set<size_t> &ranksSet) {
 	if (ranksSet.empty()) {
 		throw std::runtime_error("expected non-empty ranks set");
 	}
@@ -651,14 +651,15 @@ zmqnet::Communicator zmqnet::detail::Frontend::createCommunicator(const std::set
 
 	// Send communicator create command
 	log("registering communicator %02x (%s)\n", communicatorId, ranksSet_bitset.to_string().c_str());
-	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllNodes, builder);
+	net::send_MessageBuilder(sender, net::communicator_ids::AllNodes, builder);
 
 	// Return new communicator handle
 	return Communicator { .id = communicatorId };
 }
 
-zmqnet::Stream zmqnet::detail::Frontend::createStream(zmqnet::Communicator const& communicator,
-	Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName, zmqnet::StreamSync const& streamSync)
+zmqnet::Stream zmqnet::detail::Frontend::createStream(zmq::socket_t& sender,
+	zmqnet::Communicator const& communicator, Stream::Id const& streamId,
+	std::string const& filterLibraryName, std::string const& filterFunctionName, zmqnet::StreamSync const& streamSync)
 {
 	// Create stream create command message
 	auto builder = capnp::MallocMessageBuilder{};
@@ -680,13 +681,15 @@ zmqnet::Stream zmqnet::detail::Frontend::createStream(zmqnet::Communicator const
 
 	// Send filter create command
 	log("registering stream %d filter %s function %s with comm id %d\n", streamId, filterLibraryName.c_str(), filterFunctionName.c_str(), communicator.id);
-	net::send_MessageBuilder(m_downstream->control_socket, communicator.id, builder);
+	net::send_MessageBuilder(sender, communicator.id, builder);
 
 	// Return new stream handle
 	return Stream { .communicatorId = communicator.id, .id = streamId };
 }
 
-void zmqnet::detail::Frontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
+void zmqnet::detail::Frontend::sendCommand(
+	zmq::socket_t& sender, zmqnet::Stream const& stream,
+	char const* command_buffer, size_t command_len)
 {
 	// Create user command
 	auto builder = capnp::MallocMessageBuilder{};
@@ -696,11 +699,12 @@ void zmqnet::detail::Frontend::sendCommand(zmqnet::Stream const& stream, char co
 
 	// Send user command
 	log("user command length %zu on stream %d, comm id 0x%02x\n", command_len, stream.id, stream.communicatorId);
-	net::send_MessageBuilder(m_downstream->control_socket, stream.communicatorId, builder);
+	net::send_MessageBuilder(sender, stream.communicatorId, builder);
 }
 
 zmqnet::RankSet zmqnet::detail::Frontend::sendPing(
-	Communicator const& comm, zmq::socket_t & listener,
+	Communicator const& comm,
+	zmq::socket_t& sender, zmq::socket_t &listener,
 	int timeoutMs, RankSet const& stopAfter)
 {
 	// send a ping to `comm`, listen for responses on `listener` until `timeoutMs`
@@ -721,7 +725,7 @@ zmqnet::RankSet zmqnet::detail::Frontend::sendPing(
 	auto ping = builder.initRoot<NetworkCommand>();
 	ping.setPing();
 
-	net::send_MessageBuilder(m_downstream->control_socket, comm.id, builder);
+	net::send_MessageBuilder(sender, comm.id, builder);
 	log("sent ping on communicator %d.\n", comm.id);
 
 	auto oldTimeout = listener.get(zmq::sockopt::rcvtimeo);
@@ -753,7 +757,9 @@ zmqnet::RankSet zmqnet::detail::Frontend::sendPing(
 	return responded;
 }
 
-bool zmqnet::detail::Frontend::confirmPing(Communicator const& comm, RankSet const& ranks, zmq::socket_t & listener)
+bool zmqnet::detail::Frontend::confirmPing(
+	Communicator const& comm, RankSet const& ranks,
+	zmq::socket_t& sender, zmq::socket_t &listener)
 {
 	// Send pings to confirm all `ranks` are listening to `comm` and responding on `listener`.
 	//
@@ -769,7 +775,7 @@ bool zmqnet::detail::Frontend::confirmPing(Communicator const& comm, RankSet con
 	for (tries_left = 5; tries_left > 0; tries_left--, timeout *= 2) {
 		log("confirming ping on communicator %d. (%d tries left, %d ms timeout)\n",
 			comm.id, tries_left, timeout);
-		auto ping_result = sendPing(comm, listener, timeout, ranks);
+		auto ping_result = sendPing(comm, sender, listener, timeout, ranks);
 		if (ping_result == ranks) break;
 
 		if (debug_enabled()) {
@@ -791,7 +797,7 @@ bool zmqnet::detail::Frontend::confirmPing(Communicator const& comm, RankSet con
 	return true;
 }
 
-void zmqnet::detail::Frontend::sendExit()
+void zmqnet::detail::Frontend::sendExit(zmq::socket_t& sender)
 {
 	// Create exit command
 	auto builder = capnp::MallocMessageBuilder{};
@@ -799,7 +805,7 @@ void zmqnet::detail::Frontend::sendExit()
 	command.setExit();
 
 	// Send exit command
-	net::send_MessageBuilder(m_downstream->control_socket, net::communicator_ids::AllNodes, builder);
+	net::send_MessageBuilder(sender, net::communicator_ids::AllNodes, builder);
 }
 
 zmqnet::RankSet zmqnet::detail::Frontend::toRankSet(zmqnet::NodeSet const& nodes)
@@ -839,7 +845,7 @@ zmqnet::Communicator zmqnet::SyncFrontend::registerCommunicator(const RankSet &r
 	auto const start_ms = get_milliseconds();
 
 	// Send communicator create command
-	auto const communicator = createCommunicator(ranks);
+	auto const communicator = Frontend::createCommunicator(m_downstream->control_socket, ranks);
 
 	// Wait for acknowledgement
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
@@ -884,7 +890,7 @@ zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream,
 	auto const start_ms = get_milliseconds();
 
 	// Send user command
-	sendCommand(stream, command_buffer, command_len);
+	Frontend::sendCommand(m_downstream->control_socket, stream, command_buffer, command_len);
 
 	// Receive aggregated result
 	log("receiving results...\n");
@@ -905,12 +911,31 @@ zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream,
 
 zmqnet::RankSet zmqnet::SyncFrontend::sendPing(Communicator const& comm, int timeoutMs, RankSet const& stopAfter)
 {
-	return Frontend::sendPing(comm, m_downstream->data_socket, timeoutMs, stopAfter);
+	return Frontend::sendPing(comm, m_downstream->control_socket, m_downstream->data_socket, timeoutMs, stopAfter);
 }
 
 bool zmqnet::SyncFrontend::confirmPing(Communicator const& comm, RankSet const& ranks)
 {
-	return Frontend::confirmPing(comm, ranks, m_downstream->data_socket);
+	return Frontend::confirmPing(comm, ranks, m_downstream->control_socket, m_downstream->data_socket);
+}
+
+zmqnet::Communicator zmqnet::SyncFrontend::createCommunicator(const RankSet& ranks) {
+	return Frontend::createCommunicator(m_downstream->control_socket, ranks);
+}
+
+zmqnet::Stream zmqnet::SyncFrontend::createStream(
+	Communicator const& communicator, Stream::Id const& streamId,
+	std::string const& filterLibraryName, std::string const& filterFunctionName,
+	zmqnet::StreamSync const& streamSync)
+{
+	return Frontend::createStream(
+		m_downstream->control_socket, communicator, streamId,
+		filterLibraryName, filterFunctionName, streamSync
+	);
+}
+
+void zmqnet::SyncFrontend::sendExit() {
+	Frontend::sendExit(m_downstream->control_socket);
 }
 
 void zmqnet::SyncFrontend::runExit()

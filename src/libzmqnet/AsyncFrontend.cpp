@@ -384,7 +384,7 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const
 	}
 
 	// Send user command
-	Frontend::sendCommand(stream, command_buffer, command_len);
+	Frontend::sendCommand(m_downstream->control_socket, stream, command_buffer, command_len);
 }
 
 void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, std::string const& command)
@@ -392,16 +392,40 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, std::strin
 	return sendCommand(stream, command.c_str(), command.length() + 1);
 }
 
+zmqnet::Communicator zmqnet::AsyncFrontend::createCommunicator(const RankSet& ranks) {
+	// forward to generic impl in zmqnet::Frontend
+	return Frontend::createCommunicator(m_downstream->control_socket, ranks);
+}
+
+zmqnet::Stream zmqnet::AsyncFrontend::createStream(
+	Communicator const& communicator, Stream::Id const& streamId,
+	std::string const& filterLibraryName, std::string const& filterFunctionName,
+	zmqnet::StreamSync const& streamSync)
+{
+	// forward to generic impl in zmqnet::Frontend
+	return Frontend::createStream(
+		m_downstream->control_socket, communicator, streamId,
+		filterLibraryName, filterFunctionName, streamSync
+	);
+}
+
+void zmqnet::AsyncFrontend::sendExit() {
+	// forward to generic impl in zmqnet::Frontend
+	Frontend::sendExit(m_downstream->control_socket);
+}
+
 zmqnet::RankSet zmqnet::AsyncFrontend::sendPing(Communicator const& comm, int timeoutMs, zmqnet::RankSet const& stopAfter)
 {
-	// response_distributor thread will forward ping responses to m_pingSocket
-	return Frontend::sendPing(comm, m_pingSocket, timeoutMs, stopAfter);
+	// forward to generic impl in zmqnet::Frontend
+	// response_distributor thread is hard coded to forward ping responses to m_pingSocket
+	return Frontend::sendPing(comm, m_downstream->control_socket, m_pingSocket, timeoutMs, stopAfter);
 }
 
 bool zmqnet::AsyncFrontend::confirmPing(Communicator const& comm, RankSet const& ranks)
 {
-	// response_distributor thread will forward ping responses to m_pingSocket
-	return Frontend::confirmPing(comm, ranks, m_pingSocket);
+	// forward to generic impl in zmqnet::Frontend
+	// response_distributor thread is hard coded to forward ping responses to m_pingSocket
+	return Frontend::confirmPing(comm, ranks, m_downstream->control_socket, m_pingSocket);
 }
 
 void zmqnet::AsyncFrontend::runExit()

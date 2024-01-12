@@ -226,22 +226,25 @@ protected: // derived class interface
 	~Frontend();
 
 	Communicator getAllNodesCommunicator() const;
-	Communicator createCommunicator(NodeSet const& nodes);
-	Communicator createCommunicator(const RankSet &ranks);
-	Stream createStream(Communicator const& communicator, Stream::Id const& streamId,
+
+	// Derived classes specialize these low-level network operations
+	Communicator createCommunicator(zmq::socket_t& sender, NodeSet const& nodes);
+	Communicator createCommunicator(zmq::socket_t& sender, const RankSet &ranks);
+	static Stream createStream(zmq::socket_t& sender,
+		Communicator const& communicator, Stream::Id const& streamId,
 		std::string const& filterLibraryName, std::string const& filterFunctionName,
 		zmqnet::StreamSync const& streamSync);
 
-	void sendCommand(Stream const& stream, char const* command_buffer, size_t command_len);
-	RankSet sendPing(Communicator const& comm, zmq::socket_t & listener, int timeoutMs, RankSet const& stopAfter);
-	bool confirmPing(Communicator const& comm, RankSet const& ranks, zmq::socket_t & listener);
+	static void sendCommand(
+		zmq::socket_t& sender, Stream const& stream, char const* command_buffer, size_t command_len);
+	static void sendExit(zmq::socket_t& sender);
+	static RankSet sendPing(Communicator const& comm, zmq::socket_t& sender, zmq::socket_t& listener, int timeoutMs, RankSet const& stopAfter);
+	static bool confirmPing(Communicator const& comm, RankSet const& ranks, zmq::socket_t& sender, zmq::socket_t& listener);
 
 	template<Event e, typename FnT>
 	void registerCallback(FnT&& CBFn) { m_uCallbacks.registerCallback<e>(std::forward<FnT>(CBFn)); }
 	template<Event e>
 	void removeCallback() { m_uCallbacks.removeCallback<e>(); }
-
-	void sendExit();
 
 	RankSet toRankSet(NodeSet const& nodes);
 };
@@ -422,6 +425,15 @@ public: // interface
 	// Notify all Backend instances that the network should exit. Returns once all Backend instances
 	// have exited.
 	void runExit();
+
+private:
+
+	// specializations of generic methods in detail::Frontend
+	Communicator createCommunicator(const RankSet& ranks);
+	Stream createStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		zmqnet::StreamSync const& streamSync);
+	void sendExit();
 };
 
 // Asynchronous Frontend register callbacks for each handled Stream that will receive
@@ -445,6 +457,13 @@ private: // members
 	constexpr static auto m_pingEndpoint = "inproc://ping";
 	zmq::socket_t m_pingSocket;
 	std::unique_ptr<HeartbeatManager> m_heartbeatManager;
+
+	// specializations of generic methods in detail::Frontend
+	Communicator createCommunicator(const RankSet& ranks);
+	Stream createStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		zmqnet::StreamSync const& streamSync);
+	void sendExit();
 
 public: // interface
 
