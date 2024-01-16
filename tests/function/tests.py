@@ -137,6 +137,12 @@ class ZmqnetTest(Test):
     def test_CallbackLaunchTestFcfsAsync(self):
         google_test(self, "CallbackLaunchTestFcfsAsync")
 
+    def test_HeartbeatTest(self):
+        google_test(self, "HeartbeatTest")
+
+    def test_UnexpectedExitTest(self):
+        google_test(self, "UnexpectedExitTest")
+
 class CleanupTest(Test):
     def test_cleanup(self):
         # XXX: Compute nodes on slice have extremely small /tmp directories.

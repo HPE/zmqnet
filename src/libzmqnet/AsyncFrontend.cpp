@@ -74,11 +74,25 @@ static void callback_processor(zmq::context_t& ctx, zmqnet::Stream const& stream
 // Stream tasks are created by main thread.
 // Completed when received an exit message.
 // Returns control of input socket upon completion.
-static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket, const char* ping_endpoint, const lrle_bitset& allDescendants, net::shared_semaphore& blocking_registration, zmqnet::UserCallbacks& uCbs)
+static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& input_socket, std::vector<std::string>&& pingEndpoints, const lrle_bitset& allDescendants, net::shared_semaphore& blocking_registration, zmqnet::UserCallbacks& uCbs)
 {
 	auto taskSockets = std::unordered_map<zmqnet::Stream::Id, zmq::socket_t>{};
-	auto pingSocket = zmq::socket_t{ctx, zmq::socket_type::push};
-	pingSocket.connect(ping_endpoint);
+
+	// set up outgoing ping sockets. this thread expects pings to come in with an endpoint
+	// in the ping payload.
+	struct PingListener {
+		std::string endpoint;
+		zmq::socket_t socket;
+	};
+	auto pingSockets = std::vector<PingListener>{};
+
+	for (const auto& endpoint : pingEndpoints) {
+		pingSockets.emplace_back(PingListener{
+			.endpoint = endpoint,
+			.socket = zmq::socket_t{ctx, zmq::socket_type::push}
+		});
+		pingSockets.back().socket.bind(endpoint);
+	}
 
 	auto exitedDescendants = lrle_bitset{};
 
@@ -120,8 +134,22 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 
 		// If ping, forward to ping endpoint
 		if (response.isPing()) {
-			log("distributor: got ping response\n");
-			net::send_MessageReader(pingSocket, std::move(reader));
+			log("distributor: got ping response \"%s\"\n", response.getPing().getPayload().cStr());
+
+			const auto payload = response.getPing().getPayload();
+
+			{	// find socket that matches payload and forward it
+				auto it = std::find_if(pingSockets.begin(), pingSockets.end(), [&](const auto& listener) {
+					return std::string_view{listener.endpoint} == std::string_view{payload.begin(), payload.size()};
+				});
+
+				if (it != pingSockets.end()) {
+					net::send_MessageReader(it->socket, std::move(reader));
+				} else {
+					log("WARNING: dropped ping with payload \"%s\" - no matching recipients\n",
+						response.getPing().getPayload().cStr());
+				}
+			}
 			continue;
 		}
 
@@ -183,7 +211,9 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 class zmqnet::AsyncFrontend::HeartbeatManager
 {
 
-	void heartbeatThread(zmqnet::AsyncFrontend& frontend, zmqnet::Communicator communicator, int interval_ms)
+	void heartbeatThread(zmq::context_t& ctx,
+	                     std::string controlEndpoint, std::string pingEndpoint,
+	                     zmqnet::Communicator communicator, int interval_ms)
 	{
 		// Check interval timeout
 		if (interval_ms <= 0) {
@@ -192,6 +222,12 @@ class zmqnet::AsyncFrontend::HeartbeatManager
 		}
 
 		m_cancel.store(false, std::memory_order_relaxed);
+
+		auto controlSocket = zmq::socket_t{ctx, zmq::socket_type::push};
+		controlSocket.connect(controlEndpoint);
+
+		auto pingSocket = zmq::socket_t{ctx, zmq::socket_type::pull};
+		pingSocket.connect(pingEndpoint);
 
 		try {
 
@@ -202,7 +238,7 @@ class zmqnet::AsyncFrontend::HeartbeatManager
 					+ std::chrono::milliseconds{interval_ms};
 
 				// Send ping command on communicator and update state
-				auto any_response = !frontend.sendPing(communicator, interval_ms, {}).empty();
+				auto any_response = !Frontend::sendPing(communicator, controlSocket, pingSocket, pingEndpoint, interval_ms, {}).empty();
 				m_live.store(any_response, std::memory_order_relaxed);
 
 				// Wait for the rest of the check interval
@@ -225,10 +261,12 @@ class zmqnet::AsyncFrontend::HeartbeatManager
 
 	public: // interface
 
-	HeartbeatManager(zmqnet::AsyncFrontend& frontend, zmqnet::Communicator communicator, int interval_ms)
+	HeartbeatManager(zmq::context_t& ctx, std::string controlEndpoint, std::string pingEndpoint, zmqnet::Communicator communicator, int interval_ms)
 		: m_live{true}
 		, m_cancel{true}
-		, m_heartbeatThread{&HeartbeatManager::heartbeatThread, this, std::ref(frontend), communicator, interval_ms}
+		, m_heartbeatThread{&HeartbeatManager::heartbeatThread, this, std::ref(ctx),
+		                    std::move(controlEndpoint), std::move(pingEndpoint),
+		                    communicator, interval_ms}
 	{
 		// Check timeout interval
 		if (interval_ms <= 0) {
@@ -263,24 +301,58 @@ zmqnet::AsyncFrontend::AsyncFrontend(int const app_id, long int const session_id
 	, m_blocking_registration{std::make_unique<net::shared_semaphore>(false)}
 	, m_responseDistributor{}
 	, m_pingSocket(m_ctx, zmq::socket_type::pull)
+	, m_controlSocket(m_ctx, zmq::socket_type::push)
 	, m_heartbeatManager{nullptr}
 {
 	// Create socket for distributor task to forward pings to
-	m_pingSocket.bind(m_pingEndpoint);
+	m_pingSocket.connect(m_pingEndpoint);
 
 	// Callback distributor thread shouldn't handle any signals. Signal mask will be
 	// inherited when thread is launched.
 	auto signal_blocker = ThreadSignalBlocker();
 
+	// Launch command distributor task. To send commands downstream, send commands to
+	// m_commmandEndpoint and they will be forwarded by this thread. (this makes sending
+	// commands thread safe)
+	m_commandDistributor = std::async(std::launch::async,
+		[](zmq::context_t& ctx, const char* input_endpoint, zmq::socket_t&& output_socket) {
+			auto input_socket = zmq::socket_t{ctx, zmq::socket_type::pull};
+			input_socket.bind(input_endpoint);
+
+			// blocks until ctx is closed, at which point ETERM will be thrown
+			try {
+				zmq::proxy(input_socket, output_socket);
+			} catch (zmq::error_t& e) {
+				if (e.num() != ETERM) throw;
+				log("command distributor: got ETERM, exiting.\n");
+			}
+			log("command distributor: returning!\n");
+			return std::move(output_socket);
+		},
+		std::ref(m_ctx), m_commandDistributorEndpoint, std::move(m_downstream->control_socket)
+	);
+
+	// Connect command socket
+	m_controlSocket.connect(m_commandDistributorEndpoint);
+
 	// Launch callback distributor task
 	m_responseDistributor = std::async(std::launch::async, workers::response_distributor,
-		std::ref(m_ctx), std::move(m_downstream->data_socket), m_pingEndpoint,
+		std::ref(m_ctx), std::move(m_downstream->data_socket), std::vector<std::string>{m_pingEndpoint, m_heartbeatPingEndpoint},
 		std::ref(*m_allDescendants), std::ref(*m_blocking_registration), std::ref(m_uCallbacks));
 }
 
 zmqnet::AsyncFrontend::~AsyncFrontend()
 {
-	// Generate destructor for forward-declared net::shared_semaphore
+	// despite calling shutdown in runExit, we also call it here in case the AsyncFrontend
+	// is destructed unexpectedly (e.g. after an uncaught exception throw).
+	//
+	// this is already called in m_ctx's destructor, but since it's declared in the parent
+	// Frontend class, it's one of the last destructors to run and AsyncFrontend's destructor
+	// tries to collect the worker threads first, which run forever unless told to stop.
+	//
+	// the shutdown will cause worker threads to die and the destructor can proceed with
+	// thread cleanup and then properly destruct m_ctx in the parent destructor.
+	m_ctx.shutdown();
 }
 
 zmqnet::Communicator zmqnet::AsyncFrontend::getAllNodesCommunicator() const
@@ -384,7 +456,7 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const
 	}
 
 	// Send user command
-	Frontend::sendCommand(m_downstream->control_socket, stream, command_buffer, command_len);
+	Frontend::sendCommand(m_controlSocket, stream, command_buffer, command_len);
 }
 
 void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, std::string const& command)
@@ -394,7 +466,7 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, std::strin
 
 zmqnet::Communicator zmqnet::AsyncFrontend::createCommunicator(const RankSet& ranks) {
 	// forward to generic impl in zmqnet::Frontend
-	return Frontend::createCommunicator(m_downstream->control_socket, ranks);
+	return Frontend::createCommunicator(m_controlSocket, ranks);
 }
 
 zmqnet::Stream zmqnet::AsyncFrontend::createStream(
@@ -404,28 +476,28 @@ zmqnet::Stream zmqnet::AsyncFrontend::createStream(
 {
 	// forward to generic impl in zmqnet::Frontend
 	return Frontend::createStream(
-		m_downstream->control_socket, communicator, streamId,
+		m_controlSocket, communicator, streamId,
 		filterLibraryName, filterFunctionName, streamSync
 	);
 }
 
 void zmqnet::AsyncFrontend::sendExit() {
 	// forward to generic impl in zmqnet::Frontend
-	Frontend::sendExit(m_downstream->control_socket);
+	Frontend::sendExit(m_controlSocket);
 }
 
 zmqnet::RankSet zmqnet::AsyncFrontend::sendPing(Communicator const& comm, int timeoutMs, zmqnet::RankSet const& stopAfter)
 {
 	// forward to generic impl in zmqnet::Frontend
 	// response_distributor thread is hard coded to forward ping responses to m_pingSocket
-	return Frontend::sendPing(comm, m_downstream->control_socket, m_pingSocket, timeoutMs, stopAfter);
+	return Frontend::sendPing(comm, m_controlSocket, m_pingSocket, m_pingEndpoint, timeoutMs, stopAfter);
 }
 
 bool zmqnet::AsyncFrontend::confirmPing(Communicator const& comm, RankSet const& ranks)
 {
 	// forward to generic impl in zmqnet::Frontend
 	// response_distributor thread is hard coded to forward ping responses to m_pingSocket
-	return Frontend::confirmPing(comm, ranks, m_downstream->control_socket, m_pingSocket);
+	return Frontend::confirmPing(comm, ranks, m_controlSocket, m_pingSocket, m_pingEndpoint);
 }
 
 void zmqnet::AsyncFrontend::runExit()
@@ -441,11 +513,15 @@ void zmqnet::AsyncFrontend::runExit()
 	// Reacquire downstream data socket from exiting callback processor
 	m_downstream->data_socket = m_responseDistributor.get();
 
-	// Shut down all sockets
+	// Cancel heartbeat - do this before the command distributor thread
+	// because the heartbeat uses the command distributor thread
+	m_heartbeatManager.reset();
+
+	// Shut down all sockets - causes command distributor thread to exit
 	m_ctx.shutdown();
 
-	// Cancel heartbeat
-	m_heartbeatManager.reset();
+	// Reacquire downstream command socket from exiting command distributor
+	m_downstream->control_socket = m_commandDistributor.get();
 
 	log("sync exit completed\n");
 }
@@ -486,6 +562,11 @@ void zmqnet::AsyncFrontend::forceDisconnect()
 		}
 	}
 
+	// Reacquire downstream control socket from exiting command distributor.
+	// Unlike the others socket threads, the ETERM exception is caught in
+	// the command distributor thread.
+	m_downstream->control_socket = m_commandDistributor.get();
+
 	log("forced exit completed\n");
 }
 
@@ -493,7 +574,9 @@ void zmqnet::AsyncFrontend::startHeartbeat(int interval_ms)
 {
 	if (!m_heartbeatManager) {
 		auto communicator = getAllNodesCommunicator();
-		m_heartbeatManager = std::make_unique<HeartbeatManager>(*this, communicator, interval_ms);
+		m_heartbeatManager = std::make_unique<HeartbeatManager>(
+			m_ctx, m_commandDistributorEndpoint, m_heartbeatPingEndpoint,
+			communicator, interval_ms);
 	}
 }
 

@@ -13,6 +13,7 @@
 #include <set>
 #include <algorithm>
 #include <iostream>
+#include <cmath>
 
 #include "gtest/gtest.h"
 
@@ -872,6 +873,57 @@ TEST_F(ZmqnetFunctionTest, CallbackLaunchTestFcfsAsync) {
     EXPECT_EQ(count, 2);
 
     net.runExit();
+}
+
+// Test the heartbeat feature.
+// Run communicator creation in parallel which used to cause memory corruption. (PE-51694)
+TEST_F(ZmqnetFunctionTest, HeartbeatTest) {
+	const auto num_ranks = 4; // must be a power of 2
+
+	// create all possible communicators with num_ranks ranks.
+	// rank_sets[i] == RankSet of i in binary.
+	// e.g. rank_sets[11] == 0b1011 == ranks {0, 1, 3}.
+	// rank_sets[0] and rank_sets[2^(num_ranks) - 1] are included for keeping the mapping
+	// simple but are not actually used in the test.
+	auto rank_sets = std::vector<zmqnet::RankSet>{};
+	for (auto i = size_t{0}; i < ::pow(2, num_ranks); i++) {
+		auto set = zmqnet::RankSet{};
+		for (auto bit = size_t{0}; bit < num_ranks; bit++) {
+			if (((1 << bit) & i) != 0) set.insert(bit);
+		}
+		rank_sets.emplace_back(std::move(set));
+	}
+
+	auto network = launchAsyncNetwork(num_ranks, 2,
+		zmqnet::Topology {.launch = zmqnet::Topology::Packed, .fanout = 2});
+
+	// start heartbeat while we register communicators.
+	// make the interval fairly small to get a better stress test.
+	network.startHeartbeat(100); // milliseconds
+
+	// register all of our communicators, skipping the empty communicator and the full
+	// communicator. the full communicator is already created as the broadcast communicator.
+	for (auto i = size_t{1}; i < rank_sets.size() - 1; i++) {
+		auto this_comm = network.registerCommunicator(rank_sets[i]);
+		ASSERT_EQ(network.sendPing(this_comm, 1000, {}), rank_sets[i]);
+	}
+
+	ASSERT_EQ(network.heartbeatRunning(), true);
+	ASSERT_EQ(network.heartbeatLive(), true);
+
+	network.runExit();
+
+	ASSERT_EQ(network.heartbeatRunning(), false);
+	ASSERT_EQ(network.heartbeatLive(), false);
+}
+
+// Test that an AsyncFrontend doesn't block if it's unexpectedly destructed.
+// It doesn't have to be a graceful/complete exit, it just can't block.
+TEST_F(ZmqnetFunctionTest, UnexpectedExitTest) {
+	auto network = launchAsyncNetwork(1, 1,
+		zmqnet::Topology {.launch = zmqnet::Topology::Packed, .fanout = 2});
+
+	// intentionally exit function without calling runExit
 }
 
 int main(int argc, char **argv)

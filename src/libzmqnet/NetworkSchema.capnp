@@ -25,7 +25,7 @@ struct NetworkCommand {
 
     startLeaves @1 :Void;
 
-    ping @12 :Void;
+    ping @12 :Text;
 
     communicator :group {
       communicatorId @2 :Int32;
@@ -69,6 +69,7 @@ struct NetworkResponse {
 
     ping :group {
       nodeId @9 :Int32;
+      payload @11 :Text;
     }
 
     communicator :group {

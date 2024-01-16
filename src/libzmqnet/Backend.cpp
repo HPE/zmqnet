@@ -88,13 +88,14 @@ void zmqnet::detail::Backend::notifyReady()
 			auto command = reader.getRoot<NetworkCommand>();
 
 			if (command.isPing()) {
-				log("backend %d: got startup ping\n", m_node_id);
+				log("backend %d: got startup ping \"%s\"\n", m_node_id, command.getPing().cStr());
 
 				auto builder = capnp::MallocMessageBuilder{};
 				auto response = builder.initRoot<NetworkResponse>();
 				auto pong = response.initPing();
 
 				pong.setNodeId(m_node_id);
+				pong.setPayload(command.getPing());
 				net::send_MessageBuilder(m_upstream->data_socket, reader.getTag(), builder);
 			} else if (command.isCommunicator()) {
 				auto const communicatorId = command.getCommunicator().getCommunicatorId();
@@ -212,12 +213,13 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 
 		// If ping, respond with local node bitset
 		} else if (command.isPing()) {
-			log("backend %d: got ping on communicator %d.\n", m_node_id, reader.getTag());
+			log("backend %d: got ping on communicator %d \"%s\".\n", m_node_id, reader.getTag(), command.getPing().cStr());
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
 			auto pong = response.initPing();
 
 			pong.setNodeId(m_node_id);
+			pong.setPayload(command.getPing());
 
 			net::send_MessageBuilder(m_upstream->data_socket, reader.getTag(), builder);
 
@@ -453,12 +455,13 @@ static zmq::socket_t command_distributor(zmq::context_t& ctx, zmq::socket_t&& in
 
 		// If ping, respond with local node bitset
 		} else if (command.isPing()) {
-			log("backend %d: got ping on communicator %d.\n", node_id, reader.getTag());
+			log("backend %d: got ping on communicator %d. \"%s\"\n", node_id, reader.getTag(), command.getPing().cStr());
 			auto builder = capnp::MallocMessageBuilder{};
 			auto response = builder.initRoot<NetworkResponse>();
 			auto pong = response.initPing();
 
 			pong.setNodeId(node_id);
+			pong.setPayload(command.getPing());
 
 			net::send_MessageBuilder(result_socket, reader.getTag(), builder);
 

@@ -238,8 +238,8 @@ protected: // derived class interface
 	static void sendCommand(
 		zmq::socket_t& sender, Stream const& stream, char const* command_buffer, size_t command_len);
 	static void sendExit(zmq::socket_t& sender);
-	static RankSet sendPing(Communicator const& comm, zmq::socket_t& sender, zmq::socket_t& listener, int timeoutMs, RankSet const& stopAfter);
-	static bool confirmPing(Communicator const& comm, RankSet const& ranks, zmq::socket_t& sender, zmq::socket_t& listener);
+	static RankSet sendPing(Communicator const& comm, zmq::socket_t& sender, zmq::socket_t& listener, std::string payload, int timeoutMs, RankSet const& stopAfter);
+	static bool confirmPing(Communicator const& comm, RankSet const& ranks, zmq::socket_t& sender, zmq::socket_t& listener, std::string payload);
 
 	template<Event e, typename FnT>
 	void registerCallback(FnT&& CBFn) { m_uCallbacks.registerCallback<e>(std::forward<FnT>(CBFn)); }
@@ -454,9 +454,13 @@ private: // members
 	std::unordered_map<Stream::Id, std::future<void>> m_callbackProcessors;
 	std::unique_ptr<net::shared_semaphore> m_blocking_registration;
 	std::future<zmq::socket_t> m_responseDistributor;
-	constexpr static auto m_pingEndpoint = "inproc://ping";
+	constexpr static auto m_pingEndpoint = "inproc://ping-main";
+	constexpr static auto m_heartbeatPingEndpoint = "inproc://ping-heartbeat";
 	zmq::socket_t m_pingSocket;
+	constexpr static auto m_commandDistributorEndpoint = "inproc://command";
+	zmq::socket_t m_controlSocket;
 	std::unique_ptr<HeartbeatManager> m_heartbeatManager;
+	std::future<zmq::socket_t> m_commandDistributor;
 
 	// specializations of generic methods in detail::Frontend
 	Communicator createCommunicator(const RankSet& ranks);
