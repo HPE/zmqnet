@@ -138,7 +138,9 @@ static zmq::socket_t response_distributor(zmq::context_t& ctx, zmq::socket_t&& i
 
 			const auto payload = response.getPing().getPayload();
 
-			{	// find socket that matches payload and forward it
+			{	// find socket that matches payload and forward it. in practice we expect
+				// `pingSockets` to always only have two entries so we just linear search it. this
+				// should be made into a [hash]map if that number gets much bigger in the future.
 				auto it = std::find_if(pingSockets.begin(), pingSockets.end(), [&](const auto& listener) {
 					return std::string_view{listener.endpoint} == std::string_view{payload.begin(), payload.size()};
 				});
@@ -212,7 +214,7 @@ class zmqnet::AsyncFrontend::HeartbeatManager
 {
 
 	void heartbeatThread(zmq::context_t& ctx,
-	                     std::string controlEndpoint, std::string pingEndpoint,
+	                     std::string controlEndpoint, std::string heartbeatPingEndpoint,
 	                     zmqnet::Communicator communicator, int interval_ms)
 	{
 		// Check interval timeout
@@ -227,7 +229,7 @@ class zmqnet::AsyncFrontend::HeartbeatManager
 		controlSocket.connect(controlEndpoint);
 
 		auto pingSocket = zmq::socket_t{ctx, zmq::socket_type::pull};
-		pingSocket.connect(pingEndpoint);
+		pingSocket.connect(heartbeatPingEndpoint);
 
 		try {
 
@@ -238,7 +240,7 @@ class zmqnet::AsyncFrontend::HeartbeatManager
 					+ std::chrono::milliseconds{interval_ms};
 
 				// Send ping command on communicator and update state
-				auto any_response = !Frontend::sendPing(communicator, controlSocket, pingSocket, pingEndpoint, interval_ms, {}).empty();
+				auto any_response = !Frontend::sendPing(communicator, controlSocket, pingSocket, heartbeatPingEndpoint, interval_ms, {}).empty();
 				m_live.store(any_response, std::memory_order_relaxed);
 
 				// Wait for the rest of the check interval
@@ -261,11 +263,11 @@ class zmqnet::AsyncFrontend::HeartbeatManager
 
 	public: // interface
 
-	HeartbeatManager(zmq::context_t& ctx, std::string controlEndpoint, std::string pingEndpoint, zmqnet::Communicator communicator, int interval_ms)
+	HeartbeatManager(zmq::context_t& ctx, std::string controlEndpoint, std::string heartbeatPingEndpoint, zmqnet::Communicator communicator, int interval_ms)
 		: m_live{true}
 		, m_cancel{true}
 		, m_heartbeatThread{&HeartbeatManager::heartbeatThread, this, std::ref(ctx),
-		                    std::move(controlEndpoint), std::move(pingEndpoint),
+		                    std::move(controlEndpoint), std::move(heartbeatPingEndpoint),
 		                    communicator, interval_ms}
 	{
 		// Check timeout interval
