@@ -1,7 +1,7 @@
 /******************************************************************************\
  * Jenkinsfile.rhel87 - DST Jenkins pipeline for RHEL 8.7
  *
- * Copyright 2007-2023 Hewlett Packard Enterprise Development LP
+ * Copyright 2007-2024 Hewlett Packard Enterprise Development LP
  *
  * Unpublished Proprietary Information.
  * This unpublished work is protected to trade secret, copyright and other laws.
@@ -17,4 +17,5 @@ rhel8_7PE {
     timeout = 240
     agent = 'gcp-x86_64'
     product = "pe-base"
+    enableSonar = false
 }

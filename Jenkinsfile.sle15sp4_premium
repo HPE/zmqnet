@@ -1,7 +1,7 @@
 /******************************************************************************\
  * Jenkinsfile.sle15sp4_premium - DST Jenkins pipeline for Sles 15 SP4 Shasta
  *
- * Copyright 2022-2023 Hewlett Packard Enterprise Development LP.
+ * Copyright 2022-2024 Hewlett Packard Enterprise Development LP.
  *
  * Unpublished Proprietary Information.
  * This unpublished work is protected to trade secret, copyright and other laws.
@@ -17,4 +17,5 @@ sle15sp4PE {
     timeout = 240
     agent = 'gcp-x86_64'
     product = "pe-base"
+    enableSonar = false
 }
