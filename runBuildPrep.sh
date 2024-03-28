@@ -2,7 +2,7 @@
 #
 # runBuildPrep.sh - Preps the build environment
 #
-# Copyright 2019-2023 Hewlett Packard Enterprise Development LP.
+# Copyright 2019-2024 Hewlett Packard Enterprise Development LP.
 #
 # Unpublished Proprietary Information.
 # This unpublished work is protected to trade secret, copyright and other laws.
@@ -17,14 +17,7 @@ echo "############################################"
 echo "#          Install dependencies            #"
 echo "############################################"
 
-install_common_pe
-check_exit_status
-
-install_cti
-check_exit_status
-
 target_pm=$(get_pm)
-
 if [[ "$target_pm" == "$cdst_pm_zypper" ]]; then
     zypper --non-interactive install \
         environment-modules \
@@ -57,11 +50,17 @@ elif [[ "$target_pm" == "$cdst_pm_yum" ]]; then
     check_exit_status
 fi
 
-echo "############################################"
-echo "#          Done with build prep            #"
-echo "############################################"
+install_common_pe
+check_exit_status
+
+install_cti
+check_exit_status
 
 capture_jenkins_build
 check_exit_status
+
+echo "############################################"
+echo "#          Done with build prep            #"
+echo "############################################"
 
 exit_with_status

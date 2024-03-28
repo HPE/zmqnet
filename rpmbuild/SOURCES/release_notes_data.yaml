@@ -1,5 +1,5 @@
 ---
-# Copyright 2023 Hewlett Packard Enterprise Development LP
+# Copyright 2023-2024 Hewlett Packard Enterprise Development LP
 
 # FORMATTING CONVENTION FOR THIS YAML
 ## <VARIABLE> - Leave as is. It is automatically updated via spec file.
@@ -39,8 +39,9 @@ product_dependencies:
  - cray-cti <cti_version_range> installed
  - cdst-support <cdst_version_range> installed
 os_dependencies:
- - HPE/Cray Shasta systems with SLES 15 SP3 and SP4
- - HPE Apollo systems with Slurm and RH 8.6
+ - HPE CSM systems with SLES 15 SP4
+ - HPE HPCM systems with SLES 15 SP5 and RHEL 8.8
+ - HPE Apollo systems with RHEL 8.8
 documentation: |
 installation_instructions: |
   - rpm -ivh <NAME>-<VERSION>-<RELEASE>.<ARCH>.rpm

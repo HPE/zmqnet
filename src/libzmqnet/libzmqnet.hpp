@@ -867,7 +867,7 @@ static inline zmq::socket_t distribute_messages(zmq::context_t& ctx, zmq::socket
 
 			// Relay exit message to task sockets
 			for (auto&& [streamId, task_socket] : taskSockets) {
-				net::send_MessageReader(task_socket, reader);
+				net::send_MessageReader_copy(task_socket, reader);
 			}
 
 			// Return control of the upstream control socket back to main thread
