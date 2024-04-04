@@ -32,7 +32,8 @@ if [[ "$target_pm" == "$cdst_pm_zypper" ]]; then
         libuuid-devel \
         openssl-devel \
         python3-pip \
-        rpm-build
+        rpm-build \
+        libsodium-devel
     check_exit_status
 elif [[ "$target_pm" == "$cdst_pm_yum" ]]; then
     yum --assumeyes install \
@@ -46,7 +47,8 @@ elif [[ "$target_pm" == "$cdst_pm_yum" ]]; then
         openssl-devel \
         python3-pip \
         rpm-build \
-        wget
+        wget \
+        libsodium-devel
     check_exit_status
 fi
 

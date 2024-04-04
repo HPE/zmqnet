@@ -55,7 +55,7 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-CFLAGS="-g -O2 -Wall" ./configure --prefix=$install_dir/support
+CFLAGS="-g -O2 -Wall" ./configure --prefix=$install_dir/support --with-libsodium=yes
 check_exit_status
 
 make $cdst_j_flags

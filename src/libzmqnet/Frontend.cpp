@@ -60,10 +60,9 @@ static auto fcfsTreeImpl(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, 
 	// Create auth file for commnode
 	auto authFile = temp_file();
 
-#if HAVE_ENCRYPTION
 	// Fill auth file if CURVE encryption enabled
 	if (auth == zmqnet::Auth::Curve) {
-
+#if HAVE_ENCRYPTION
 		// Generate and set server keys for topology dealer socket
 		auto const dealerPub = net::set_curve_server(dealer_socket);
 
@@ -76,8 +75,11 @@ static auto fcfsTreeImpl(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, 
 			throw std::runtime_error("failed to add authfile to manifest: " +
 				std::string{cti_error_str()});
 		}
-	}
+#else
+		throw std::runtime_error("ZMQNet library was not built with encryption support.\n"
+			"If running without encryption is acceptable, set LIBZMQNET_CURVE=0");
 #endif
+	}
 
 	// Bind topology dealer socket
 	net::retry_bind(dealer_socket, net::generate_tcp_endpoint());
@@ -456,24 +458,14 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	};
 
 	// Select network encryption / logging type
-#if HAVE_ENCRYPTION
 	auto auth = zmqnet::Auth::Curve;
-#else
-	auto auth = zmqnet::Auth::None;
-#endif
 
 	if (auto const libzmqnet_curve = ::getenv(env::CURVE)) {
 		try {
 
-			// Check build-time encryption build setting
+			// Check run-time encryption build setting
 			if (std::stoi(libzmqnet_curve)) {
-#if HAVE_ENCRYPTION
 				auth = zmqnet::Auth::Curve;
-#else
-				fprintf(stderr, "warning: encryption was enabled using %s, "
-					"but it was disabled during the library build. Encryption will remain "
-					"disabled for this run.\n", env::CURVE);
-#endif
 
 			// Encryption disabled by user
 			} else {
@@ -491,8 +483,22 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 		auth = zmqnet::Auth::Log;
 	}
 
+	// Ensure encryption was enabled if supported
+	#ifndef HAVE_ENCRYPTION
+	if (auth == zmqnet::Auth::Curve) {
+		throw std::runtime_error("ZMQNet library was not built with encryption support.\n"
+			"If running without encryption is acceptable, set LIBZMQNET_CURVE=0");
+	}
+	#endif
+
 	// Instantiate downstream network link
-	m_downstream = std::make_unique<net::TcpDownstreamLink>(m_ctx, auth);
+	// If encryption is enabled and libsodium cannot be loaded, this will fail
+	try {
+		m_downstream = std::make_unique<net::TcpDownstreamLink>(m_ctx, auth);
+	} catch (std::exception const&) {
+		throw std::runtime_error("ZMQNet library could not load encryption support.\n"
+			"If running without encryption is acceptable, set LIBZMQNET_CURVE=0");
+	}
 
 	auto const startup_ms = get_milliseconds();
 	log("launch started: %5ldms\n", startup_ms - start_ms);
