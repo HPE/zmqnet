@@ -89,6 +89,7 @@
 %global privlibs %{privlibs}|libtbbmalloc*
 %global privlibs %{privlibs}|libtbb.*
 %global privlibs %{privlibs}|libstdc++.*
+%global privlibs %{privlibs}|libzmqnet_libsodium.*
 %global __requires_exclude ^(%{privlibs})\\.so*
 
 # Dist tags for SuSE need to be manually set
@@ -204,6 +205,7 @@ Test files for Cray zmqnet
 %{__cp} -a %{external_build_dir}/support/lib/libkj-tls.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
 %{__cp} -a %{external_build_dir}/support/lib/libLrleBitset.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
 %{__cp} -a %{external_build_dir}/support/lib/libzmq.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
+%{__cp} -a %{external_build_dir}/support/lib/libzmqnet_libsodium.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
 %{__cp} -a %{external_build_dir}/lib/libzmqnet.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 
 # Libraries static
@@ -219,11 +221,13 @@ Test files for Cray zmqnet
 %{__cp} -a %{external_build_dir}/support/lib/pkgconfig/kj-test.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
 %{__cp} -a %{external_build_dir}/support/lib/pkgconfig/libLrleBitset.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
 %{__cp} -a %{external_build_dir}/support/lib/pkgconfig/libzmq.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/libsodium.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
 %{__cp} -a %{external_build_dir}/lib/pkgconfig/libzmqnet.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
 
 # Headers
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
+%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/sodium
 
 # /include/
 %{__cp} -a %{external_build_dir}/include/zmqnet.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
@@ -233,6 +237,8 @@ Test files for Cray zmqnet
 %{__cp} -a %{external_build_dir}/support/include/kj/array.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
 %{__cp} -a %{external_build_dir}/support/include/kj/common.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
 %{__cp} -a %{external_build_dir}/support/include/kj/memory.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
+%{__cp} -a %{external_build_dir}/support/include/sodium.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
+%{__cp} -a %{external_build_dir}/support/include/sodium* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/sodium
 
 # For building tests:
 %{__cp} -a %{src_source_dir}/cti_argv.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include

@@ -10,5 +10,6 @@ major="1"
 minor="0"
 
 # libtool versioning
-current="0"
+current="1"
+revision="0"
 age="0"

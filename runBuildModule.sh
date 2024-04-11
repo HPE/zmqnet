@@ -41,6 +41,73 @@ mkdir -p $install_dir
 check_exit_status
 
 echo "############################################"
+echo "#               Building libsodium         #"
+echo "############################################"
+
+# ensure submodule is checked out
+if [ ! -f $top_level/external/libsodium/Makefile.am ]
+then
+    echo "libsodium submodule not checked out..."
+    exit 1
+fi
+
+pushd $top_level/external/libsodium
+check_exit_status
+
+autoreconf -ifv
+check_exit_status
+
+CFLAGS="-g -O2 -Wall" ./configure --prefix=$install_dir --enable-soname-versions=no
+check_exit_status
+
+make $cdst_j_flags
+check_exit_status
+
+make $cdst_j_flags install
+check_exit_status
+
+# Rename libsodium to libzmq-libsodium in libtool
+for la in $install_dir/lib/libsodium*.la; do
+	sed -i 's/libsodium.so/libzmqnet_libsodium.so/g' $la
+	sed -i 's/libsodium.a/libzmqnet_libsodium.a/g' $la
+done
+
+# Rename shared libraries libsodium to libzmq_libsodium
+type -P patchelf || pip install patchelf
+for lib in $install_dir/lib/libsodium*; do
+	if [ -L "$lib" ]; then
+		fixed_target=$(readlink $lib)
+		if [[ "$fixed_target" != "libzmqnet_*" ]]; then
+			fixed_target=$(dirname $fixed_target)/libzmqnet_$(basename $fixed_target)
+		fi
+		fixed_source=$(dirname $lib)/libzmqnet_$(basename $lib)
+		rm $lib $fixed_source
+		ln -s $fixed_target $fixed_source
+
+	else
+		fixed_lib=$(dirname $lib)/libzmqnet_$(basename $lib)
+
+		# Fix soname
+		soname=$(objdump -p $lib 2>/dev/null | grep SONAME | tr -s ' ' | cut -d ' ' -f 3)
+		if [ ! -z "$soname" ]; then
+			fixed_soname="libzmqnet_$soname"
+			patchelf --set-soname $fixed_soname $lib
+			check_exit_status
+		fi
+
+		mv $lib $fixed_lib
+	fi
+	check_exit_status
+done
+
+# Rename libsodium to libzmq-libsodium in pkgconfig
+sed -i 's/\-lsodium/\-lzmqnet_libsodium/' $install_dir/lib/pkgconfig/libsodium.pc
+check_exit_status
+
+popd
+check_exit_status
+
+echo "############################################"
 echo "#               Building libzmq            #"
 echo "############################################"
 
@@ -57,7 +124,8 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-CFLAGS="-g -O2 -Wall" ./configure --prefix=$install_dir --with-libsodium=yes
+PKG_CONFIG_PATH="$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH" CFLAGS="-g -O2 -Wall" \
+	./configure --prefix=$install_dir --with-libsodium=yes
 check_exit_status
 
 make $cdst_j_flags
@@ -168,7 +236,8 @@ echo $PWD
 autoreconf -ifv
 check_exit_status
 
-PKG_CONFIG_PATH=$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH ./configure --prefix=$install_dir --enable-install_directly_in_lib
+PKG_CONFIG_PATH=$install_dir/lib/pkgconfig:$PKG_CONFIG_PATH ./configure --prefix=$install_dir \
+	--enable-install_directly_in_lib --with-libsodium
 check_exit_status
 
 make $cdst_j_flags

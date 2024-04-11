@@ -17,11 +17,12 @@ lib_LTLIBRARIES = libzmqnet.la
 
 libzmqnet_la_SOURCES = Frontend.cpp AsyncFrontend.cpp Backend.cpp NetworkSchema.capnp.c++
 libzmqnet_la_CXXFLAGS = -fPIC -fno-rtti $(AM_CXXFLAGS) $(LIBZMQ_CFLAGS) $(CAPNP_CFLAGS) $(LRLE_BITSET_CFLAGS) $(COMMON_TOOLS_FE_CFLAGS) $(COMMON_TOOLS_BE_CFLAGS)
+libzmqnet_la_LDFLAGS = $(AM_LDFLAGS)
 if INSTALL_DIRECTLY_IN_LIB
-libzmqnet_la_LDFLAGS = $(AM_LDFLAGS) $(LIBZMQ_LIBS) $(CAPNP_LIBS) $(LRLE_BITSET_LIBS) $(COMMON_TOOLS_FE_LIBS) $(COMMON_TOOLS_BE_LIBS) -luuid
-else
-libzmqnet_la_LDFLAGS = $(AM_LDFLAGS) -Wl,-rpath='$$ORIGIN/../support/lib' $(LIBZMQ_LIBS) $(CAPNP_LIBS) $(LRLE_BITSET_LIBS) $(COMMON_TOOLS_FE_LIBS) $(COMMON_TOOLS_BE_LIBS) -luuid
+libzmqnet_la_LDFLAGS += -Wl,-rpath='$$ORIGIN/../support/lib'
 endif
+libzmqnet_la_LDFLAGS += $(LIBZMQ_LIBS) $(CAPNP_LIBS) $(LRLE_BITSET_LIBS) \
+	$(COMMON_TOOLS_FE_LIBS) $(COMMON_TOOLS_BE_LIBS) -luuid -version-info @ZMQNET_VERSION@
 
 clean-local:
 	rm -f NetworkSchema.capnp.*

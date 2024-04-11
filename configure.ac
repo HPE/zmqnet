@@ -5,6 +5,8 @@ AC_PREREQ([2.69])
 AC_INIT([zmqnet], m4_esyscmd([source $PWD/release_versioning; echo $major.$minor | tr -d '\n']))
 AC_COPYRIGHT([Copyright 2020 Hewlett Packard Enterprise Development LP.])
 
+AC_SUBST([ZMQNET_VERSION], m4_esyscmd([source $PWD/release_versioning; echo $current:$revision:$age | tr -d '\n']))
+
 AC_CONFIG_SRCDIR([src/Makefile.am])
 AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_HEADERS([config.h])

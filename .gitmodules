@@ -34,3 +34,7 @@
 	path = tests/support/googletest
 	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-google-googletest.git
 	branch = hpe
+[submodule "external/libsodium"]
+	path = external/libsodium
+	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-jedisct1-libsodium.git
+	branch = hpe
