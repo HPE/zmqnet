@@ -1,3 +1,2 @@
 # This is a test CODEOWNERS FILE
 *   @karen-glaser @zuzanna-kasper @josh-chandler @andrew-dangelo @john-leroy-vogt
-.github/workflows/ @hpcde/devops
