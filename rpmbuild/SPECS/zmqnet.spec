@@ -230,19 +230,22 @@ Test files for Cray zmqnet
 
 # Headers
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
+%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/capnp
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/sodium
 
 # /include/
 %{__cp} -a %{external_build_dir}/include/zmqnet.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
 %{__cp} -a %{external_build_dir}/include/zmqnet.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
+%{__cp} -a %{external_build_dir}/support/include/capnp/* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/capnp
+%{__cp} -a %{external_build_dir}/support/include/kj/* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
+%{__cp} -a %{external_build_dir}/support/include/lrle_bitset.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
+%{__cp} -a %{external_build_dir}/support/include/sodium/* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/sodium
+%{__cp} -a %{external_build_dir}/support/include/sodium.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
 %{__cp} -a %{external_build_dir}/support/include/zmq.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
 %{__cp} -a %{external_build_dir}/support/include/zmq.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
-%{__cp} -a %{external_build_dir}/support/include/kj/array.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
-%{__cp} -a %{external_build_dir}/support/include/kj/common.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
-%{__cp} -a %{external_build_dir}/support/include/kj/memory.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
-%{__cp} -a %{external_build_dir}/support/include/sodium.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
-%{__cp} -a %{external_build_dir}/support/include/sodium* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/sodium
+%{__cp} -a %{external_build_dir}/support/include/zmq_addon.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
+%{__cp} -a %{external_build_dir}/support/include/zmq_utils.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
 
 # For building tests:
 %{__cp} -a %{src_source_dir}/cti_argv.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
