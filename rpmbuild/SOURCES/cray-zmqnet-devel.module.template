@@ -21,6 +21,8 @@ prepend-path PE_PKGCONFIG_PRODUCTS PE_ZMQNET
 prepend-path PKG_CONFIG_PATH $ZMQNET_BASEDIR/lib/pkgconfig
 prepend-path PKG_CONFIG_PATH $ZMQNET_BASEDIR/support/lib/pkgconfig
 
+setenv ZMQNET_DEVEL_SUPPORT_DIR $ZMQNET_BASEDIR/support
+
 if { [ file exists ${ZMQNET_BASEDIR}/release_notes.md ] } {
       set REL_INFO [ exec cat ${ZMQNET_BASEDIR}/release_notes.md ]
    } else {

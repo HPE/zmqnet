@@ -182,6 +182,10 @@ Test files for Cray zmqnet
 %{__cp} -a ${RPM_BUILD_DIR}/%{copyright_name} ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/%{copyright_name}
 %{__cp} -a ${RPM_BUILD_DIR}/%{attributions_name} ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/%{attributions_name}
 
+# Support binaries
+%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/bin
+%{__cp} -a %{external_build_dir}/support/bin/capnp* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/bin
+
 # Libraries
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
@@ -530,6 +534,11 @@ fi
 %attr(644, root, root) %{prefix}/%{cray_product}/%{pkgversion}/%{release_notes_file}
 %attr(644, root, root) %{prefix}/%{cray_product}/%{pkgversion}/%{copyright_name}
 %attr(644, root, root) %{prefix}/%{cray_product}/%{pkgversion}/%{attributions_name}
+
+# Support binaries
+%defattr(755, root, root)
+%dir %{prefix}/%{cray_product}/%{pkgversion}/support/bin
+%{prefix}/%{cray_product}/%{pkgversion}/support/bin/capnp*
 
 # Libraries
 %dir %{prefix}/%{cray_product}/%{pkgversion}/lib

@@ -49,3 +49,5 @@ prepend_path  (    "PKG_CONFIG_PATH",          PE_DIR .. "/lib/pkgconfig"       
 prepend_path  (    "PKG_CONFIG_PATH",          PE_DIR .. "/support/lib/pkgconfig" )
 prepend_path  (    "PE_PKG_CONFIG_PATH",       PE_DIR .. "/lib/pkgconfig"         )
 prepend_path  (    "PE_PKG_CONFIG_PATH",       PE_DIR .. "/support/lib/pkgconfig" )
+
+setenv ( "ZMQNET_DEVEL_SUPPORT_DIR", PE_DIR .. "/support" )
