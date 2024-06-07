@@ -34,6 +34,7 @@ else
 fi
 echo "zmqnet version: \"$zmqnet_version\""
 install_dir="/opt/cray/pe/zmqnet/$zmqnet_version"
+support_dir="$install_dir/support"
 echo "Install dir: \"$install_dir\""
 mkdir -p $install_dir
 check_exit_status
@@ -55,7 +56,7 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-CFLAGS="-g -O2 -Wall" ./configure --prefix=$install_dir/support --enable-soname-versions=no
+CFLAGS="-g -O2 -Wall" ./configure --prefix=$support_dir --enable-soname-versions=no
 check_exit_status
 
 make $cdst_j_flags
@@ -64,15 +65,16 @@ check_exit_status
 make $cdst_j_flags install
 check_exit_status
 
-# Rename libsodium to libzmq-libsodium in libtool
-for la in $install_dir/support/lib/libsodium*.la; do
-    sed -i 's/libsodium.so/libzmqnet_libsodium.so/g' $la
-    sed -i 's/libsodium.a/libzmqnet_libsodium.a/g' $la
-done
+# Rename libsodium to libzmqnet_libsodium in libtool
+sed -i 's/libsodium.so/libzmqnet_libsodium.so/g' $support_dir/lib/libsodium.la
+sed -i 's/libsodium.a/libzmqnet_libsodium.a/g' $support_dir/lib/libsodium.la
+
+# Rename libsodium to libzmqnet_libsodium in pkgconfig
+sed -i 's/lsodium/lzmqnet_libsodium/g' $support_dir/lib/pkgconfig/libsodium.pc
 
 # Rename shared libraries libsodium to libzmq_libsodium
 type -P patchelf || pip install patchelf
-for lib in $install_dir/support/lib/libsodium*; do
+for lib in $support_dir/lib/libsodium.*; do
     if [ -L "$lib" ]; then
         fixed_target=$(readlink $lib)
         if [[ "$fixed_target" != "libzmqnet_*" ]]; then
@@ -118,8 +120,8 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-PKG_CONFIG_PATH="$install_dir/support/lib/pkgconfig:$PKG_CONFIG_PATH" CFLAGS="-g -O2 -Wall" \
-    ./configure --prefix=$install_dir/support --with-libsodium=yes
+PKG_CONFIG_PATH="$support_dir/lib/pkgconfig:$PKG_CONFIG_PATH" CFLAGS="-g -O2 -Wall" \
+    ./configure --prefix=$support_dir --with-libsodium=yes
 check_exit_status
 
 make $cdst_j_flags
@@ -127,6 +129,41 @@ check_exit_status
 
 make $cdst_j_flags install
 check_exit_status
+
+# Rename libzmq to libzmqnet_libzmq in libtool
+sed -i 's/libzmq.so/libzmqnet_libzmq.so/g' $support_dir/lib/libzmq.la
+sed -i 's/libzmq.a/libzmqnet_libzmq.a/g' $support_dir/lib/libzmq.la
+
+# Rename libzmq to libzmqnet_libzmq in pkgconfig
+sed -i 's/lzmq/lzmqnet_libzmq/g' $support_dir/lib/pkgconfig/libzmq.pc
+
+# Rename shared libraries libzmq to libzmqnet_libzmq
+type -P patchelf || pip install patchelf
+for lib in $support_dir/lib/libzmq.*; do
+    if [ -L "$lib" ]; then
+        fixed_target=$(readlink $lib)
+        if [[ "$fixed_target" != "libzmqnet_*" ]]; then
+            fixed_target=$(dirname $fixed_target)/libzmqnet_$(basename $fixed_target)
+        fi
+        fixed_source=$(dirname $lib)/libzmqnet_$(basename $lib)
+        rm $lib $fixed_source
+        ln -s $fixed_target $fixed_source
+
+    else
+        fixed_lib=$(dirname $lib)/libzmqnet_$(basename $lib)
+
+        # Fix soname
+        soname=$(objdump -p $lib 2>/dev/null | grep SONAME | tr -s ' ' | cut -d ' ' -f 3)
+        if [ ! -z "$soname" ]; then
+            fixed_soname="libzmqnet_$soname"
+            patchelf --set-soname $fixed_soname $lib
+            check_exit_status
+        fi
+
+        mv $lib $fixed_lib
+    fi
+    check_exit_status
+done
 
 popd
 check_exit_status
@@ -152,7 +189,7 @@ check_exit_status
 pushd build
 check_exit_status
 
-CFLAGS="-g -O2 -Wall" PKG_CONFIG_PATH=$install_dir/support/lib/pkgconfig:$PKG_CONFIG_PATH cmake -DCMAKE_INSTALL_PREFIX:PATH=$install_dir/support -DCPPZMQ_BUILD_TESTS=OFF ..
+CFLAGS="-g -O2 -Wall" PKG_CONFIG_PATH=$support_dir/lib/pkgconfig:$PKG_CONFIG_PATH cmake -DCMAKE_INSTALL_PREFIX:PATH=$support_dir -DCPPZMQ_BUILD_TESTS=OFF ..
 check_exit_status
 
 make $cdst_j_flags
@@ -182,7 +219,7 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-./configure --prefix=$install_dir/support
+./configure --prefix=$support_dir
 check_exit_status
 
 make $cdst_j_flags
@@ -210,7 +247,7 @@ check_exit_status
 autoreconf -ifv
 check_exit_status
 
-./configure --prefix=$install_dir/support
+./configure --prefix=$support_dir
 check_exit_status
 
 make $cdst_j_flags
@@ -230,7 +267,7 @@ echo $PWD
 autoreconf -ifv
 check_exit_status
 
-PKG_CONFIG_PATH=$install_dir/support/lib/pkgconfig:$PKG_CONFIG_PATH ./configure --prefix=$install_dir
+PKG_CONFIG_PATH=$support_dir/lib/pkgconfig:$PKG_CONFIG_PATH ./configure --prefix=$install_dir
 check_exit_status
 
 make $cdst_j_flags

@@ -60,3 +60,6 @@ prepend_path  (    "PE_PKG_CONFIG_PATH",       PE_DIR .. "/lib/pkgconfig"    )
 
 prepend_path  (    "CRAY_LD_LIBRARY_PATH",     PE_DIR .. "/lib"              )
 prepend_path  (    "LD_LIBRARY_PATH",          PE_DIR .. "/lib"              )
+
+prepend_path  (    "CRAY_LD_LIBRARY_PATH",     PE_DIR .. "/support/lib"      )
+prepend_path  (    "LD_LIBRARY_PATH",          PE_DIR .. "/support/lib"      )

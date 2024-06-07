@@ -9,6 +9,6 @@ supportdir=${prefix}/support
 Name: libzmqnet
 Description: libzmqnet
 Version: @PACKAGE_VERSION@
-Libs: -L${supportdir}/lib -Wl,-rpath,${supportdir}/lib -Wl,-rpath,/opt/cray/pe/zmqnet/default/support/lib -lzmq -lkj -lcapnp  -L${libdir} -Wl,-rpath,${libdir} -Wl,-rpath,/opt/cray/pe/zmqnet/default/lib -lzmqnet -pthread
+Libs: -L${supportdir}/lib -Wl,-rpath,/opt/cray/pe/zmqnet/default/support/lib -lzmq -lkj -lcapnp -L${libdir} -Wl,-rpath,/opt/cray/pe/zmqnet/default/lib -lzmqnet -pthread
 Libs.private: -lsupc++
 Cflags: -I${includedir} -I${supportdir}/include

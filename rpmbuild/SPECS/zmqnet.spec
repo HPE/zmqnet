@@ -89,6 +89,7 @@
 %global privlibs %{privlibs}|libtbbmalloc*
 %global privlibs %{privlibs}|libtbb.*
 %global privlibs %{privlibs}|libstdc++.*
+%global privlibs %{privlibs}|libzmqnet_libzmq.*
 %global privlibs %{privlibs}|libzmqnet_libsodium.*
 %global __requires_exclude ^(%{privlibs})\\.so*
 
@@ -208,7 +209,7 @@ Test files for Cray zmqnet
 %{__cp} -a %{external_build_dir}/support/lib/libkj-tls-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
 %{__cp} -a %{external_build_dir}/support/lib/libkj-tls.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
 %{__cp} -a %{external_build_dir}/support/lib/libLrleBitset.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libzmq.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
+%{__cp} -a %{external_build_dir}/support/lib/libzmqnet_libzmq.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
 %{__cp} -a %{external_build_dir}/support/lib/libzmqnet_libsodium.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
 %{__cp} -a %{external_build_dir}/lib/libzmqnet.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 

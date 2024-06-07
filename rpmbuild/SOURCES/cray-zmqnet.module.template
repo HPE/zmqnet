@@ -24,6 +24,8 @@ setenv PE_ZMQNET_MODULE_NAME  <CRAY_NAME>
 
 prepend-path CRAY_LD_LIBRARY_PATH $ZMQNET_BASEDIR/lib
 prepend-path LD_LIBRARY_PATH $ZMQNET_BASEDIR/lib
+prepend-path CRAY_LD_LIBRARY_PATH $ZMQNET_BASEDIR/support/lib
+prepend-path LD_LIBRARY_PATH $ZMQNET_BASEDIR/support/lib
 
 if { [ file exists ${ZMQNET_BASEDIR}/release_notes.md ] } {
       set REL_INFO [ exec cat ${ZMQNET_BASEDIR}/release_notes.md ]
