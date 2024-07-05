@@ -55,12 +55,12 @@ class ZmqnetTest(Test):
     def setUp(self):
         self.debug = self.params.get("debug")
         if self.debug != None and self.debug == True:
-            os.environ["CTI_DEBUG"] = str(self.debug)
-            print(f"CTI_DEBUG = {str(self.debug)}")
+            os.environ["LIBZMQNET_DEBUG"] = str(self.debug)
+            print(f"LIBZMQNET_DEBUG = {str(self.debug)}")
         else:
             self.debug = False
-            if "CTI_DEBUG" in os.environ:
-                del os.environ["CTI_DEBUG"]
+            if "LIBZMQNET_DEBUG" in os.environ:
+                del os.environ["LIBZMQNET_DEBUG"]
 
     def test_LaunchExitTest(self):
         google_test(self, "LaunchExitTest")

@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <set>
 #include <numeric>
+#include <filesystem>
 
 #include <cstdlib>
 
@@ -443,12 +444,8 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	auto const start_ms = get_milliseconds();
 
 	// Find commnode path
-	auto const commnodePath = std::getenv(env::INSTALL_DIR) ?
-		std::string{std::getenv(env::INSTALL_DIR)} + "/libexec/commnode"
-		:
-		std::string{LIBZMQNET_PREFIX} + "/libexec/commnode"
-	;
-
+	auto const commnodePath = get_zmqnet_install_root() / "libexec/commnode";
+	
 	log("launching commnode: %s\n", commnodePath.c_str());
 
 	// Fetch node layout from CTI for network topology

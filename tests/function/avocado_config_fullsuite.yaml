@@ -1,5 +1,5 @@
 ---
-# Value to set CTI_DEBUG to before the test. CTI_DEBUG changes
+# Value to set LIBZMQNET_DEBUG to before the test. LIBZMQNET_DEBUG changes
 # encryption and timeout behaviors.
 debug: !mux
   yes:
