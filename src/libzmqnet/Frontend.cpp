@@ -84,8 +84,15 @@ static auto fcfsTreeImpl(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, 
 
 	// Bind topology dealer socket
 	net::retry_bind(dealer_socket, net::generate_tcp_endpoint());
+	auto hostname = std::unique_ptr<char, decltype(&::free)> {
+		cti_getHostname(), ::free};
+	if (hostname == nullptr) {
+		throw std::runtime_error("failed to detect hostname.\n"
+			"Try setting CTI_HOST_ADDRESS to the external address for this node.\n"
+			+ std::string{cti_error_str()});
+	}
 	auto const dealerEndpoint = net::replace_tcp_endpoint_host(
-			dealer_socket.get(zmq::sockopt::last_endpoint), cti_getHostname());
+			dealer_socket.get(zmq::sockopt::last_endpoint), hostname.get());
 	log("topology dealer listening on %s\n",
 		dealerEndpoint.c_str());
 
@@ -128,7 +135,7 @@ static auto fcfsTreeImpl(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, 
 	}
 
 	// Set up fanout topology and wait for all children to connect
-	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
+	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, hostname.get());
 	auto endpoints = std::vector<std::tuple<std::string, std::string, std::string>> {
 		{rootControlEndpoint, rootDataEndpoint, rootLink.getPublicKey()}
 	};
@@ -272,7 +279,14 @@ static auto layeredTree(zmq::context_t& ctx, net::TcpDownstreamLink& rootLink, i
 	auto nodeNumChildrenMap = std::unordered_map<int, int>{};
 	auto nodeNumSubchildrenMap = std::unordered_map<int, int>{};
 
-	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, cti_getHostname());
+	auto hostname = std::unique_ptr<char, decltype(&::free)> {
+		cti_getHostname(), ::free};
+	if (hostname == nullptr) {
+		throw std::runtime_error("failed to detect hostname.\n"
+			"Try setting CTI_HOST_ADDRESS to the external address for this node.\n"
+			+ std::string{cti_error_str()});
+	}
+	auto const [rootControlEndpoint, rootDataEndpoint] = formatEndpoints(rootLink, hostname.get());
 
 	// Initialize tree level arrays
 	auto nodeLevels = std::vector<std::vector<int>>{};

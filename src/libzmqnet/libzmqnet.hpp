@@ -355,13 +355,15 @@ static inline auto retry_bind(zmq::socket_t& socket, std::string endpoint)
 {
 	// Get maximum port to try
 	auto max_retry = 10;
-	try {
-		auto parsed_retry = std::stoi(zmqnet::env::PORT_MAX);
-		if (parsed_retry > 0) {
-			max_retry = parsed_retry;
+	if (auto port_max = ::getenv(zmqnet::env::PORT_MAX)) {
+		try {
+			auto parsed_retry = std::stoi(port_max);
+			if (parsed_retry > 0) {
+				max_retry = parsed_retry;
+			}
+		} catch (...) {
+			// Ignore failed parse
 		}
-	} catch (...) {
-		// Ignore failed parse
 	}
 
 	for (auto i = 0; i < max_retry; i++) {
