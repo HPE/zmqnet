@@ -6,7 +6,7 @@
 section-1:
     ACCELERATOR           : NONE
     EFFECTIVE_DATE        : NONE
-    EMAILS                : karen.glaser@hpe.com
+    EMAILS                : john.leroy.vogt@hpe.com
     EMAIL_BUILDER         : NO
     HOSTS                 : pea2k,cfa6k
     INSTALL_DEFAULT_HOSTS : NONE
@@ -19,7 +19,7 @@ section-1:
 section-2:
     ACCELERATOR           : NONE
     EFFECTIVE_DATE        : NONE
-    EMAILS                : karen.glaser@hpe.com
+    EMAILS                : john.leroy.vogt@hpe.com
     EMAIL_BUILDER         : NO
     HOSTS                 : pea2k,cfa6k
     INSTALL_DEFAULT_HOSTS : NONE
@@ -32,7 +32,7 @@ section-2:
 section-3:
     ACCELERATOR           : NONE
     EFFECTIVE_DATE        : NONE
-    EMAILS                : karen.glaser@hpe.com
+    EMAILS                : john.leroy.vogt@hpe.com
     EMAIL_BUILDER         : NO
     HOSTS                 : pea2k,cfa6k
     INSTALL_DEFAULT_HOSTS : NONE
@@ -47,7 +47,7 @@ section-3:
 section-4:
     ACCELERATOR           : NONE
     EFFECTIVE_DATE        : NONE
-    EMAILS                : karen.glaser@hpe.com
+    EMAILS                : john.leroy.vogt@hpe.com
     EMAIL_BUILDER         : NO
     HOSTS                 : pea2k,cfa6k
     INSTALL_DEFAULT_HOSTS : NONE
@@ -62,7 +62,7 @@ section-4:
 section-5:
     ACCELERATOR           : NONE
     EFFECTIVE_DATE        : <REMOVAL_DATE>
-    EMAILS                : karen.glaser@hpe.com
+    EMAILS                : john.leroy.vogt@hpe.com
     EMAIL_BUILDER         : NO
     HOSTS                 : pea2k,cfa6k
     INSTALL_DEFAULT_HOSTS : NONE
