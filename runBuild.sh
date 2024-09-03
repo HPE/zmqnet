@@ -27,6 +27,9 @@ check_exit_status
 
 # Create install directory
 source $top_level/release_versioning
+zmqnet_version=
+branch_name=$(get_branch_info)
+branch_type=$(echo "$branch_name" | cut -d'/' -f1)
 if [ "$branch_type" != "release" ]; then
   zmqnet_version="$major.$minor.$revision.$build_number"
 else
