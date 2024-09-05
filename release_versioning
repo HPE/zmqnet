@@ -1,15 +1,13 @@
 #==============================================================================
-# Copyright 2022 Hewlett Packard Enterprise Development LP.
-
-# Jenkins will override this
-revision="1"
-build_number=""
+# Copyright 2023-2024 Hewlett Packard Enterprise Development LP.
 
 major="1"
-# Set this back to release number once release branch is created
 minor="0"
+revision="1"
+
+# Jenkins will override this
+build_number=""
 
 # libtool versioning
 current="1"
-revision="0"
 age="0"
