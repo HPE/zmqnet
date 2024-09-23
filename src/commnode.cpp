@@ -550,7 +550,6 @@ public: // interface
 // `timeout` method is called (triggered by socket read timeout at the aggregation level)
 class Sync_Timeout : public Sync
 {
-
 	// Reported descendants may contain timed out descendants
 	lrle_bitset reported_descendants;
 	// Current descendants are those reported since the last timeout or full aggregation
@@ -624,6 +623,45 @@ public: // interface
 		}
 
 		return BitsetContentPair{};
+	}
+};
+
+// TimeoutAfterLast: Timeout after the last message was received
+class Sync_TimeoutAfterLast : public Sync_Timeout
+{
+private: // members
+	int grace_ms;
+	int timeout_at;
+
+public: // interface
+	Sync_TimeoutAfterLast(unsigned char const* descendants_buf, size_t descendants_len, lrle_bitset& exited, int grace_ms_)
+		: Sync_Timeout{descendants_buf, descendants_len, exited}
+		, grace_ms{grace_ms_}
+		, timeout_at{-1}
+	{}
+
+	BitsetContentPair timeout() override
+	{
+		if ((0 < timeout_at) && (timeout_at < get_milliseconds())) {
+			timeout_at = -1;
+			return Sync_Timeout::timeout();
+		}
+
+		return BitsetContentPair{};
+
+	}
+
+	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& new_content) override
+	{
+		auto new_content_size = new_content.size();
+		auto result = Sync_Timeout::update(new_descendants_buf, new_descendants_len, std::move(new_content));
+
+		// Start applying timeout if not all messages received
+		if ((new_content_size > 0) && result.second.empty()) {
+			timeout_at = get_milliseconds() + grace_ms;
+		}
+
+		return result;
 	}
 };
 
@@ -807,6 +845,13 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			// Apply timeout to socket
 			task_socket.set(zmq::sockopt::rcvtimeo, timeout->ms);
 
+		// Aggregate when all reported, or timeout hit after first message
+		} else if (auto const timeoutAfterLast = std::get_if<zmqnet::sync::TimeoutAfterLast>(&streamSync)) {
+			synchronizer = std::make_unique<Sync_TimeoutAfterLast>(descendants_buf, descendants_len, exited_descendants, timeoutAfterLast->grace);
+
+			// Apply timeout to socket
+			task_socket.set(zmq::sockopt::rcvtimeo, timeoutAfterLast->grace);
+
 		} else {
 			assert(false);
 		}
@@ -904,13 +949,25 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 		// Socket hit timeout, send any timed-out synchronizer contents
 		} else {
-			assert(std::get_if<zmqnet::sync::Timeout>(&streamSync));
+			assert(std::get_if<zmqnet::sync::Timeout>(&streamSync)
+			    || std::get_if<zmqnet::sync::TimeoutAfterLast>(&streamSync));
+
+			log("commnode %02x %d: hit timeout, calling synch timeout\n",
+				stream.communicatorId, stream.id);
 
 			auto [bitset, content] = synchronizer->timeout();
 
 			// If synchronizer reported results to send, aggregate
 			if (!bitset.empty()) {
+
+				log("commnode %02x %d: hit timeout, sending content from timeout\n",
+					stream.communicatorId, stream.id);
+
 				aggregate_and_send(std::move(bitset), std::move(content));
+
+			} else {
+				log("commnode %02x %d: hit timeout but no content\n",
+					stream.communicatorId, stream.id);
 			}
 		}
 	}
@@ -1595,6 +1652,8 @@ int main(int argc, char* const argv[])
 				streamSync = zmqnet::sync::WaitForAll{};
 			} else if (newStreamCommand.getSync().isTimeout()) {
 				streamSync = zmqnet::sync::Timeout{ .ms = newStreamCommand.getSync().getTimeout() };
+			} else if (newStreamCommand.getSync().isTimeoutAfterLast()) {
+				streamSync = zmqnet::sync::TimeoutAfterLast { .grace = newStreamCommand.getSync().getTimeoutAfterLast() };
 			} else {
 				assert(false);
 			}

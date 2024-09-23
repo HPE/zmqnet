@@ -834,6 +834,55 @@ TEST_F(ZmqnetFunctionTest, TimeoutTestAsync)
 	network.runExit();
 }
 
+// Test timeout after last result
+TEST_F(ZmqnetFunctionTest, TimeoutTestAfterLastAsync)
+{
+	auto result_mutex = std::mutex{};
+	auto result_cv = std::condition_variable{};
+	auto results_received = std::atomic<size_t>{0};
+
+	// Launch network with four nodes
+	auto network = launchAsyncNetwork(4, 4,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 },
+		// Set node ID 0 to drop commands to test timeout
+		{ BackendArgv::TimeoutNodeId.format("0") } );
+
+	// Create callback
+	auto send_callback = [&](zmqnet::Stream::Id const& streamId, zmqnet::ByteArrayPtr result) {
+		ASSERT_EQ(streamId, TestStreamId);
+
+		// Parse result
+		auto const nodeIds = parseNodeIds((char const*)result.asBytes().begin());
+		results_received += nodeIds.size();
+		result_cv.notify_one();
+	};
+
+	// Regster callback and create stream
+	network.registerStreamCallback(TestStreamId, send_callback);
+	auto allNodesCommunicator = network.getAllNodesCommunicator();
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId,
+		"libfilter.so", "run",
+
+		// Set a half-second timeout at each level
+		zmqnet::sync::TimeoutAfterLast{ .grace = 500 });
+
+	// Send command
+	network.sendCommand(stream, "send", 5);
+
+	// Wait for result
+	{ auto result_lock = std::unique_lock<std::mutex>{result_mutex};
+		result_cv.wait(result_lock, [&results_received]() {
+			return results_received.load() >= size_t{3};
+		});
+	}
+
+	// Check result
+	EXPECT_EQ(results_received.load(), size_t{3});
+
+	// Exit network
+	network.runExit();
+}
+
 // Test launch callbacks
 TEST_F(ZmqnetFunctionTest, CallbackLaunchTestFcfs) {
     auto callbacks = zmqnet::UserCallbacks();

@@ -2,12 +2,16 @@
 
 Streams are the next level above a filter. Conceptually, streams are a tree that runs a filter function in series, feeding and aggregating results starting at leaf processes and feeding up to a single root process. At each level of the tree, a single configurable type of synchronization is applied,
 
+* Immediate: do not wait, apply the filter function to each message as soon as it is received
+	- `auto sync = zmqnet::sync::Immediate{};`
 * Wait for all: wait for all child processes in a stream to send a message before applying the filter function
 	- `auto sync = zmqnet::sync::WaitForAll{};`
 * Timeout: wait for the given number of milliseconds to elapse, or for all messages to be received before applying the filter function
 	- `auto sync = zmqnet::sync::Timeout{ .ms = /* milliseconds */ };`
-* Immediate: do not wait, apply the filter function to each message as soon as it is received
-	- `auto sync = zmqnet::sync::Immediate{};`
+* TimeoutAfterLast: Wait indefinitely for the first message, then after timeout has elapsed without a new message, send all pending messages.
+	- If a new message was received during the timeout wait, it will reset the timeout. If no messages are received, it will continue to wait.
+	- Useful for collecting results where nodes may intentionally not respond.
+	- `auto sync = zmqnet::sync::TimeoutAfterLast{ .grace = /* milliseconds */ };`
 
 The most common type of synchronization is "Wait for all", or "Timeout" with an application-specific timeout. "Immediate" can be used to implement more complex synchronization in a filter function with global state (recall that filters can return an empty result to indicate that no message is to be sent).
 

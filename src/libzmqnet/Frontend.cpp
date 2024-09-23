@@ -692,6 +692,8 @@ zmqnet::Stream zmqnet::detail::Frontend::createStream(zmq::socket_t& sender,
 		streamCommand.initSync().setWaitForAll();
 	} else if (auto const timeout = std::get_if<sync::Timeout>(&streamSync)) {
 		streamCommand.initSync().setTimeout(timeout->ms);
+	} else if (auto const timeout = std::get_if<sync::TimeoutAfterLast>(&streamSync)) {
+		streamCommand.initSync().setTimeoutAfterLast(timeout->grace);
 	} else {
 		assert(false);
 	}

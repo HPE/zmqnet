@@ -131,6 +131,9 @@ class ZmqnetTest(Test):
     def test_TimeoutTestAsync(self):
         google_test(self, "TimeoutTestAsync")
 
+    def test_TimeoutAfterLastTestAsync(self):
+        google_test(self, "TimeoutAfterLastTestAsync")
+
     def test_CallbackLaunchTestFcfs(self):
         google_test(self, "CallbackLaunchTestFcfs")
 

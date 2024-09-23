@@ -144,9 +144,16 @@ struct Timeout
 	int ms;
 };
 
+// Wait for the given number of milliseconds to elapse after the last message was sent,
+// or for all messages to be received before applying the filter function
+struct TimeoutAfterLast
+{
+	int grace;
+};
+
 } // sync
 
-using StreamSync = std::variant<sync::Immediate, sync::WaitForAll, sync::Timeout>;
+using StreamSync = std::variant<sync::Immediate, sync::WaitForAll, sync::Timeout, sync::TimeoutAfterLast>;
 
 // Events that a callback can be hooked to
 enum class Event : size_t {

@@ -40,6 +40,7 @@ struct NetworkCommand {
         immediate @7 :Void;
         waitForAll @8 :Void;
         timeout @9 :Int32;
+        timeoutAfterLast @14 :Int32;
       }
     }
 
