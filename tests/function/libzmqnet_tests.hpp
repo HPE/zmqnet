@@ -15,10 +15,13 @@ struct BackendArgv : public cti::Argv {
 	using Option    = cti::Argv::Option;
 	using Parameter = cti::Argv::Parameter;
 
+	static constexpr Option TestLinger { "test-linger", 'l' };
+
 	static constexpr Parameter Sync { "sync", 's' };
 	static constexpr Parameter TimeoutNodeId { "timeout-node-id", 't' };
 
 	static constexpr GNUOption long_options[] = {
+		TestLinger,
 		Sync, TimeoutNodeId,
 		long_options_done
 	};

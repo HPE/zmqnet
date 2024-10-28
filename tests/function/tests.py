@@ -146,6 +146,9 @@ class ZmqnetTest(Test):
     def test_UnexpectedExitTest(self):
         google_test(self, "UnexpectedExitTest")
 
+    def test_LingerTest(self):
+        google_test(self, "LingerTest")
+
 class CleanupTest(Test):
     def test_cleanup(self):
         # XXX: Compute nodes on slice have extremely small /tmp directories.

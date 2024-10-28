@@ -111,6 +111,28 @@ static inline std::filesystem::path get_zmqnet_install_root() {
 	throw std::runtime_error("Failed to find zmqnet installation root. Try `module load cray-zmqnet`.");
 }
 
+static inline std::string response_type_to_string(NetworkResponse::Which type) {
+	auto result = "Unknown";
+	switch (type) {
+	case NetworkResponse::Which::EXIT: result = "Exit";
+	case NetworkResponse::Which::READY: result = "Ready";
+	case NetworkResponse::Which::COMMUNICATOR: result = "Communicator";
+	case NetworkResponse::Which::STREAM: result = "Stream";
+	case NetworkResponse::Which::USER: result = "User";
+	case NetworkResponse::Which::PING: result = "Ping";
+	}
+	return result;
+};
+
+static inline void assert_response_type(NetworkResponse::Reader const& response, NetworkResponse::Which expected) {
+	auto actual = response.which();
+    if (actual != expected) {
+		throw std::runtime_error("Internal ZMQNet error: expected "
+			+ response_type_to_string(expected) + ", got " + response_type_to_string(actual));
+    }
+}
+
+
 struct ThreadSignalBlocker {
 	// blocks all signal handling in the thread that this object is created in. when the
 	// object is destroyed, restores the signal mask to m_exit_scope_mask, which is
@@ -537,6 +559,21 @@ public:
 	{
 		connect(upstreamControlEndpoint, upstreamDataEndpoint, auth, upstreamPublicKey);
 	}
+
+	// Time to block attempt to send messages
+	void set_linger(int linger_ms)
+	{
+		log("setting upstream linger to %dms\n", linger_ms);
+		control_socket.set(zmq::sockopt::linger, linger_ms);
+		data_socket.set(zmq::sockopt::linger, linger_ms);
+	}
+
+	// zmq::socket_t destructor will automatically call close
+	void close()
+	{
+		control_socket.close();
+		data_socket.close();
+	}
 };
 
 class DownstreamLink
@@ -575,6 +612,21 @@ public:
 		dataEndpoint = retry_bind(data_socket, dataEndpoint);
 
 		log("control endpoint: %s, data endpoint: %s\n", controlEndpoint.c_str(), dataEndpoint.c_str());
+	}
+
+	// Time to block attempt to send messages
+	void set_linger(int linger_ms)
+	{
+		log("setting downstream linger to %dms\n", linger_ms);
+		control_socket.set(zmq::sockopt::linger, linger_ms);
+		data_socket.set(zmq::sockopt::linger, linger_ms);
+	}
+
+	// zmq::socket_t destructor will automatically call close
+	void close()
+	{
+		control_socket.close();
+		data_socket.close();
 	}
 };
 

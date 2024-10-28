@@ -104,9 +104,45 @@ int empty_async_leafnode(Params const& beParams)
 	return 0;
 }
 
+template <typename Params>
+void run_sync_leafnode_linger_test(Params const& beParams)
+{
+	fprintf(stderr, "running leafnode node %d linger test, connect parent %s %s\n",
+		beParams.node_id, beParams.upstreamControlEndpoint.c_str(), beParams.upstreamDataEndpoint.c_str());
+
+	auto leafnode = zmqnet::SyncBackend{beParams};
+
+	auto const [stream, command] = leafnode.nextCommand();
+
+	if (stream.id < 0) {
+		return;
+	}
+
+	fprintf(stderr, "%d got command %s from stream %d\n", beParams.node_id, command.begin(), stream.id);
+	assert(stream.id == TestStreamId);
+
+	// Generate long result
+	auto result = []() {
+		auto ss = std::stringstream{};
+		for (int i = 0; i < 4096; i++) {
+			for (int j = 0; j < 64; j++) {
+				ss << i << " ";
+			}
+		}
+		return ss.str();
+	}();
+	fprintf(stderr, "result should have strlen %zu\n", result.length());
+	leafnode.sendResult(stream, result.c_str(), result.length() + 1);
+
+	// From the perspective of the frontend, exit unexpectedly
+	// Message still should be enqueued to send
+	leafnode.forceDisconnect();
+}
+
 // Parse user-provided arguments
 static auto parse_argv(int argc, char* const argv[])
 {
+	auto test_linger = false;
 	auto synchronous_mode = false;
 	auto timeout_node_id = int{-1};
 
@@ -119,6 +155,10 @@ static auto parse_argv(int argc, char* const argv[])
 		if (c <= 0) { break; }
 
 		switch (c) {
+
+		case BA::TestLinger.val:
+			test_linger = true;
+			break;
 
 		case BA::Sync.val:
 			synchronous_mode = (value == "yes");
@@ -136,7 +176,7 @@ static auto parse_argv(int argc, char* const argv[])
 
 	// Rest of arguments are launcher / leaf arguments
 	auto const [rest_argc, rest_argv] = parsedArgv.get_rest();
-	return std::make_tuple(synchronous_mode, timeout_node_id, rest_argc, rest_argv);
+	return std::make_tuple(test_linger, synchronous_mode, timeout_node_id, rest_argc, rest_argv);
 }
 
 int main(int argc, char** argv)
@@ -151,8 +191,15 @@ int main(int argc, char** argv)
 
 	auto const [beParams, leaf_argc, leaf_argv] = zmqnet::SyncBackend::getParams(argc, argv);
 
-	auto const [synchronous_mode, timeout_node_id, binary_argc, binary_argv] = parse_argv(leaf_argc, leaf_argv);
+	auto const [test_linger, synchronous_mode, timeout_node_id, binary_argc, binary_argv]
+		= parse_argv(leaf_argc, leaf_argv);
 	assert((binary_argc == 0) && (binary_argv[0] == nullptr));
+
+	if (test_linger) {
+		// Run test and exit
+		run_sync_leafnode_linger_test(beParams);
+		return 0;
+	}
 
 	// Normal test, send node ID in response to commands
 	if (timeout_node_id != beParams.node_id) {

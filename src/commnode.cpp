@@ -197,7 +197,7 @@ public:
 				throw std::runtime_error("Timed out");
 			}
 			auto response = maybeReader->getRoot<NetworkResponse>();
-			assert(response.isReady());
+			assert_response_type(response, NetworkResponse::Which::READY);
 
 			// Add nodes to children node bitset
 			auto const response_node_bitset = response.getReady().getNodes().asBytes();
@@ -798,7 +798,8 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			stream.communicatorId, stream.id, descendants_bitset.to_string().c_str(), started_descendants.to_string().c_str());
 		auto reader = net::recv_MessageReader(task_socket);
 		auto response = reader.getRoot<NetworkResponse>();
-		assert(response.isStream() && (response.getStream().getStreamId() == stream.id));
+		assert_response_type(response, NetworkResponse::Which::STREAM);
+		assert(response.getStream().getStreamId() == stream.id);
 
 		// Add to started descendants
 		{ auto const started_nodes = response.getStream().getNodes().asBytes();
@@ -931,7 +932,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 			// Check stream ID and user result
 			} else {
-				assert(response.isUser());
+				assert_response_type(response, NetworkResponse::Which::USER);
 				assert(response.getUser().getStreamId() == stream.id);
 				log("commnode %02x %d: user content length: %lu\n",
 					stream.communicatorId, stream.id, response.getUser().getContent().size());
@@ -1164,7 +1165,11 @@ static inline void response_distributor(zmq::context_t& ctx, lrle_bitset const& 
 		}
 
 		// Content is either stream or user content
-		assert(response.isStream() || response.isUser());
+		if ((response.which() != NetworkResponse::Which::STREAM)
+		 && (response.which() != NetworkResponse::Which::USER)) {
+			throw std::runtime_error("Internal ZMQNet error: expected Stream or User, got "
+				+ response_type_to_string(response.which()));
+		}
 
 		// Extract stream ID to select stream worker
 		auto const streamId = (response.isStream())
@@ -1181,7 +1186,7 @@ static inline void response_distributor(zmq::context_t& ctx, lrle_bitset const& 
 		if (streamSocketPair == taskSockets.end()) {
 			log("commnode: new stream %d on communicator %02x\n",
 				stream.id, stream.communicatorId);
-			assert(response.isStream());
+			assert_response_type(response, NetworkResponse::Which::STREAM);
 
 			// Create task socket and store in stream task socket map
 			taskSockets.emplace_hint(streamSocketPair, stream,

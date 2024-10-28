@@ -15,6 +15,12 @@ ZMQNet supports the following runtime environment variables:
     If set to -1, the startup handshake timeout will be disabled.
     If not set, the default value is 300 seconds.
 
+- `LIBZMQNET_CLEANUP_TIMEOUT`
+
+	Maximum amount of seconds to wait when trying to clean up the network.
+	Backend processes will attempt to send pending messages up to this timeout before exiting.
+	If not set, the default value is 10 seconds.
+
 - `LIBZMQNET_DEBUG_COMMNODE_STARTUP_SLEEP`
 
 	If set to a positive integer, ZMQNet commnodes will sleep for this many seconds on

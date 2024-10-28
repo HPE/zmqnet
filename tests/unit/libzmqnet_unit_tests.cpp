@@ -49,7 +49,7 @@ TEST_F(ZmqnetUnitTest, SyncBackendParamsTest)
 {
 	// Test no additional backend parameters
 	{ char const* backend_argv[] = { "argv0", "0", "controlEndpoint", "dataEndpoint", "publicKey", "1",
-		"a.out", nullptr };
+		"2", "12345", "a.out", nullptr };
 		auto const backend_argc = (sizeof(backend_argv) / sizeof(backend_argv[0])) - 1;
 
 		auto const [beParams, rest_argc, rest_argv] =
@@ -60,6 +60,8 @@ TEST_F(ZmqnetUnitTest, SyncBackendParamsTest)
 		EXPECT_EQ(beParams.upstreamDataEndpoint, "dataEndpoint");
 		EXPECT_EQ(beParams.upstreamPublicKey, "publicKey");
 		EXPECT_EQ(beParams.node_id, 1);
+		EXPECT_EQ(beParams.rank_id, 2);
+		EXPECT_EQ(beParams.target_pid, 12345);
 
 		EXPECT_EQ(rest_argc, 1);
 		EXPECT_EQ(rest_argv[0], "a.out");
@@ -68,7 +70,7 @@ TEST_F(ZmqnetUnitTest, SyncBackendParamsTest)
 
 	// Test additional backend parameters
 	{ char const* backend_argv[] = { "argv0", "0", "controlEndpoint", "dataEndpoint", "publicKey", "1",
-		"argv1", "argv2", nullptr };
+		"2", "12345", "a.out", "argv1", "argv2", nullptr };
 		auto const backend_argc = (sizeof(backend_argv) / sizeof(backend_argv[0])) - 1;
 
 		auto const [beParams, rest_argc, rest_argv] =
@@ -79,11 +81,14 @@ TEST_F(ZmqnetUnitTest, SyncBackendParamsTest)
 		EXPECT_EQ(beParams.upstreamDataEndpoint, "dataEndpoint");
 		EXPECT_EQ(beParams.upstreamPublicKey, "publicKey");
 		EXPECT_EQ(beParams.node_id, 1);
+		EXPECT_EQ(beParams.rank_id, 2);
+		EXPECT_EQ(beParams.target_pid, 12345);
 
-		EXPECT_EQ(rest_argc, 2);
-		EXPECT_EQ(rest_argv[0], "argv1");
-		EXPECT_EQ(rest_argv[1], "argv2");
-		EXPECT_EQ(rest_argv[2], nullptr);
+		EXPECT_EQ(rest_argc, 3);
+		EXPECT_EQ(rest_argv[0], "a.out");
+		EXPECT_EQ(rest_argv[1], "argv1");
+		EXPECT_EQ(rest_argv[2], "argv2");
+		EXPECT_EQ(rest_argv[3], nullptr);
 	}
 }
 

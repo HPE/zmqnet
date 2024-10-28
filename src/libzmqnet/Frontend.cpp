@@ -511,6 +511,18 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 			"If running without encryption is acceptable, set LIBZMQNET_CURVE=0");
 	}
 
+	// Set linger on downstream socket
+	if (auto cleanup_timeout = ::getenv(zmqnet::env::CLEANUP_TIMEOUT)) {
+		try {
+			m_downstream->set_linger(std::stoi(cleanup_timeout));
+		} catch (...) {
+			// Ignore parse failure
+		}
+	} else {
+		// Default linger of 10 seconds
+		m_downstream->set_linger(10 * 1000);
+	}
+
 	auto const startup_ms = get_milliseconds();
 	log("launch started: %5ldms\n", startup_ms - start_ms);
 
@@ -635,6 +647,12 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 
 zmqnet::detail::Frontend::~Frontend()
 {
+	// Allow messages to flush up to linger
+	log("~Frontend closing socket\n");
+	m_downstream->close();
+	m_downstream.reset();
+
+	log("~Frontend resetting context\n");
 	m_ctx.shutdown();
 }
 
@@ -933,7 +951,8 @@ zmqnet::ByteArray zmqnet::SyncFrontend::runCommand(zmqnet::Stream const& stream,
 	log("receiving results...\n");
 	auto reader = net::recv_MessageReader(m_downstream->data_socket);
 	auto response = reader.getRoot<NetworkResponse>();
-	assert(response.isUser() && (response.getUser().getStreamId() == stream.id));
+	assert_response_type(response, NetworkResponse::Which::USER);
+	assert(response.getUser().getStreamId() == stream.id);
 
 	auto const result_ms = get_milliseconds();
 	log("result RT: %5ldms\n", result_ms - start_ms);
@@ -992,4 +1011,20 @@ void zmqnet::SyncFrontend::runExit()
 
 	auto const exit_ms = get_milliseconds();
 	log("exit RT: %5ldms\n", exit_ms - start_ms);
+}
+
+
+void zmqnet::SyncFrontend::forceDisconnect()
+{
+	// Send exit command to try to get the backends to clean up.
+	sendExit();
+
+	// Wait for downstream sockets to flush
+	m_downstream->close();
+	m_downstream.reset();
+
+	// Shut down all sockets.
+	m_ctx.shutdown();
+
+	log("forced exit completed\n");
 }

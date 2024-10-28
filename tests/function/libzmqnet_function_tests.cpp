@@ -975,6 +975,30 @@ TEST_F(ZmqnetFunctionTest, UnexpectedExitTest) {
 	// intentionally exit function without calling runExit
 }
 
+// Test linger by receving large result as backend exits
+TEST_F(ZmqnetFunctionTest, LingerTest)
+{
+	// Launch network with one node
+	auto network = launchSyncNetwork(1, 1,
+		zmqnet::Topology { .launch = zmqnet::Topology::Fcfs, .fanout = 1 },
+		{ BackendArgv::TestLinger.format() } );
+
+	// Create stream
+	auto allNodesCommunicator = network.getAllNodesCommunicator();
+	auto stream = network.registerStream(allNodesCommunicator, TestStreamId,
+		"libfilter.so", "run", zmqnet::sync::WaitForAll{});
+
+	// Send command and get result
+	auto const result = network.runCommand(stream, "send", 5);
+
+	// Check that result was sent in full before termination
+	auto expected_len = 1239681;
+	EXPECT_EQ(::strnlen((char const*)result.asBytes().begin(), expected_len + 1), expected_len);
+
+	// Force exit network
+	network.forceDisconnect();
+}
+
 int main(int argc, char **argv)
 {
 	::testing::InitGoogleTest(&argc, argv);

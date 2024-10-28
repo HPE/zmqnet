@@ -25,11 +25,23 @@ zmqnet::detail::Backend::Backend(BackendParams const& backendParams)
 	, m_node_bitset{std::move(lrle_bitset{(size_t)m_node_id}.compressed)}
 {
 	net::subscribe_to_tag(m_upstream->control_socket, net::communicator_ids::AllNodes);
+
+	// Set linger on upstream socket
+	if (auto cleanup_timeout = ::getenv(zmqnet::env::CLEANUP_TIMEOUT)) {
+		try {
+			m_upstream->set_linger(std::stoi(cleanup_timeout));
+		} catch (...) {
+			// Ignore parse failure
+		}
+	} else {
+		// Default linger of 10 seconds
+		m_upstream->set_linger(10 * 1000);
+	}
 }
 
 zmqnet::detail::Backend::~Backend()
 {
-	m_ctx.shutdown();
+	close();
 }
 
 int zmqnet::detail::Backend::getRank() const
@@ -163,6 +175,23 @@ void zmqnet::detail::Backend::sendResult(zmqnet::Stream const& stream, char cons
 
 	// Send result
 	net::send_MessageBuilder(m_upstream->data_socket, stream.communicatorId, builder);
+}
+
+void zmqnet::detail::Backend::close()
+{
+	log("Backend closing\n");
+
+	// Allow messages to flush up to linger
+	if (m_upstream) {
+		log("Backend closing socket\n");
+		m_upstream->close();
+		m_upstream.reset();
+	}
+
+	if (m_ctx.handle() != nullptr) {
+		log("Backend resetting context\n");
+		m_ctx.shutdown();
+	}
 }
 
 // Synchronous Backend
@@ -305,6 +334,11 @@ std::tuple<zmqnet::Stream, zmqnet::ByteArray> zmqnet::SyncBackend::nextCommand()
 void zmqnet::SyncBackend::sendResult(zmqnet::Stream const& stream, char const* result_buffer, size_t result_len)
 {
 	Backend::sendResult(stream, result_buffer, result_len);
+}
+
+void zmqnet::SyncBackend::forceDisconnect()
+{
+	Backend::close();
 }
 
 // Asynchronous Backend

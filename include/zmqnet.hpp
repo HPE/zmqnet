@@ -56,6 +56,11 @@ namespace env
 	// If not set, the default value is 300 seconds.
 	constexpr auto STARTUP_TIMEOUT = "LIBZMQNET_STARTUP_TIMEOUT";
 
+	// Maximum amount of seconds to wait when trying to clean up the network.
+	// Backend processes will attempt to send pending messages up to this timeout before exiting.
+	// If not set, the default value is 10 seconds.
+	constexpr auto CLEANUP_TIMEOUT = "LIBZMQNET_CLEANUP_TIMEOUT";
+
 	// If set to a positive integer, zmqnet commnodes will sleep for n seconds when they start.
 	constexpr auto DEBUG_COMMNODE_STARTUP_SLEEP = "LIBZMQNET_DEBUG_COMMNODE_STARTUP_SLEEP";
 
@@ -286,15 +291,20 @@ protected: // derived class interface
 		// key has '~' prepended to prevent argument parsing issues
 		auto upstreamPubkey = std::string{argv[4] + (argv[4][0] == '~' ? 1 : 0)};
 
+		auto try_stoi = [](decltype(*argv) arg) {
+			try { return std::stoi(arg); }
+			catch (...) { throw std::runtime_error("Expected numeric argument: " + std::string{arg}); }
+		};
+
 		return std::make_tuple(
 			BackendParams
-				{ .authType = (zmqnet::Auth)std::stoi(argv[1])
+				{ .authType = (zmqnet::Auth)try_stoi(argv[1])
 				, .upstreamControlEndpoint = argv[2]
 				, .upstreamDataEndpoint = argv[3]
 				, .upstreamPublicKey = upstreamPubkey
-				, .node_id = std::stoi(argv[5])
-				, .rank_id = std::stoi(argv[6])
-				, .target_pid = std::stoi(argv[7])
+				, .node_id = try_stoi(argv[5])
+				, .rank_id = try_stoi(argv[6])
+				, .target_pid = try_stoi(argv[7])
 			},
 			argc - 8, // Rest of arguments count
 			argv + 8); // Rest of arguments array
@@ -309,6 +319,8 @@ protected: // derived class interface
 
 	int getRank() const;
 	pid_t getTargetPid() const;
+
+	void close();
 };
 
 class CallbackProcessorManager {
@@ -432,6 +444,11 @@ public: // interface
 	// Notify all Backend instances that the network should exit. Returns once all Backend instances
 	// have exited.
 	void runExit();
+
+	// Immediately disconnect from network with no guarantees about cleanup. Commnodes and
+	// leaf nodes might still be left running after this, but frontend communication
+	// channels with them will be cleaned up and the Frontend can be destroyed.
+	void forceDisconnect();
 
 private:
 
@@ -596,6 +613,9 @@ public: // interface
 	// Send result data up the communication tree on the given Stream to be aggregated by the
 	// Stream's filter function.
 	void sendResult(Stream const& stream, char const* result_buffer, size_t result_len);
+
+	// Immediately disconnect from network with no guarantees about cleanup.
+	void forceDisconnect();
 };
 
 // Asynchronous Backends register callbacks for each handled Stream that will be provided with

@@ -9,7 +9,7 @@
 # Use via "make -f Makefile.manual"
 
 CXX = g++
-CXXFLAGS = -g -O0 -Wl,-E -Wl,-rpath,$(LIBZMQNET_INSTALL_DIR)/lib -std=c++17 -I. -I.. -I../include -I../external/cppzmq -I../external/libzmq/include -I../external/capnproto/c++/src
+CXXFLAGS = -g -O0 -Wl,-E -Wl,-rpath,$(LIBZMQNET_INSTALL_DIR)/lib -std=c++17 -I. -I.. -I../include -I../../src -I../external/cppzmq -I../external/libzmq/include -I../external/capnproto/c++/src
 
 COMMON_TOOLS_FE_CFLAGS := $(shell pkg-config common_tools_fe --cflags)
 COMMON_TOOLS_FE_LIBS := $(shell pkg-config common_tools_fe --libs)
