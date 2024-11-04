@@ -28,7 +28,6 @@
 
 name: <NAME>
 version: <VERSION>
-release_date: <RELEASE_DATE>
 copyright: <COPYRIGHT>
 product_description: |
   - zmqnet is a library for creating a network tree between applications
@@ -39,8 +38,8 @@ product_dependencies:
  - cray-cti <cti_version_range> installed
  - cdst-support <cdst_version_range> installed
 os_dependencies:
- - HPE CSM systems with SLES 15 SP4
- - HPE HPCM systems with SLES 15 SP5 and RHEL 8.8
+ - HPE CSM systems with SLES 15 SP6
+ - HPE HPCM systems with SLES 15 SP4 - SP6 and RHEL 8.9 - 9.4
  - HPE Apollo systems with RHEL 8.8
 documentation: |
 installation_instructions: |
