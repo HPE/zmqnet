@@ -2,12 +2,12 @@
 # Copyright 2023-2024 Hewlett Packard Enterprise Development LP.
 
 major="1"
-minor="2"
+minor="3"
 revision="0"
 
 # Jenkins will override this
 build_number=""
 
 # libtool versioning
-current="3"
-age="2"
+current="4"
+age="3"

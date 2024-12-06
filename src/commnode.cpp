@@ -297,6 +297,268 @@ private:
 	std::vector<T> m_set;
 };
 
+
+// Runtime-selectable message synchronization implementations
+class Sync
+{
+protected: // types
+	using BitsetContentPair = std::pair<lrle_bitset, std::vector<zmqnet::ByteArray>>;
+
+protected: // members
+
+	// Track exited descendants
+	lrle_bitset exited_descendants;
+
+	// Synchronization implementations store the descendant bitset to determine if / when
+	// to eject messages for aggregation
+	unsigned char const* descendants_buf;
+	size_t descendants_len;
+
+protected: // inherited interface
+	Sync(unsigned char const* descendants_buf_, size_t descendants_len_)
+		: exited_descendants{}
+		, descendants_buf{descendants_buf_}
+		, descendants_len{descendants_len_}
+	{}
+
+public: // interface
+	virtual ~Sync() = default;
+
+	// Socket setup
+	virtual void init_socket(zmq::socket_t& socket) {}
+
+	// Return all stored messages and bitset of the source descendants. Resets state.
+	// Called for aggregation when all descendants have reported or exited
+	virtual BitsetContentPair eject() = 0;
+
+	// Return all stored messages and bitset of the source descendants. Does not reset state.
+	// Called in timeout handler for incoming message socket.
+	virtual BitsetContentPair timeout() = 0;
+
+	// Insert new content, reported by the descendants contained in bitset
+	virtual BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len,
+		zmqnet::ByteArray&& content) = 0;
+
+	// Track exited descendants
+	void update_exited(lrle_bitset const& new_exited_descendants)
+	{
+		exited_descendants |= new_exited_descendants;
+	}
+
+	bool all_descendants_exited()
+	{
+		return exited_descendants == lrle_bitset{descendants_buf, descendants_len};
+	}
+};
+
+// Immediate: messages are sent as soon as they are received
+class Sync_Immediate : public Sync
+{
+public: // interface
+	Sync_Immediate(unsigned char const* descendants_buf, size_t descendants_len)
+		: Sync{descendants_buf, descendants_len}
+	{}
+
+	// Immediate stores no messages, so it always ejects an empty content array
+	BitsetContentPair eject()	override { return BitsetContentPair{}; }
+	BitsetContentPair timeout() override { return BitsetContentPair{}; }
+
+	// Create and return a content array with one element, the new content
+	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& content) override
+	{
+		auto bitset = lrle_bitset{new_descendants_buf, new_descendants_len};
+		auto contents = std::vector<zmqnet::ByteArray>{};
+		if (content.size() > 0) {
+			contents.emplace_back(std::move(content));
+		}
+		return BitsetContentPair{std::move(bitset), std::move(contents)};
+	}
+};
+
+// WaitForAll: store all messages until one has been received from every descendant
+struct Sync_WaitForAll : public Sync
+{
+private: // members
+	// Track descendants from which a message has been received
+	lrle_bitset reported_descendants;
+
+	// Store all received content until ejected or received from all descentants
+	std::vector<zmqnet::ByteArray> content;
+
+public: // interface
+	Sync_WaitForAll(unsigned char const* descendants_buf, size_t descendants_len)
+		: Sync{descendants_buf, descendants_len}
+		, reported_descendants{}
+		, content{}
+	{}
+
+	// Eject all stored messages for aggregation
+	BitsetContentPair eject() override
+	{
+		auto bitset = std::move(reported_descendants);
+
+		// exited descendants are considered always accounted for in aggregation
+		bitset |= exited_descendants;
+
+		auto contents = std::move(content);
+
+		reported_descendants.clear();
+		content.clear();
+
+		return BitsetContentPair{std::move(bitset), std::move(contents)};
+	}
+
+	// WaitForAll only ejects messages when one is received from each descendant,
+	// ignore any requests for timeout
+	BitsetContentPair timeout() override { return BitsetContentPair{}; }
+
+	// Store the provided message, eject for aggregation if it was received from the last descendant
+	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& new_content) override
+	{
+		// Add content to in-progress result list
+		if (new_content.size() > 0) {
+			content.emplace_back(std::move(new_content));
+		}
+
+		// Add to reported descendants
+		reported_descendants.or_eq_buf(new_descendants_buf, new_descendants_len);
+
+		// exited descendants are considered always accounted for in aggregation
+		reported_descendants |= exited_descendants;
+
+		// Return for aggregation if all descendants have reported
+		if (reported_descendants.eq_buf(descendants_buf, descendants_len)) {
+			return eject();
+		}
+
+		return BitsetContentPair{};
+	}
+};
+
+// Timeout: store all messages until one has been received from every descendant, or until
+// `timeout` method is called (triggered by socket read timeout at the aggregation level)
+class Sync_Timeout : public Sync
+{
+	// Reported descendants may contain timed out descendants
+	lrle_bitset reported_descendants;
+	// Current descendants are those reported since the last timeout or full aggregation
+	lrle_bitset current_descendants;
+	// Both must be tracked for the case where half of the descendants time out, then the other
+	// half is received. Overall, messages have been received from all descendants, but the first
+	// half timed out and were ejected for aggregation.
+
+	std::vector<zmqnet::ByteArray> content;
+
+	int timeout_ms;
+
+public: // interface
+	Sync_Timeout(unsigned char const* descendants_buf, size_t descendants_len, int timeout_ms_)
+		: Sync{descendants_buf, descendants_len}
+		, reported_descendants{}
+		, current_descendants{}
+		, content{}
+		, timeout_ms{timeout_ms_}
+	{}
+
+	void init_socket(zmq::socket_t& socket) override
+	{
+		socket.set(zmq::sockopt::rcvtimeo, timeout_ms);
+	}
+
+	// Eject all stored messages for aggregation, clear all descendants
+	BitsetContentPair eject() override
+	{
+		auto bitset = std::move(current_descendants);
+		auto contents = std::move(content);
+
+		// exited descendants are considered always accounted for in aggregation
+		bitset |= exited_descendants;
+
+		reported_descendants.clear();
+		current_descendants.clear();
+		content.clear();
+
+		return BitsetContentPair{std::move(bitset), std::move(contents)};
+	}
+
+	// Eject all stored messages for aggregation, but keep track of timed-out descendants
+	BitsetContentPair timeout() override
+	{
+		auto bitset = std::move(current_descendants);
+		auto contents = std::move(content);
+
+		// exited descendants are considered always accounted for in aggregation
+		bitset |= exited_descendants;
+
+		current_descendants.clear();
+		content.clear();
+
+		return BitsetContentPair{std::move(bitset), std::move(contents)};
+	}
+
+	// Store the provided message, eject for aggregation if it was received from the last descendant
+	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& new_content) override
+	{
+		// Add content to in-progress result list
+		if (new_content.size() > 0) {
+			content.emplace_back(std::move(new_content));
+		}
+
+		// Add to reported and current descendants
+		current_descendants.or_eq_buf(new_descendants_buf, new_descendants_len);
+		current_descendants |= exited_descendants;
+		reported_descendants.or_eq_buf(new_descendants_buf, new_descendants_len);
+		reported_descendants |= exited_descendants;
+
+		// Return for aggregation if all descendants have reported
+		if (reported_descendants.eq_buf(descendants_buf, descendants_len)) {
+			return eject();
+		}
+
+		return BitsetContentPair{};
+	}
+};
+
+// TimeoutAfterLast: Timeout after the last message was received
+class Sync_TimeoutAfterLast : public Sync_Timeout
+{
+private: // members
+	int grace_ms;
+	int timeout_at;
+
+public: // interface
+	Sync_TimeoutAfterLast(unsigned char const* descendants_buf, size_t descendants_len, int grace_ms_)
+		: Sync_Timeout{descendants_buf, descendants_len, grace_ms_}
+		, grace_ms{grace_ms_}
+		, timeout_at{-1}
+	{}
+
+	BitsetContentPair timeout() override
+	{
+		if ((0 < timeout_at) && (timeout_at < get_milliseconds())) {
+			timeout_at = -1;
+			return Sync_Timeout::timeout();
+		}
+
+		return BitsetContentPair{};
+
+	}
+
+	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len,
+		zmqnet::ByteArray&& new_content) override
+	{
+		auto new_content_size = new_content.size();
+		auto result = Sync_Timeout::update(new_descendants_buf, new_descendants_len, std::move(new_content));
+
+		// Start applying timeout if not all messages received
+		if ((new_content_size > 0) && result.second.empty()) {
+			timeout_at = get_milliseconds() + grace_ms;
+		}
+
+		return result;
+	}
+};
+
 namespace workers {
 
 namespace endpts {
@@ -421,252 +683,6 @@ void handle_all_signals(zmq::context_t& ctx, std::atomic<bool>& exitFlag, Thread
 	log("handle_signals: returning!\n");
 }
 
-// Runtime-selectable message synchronization implementations
-namespace
-{
-
-class Sync
-{
-protected: // types
-	using BitsetContentPair = std::pair<lrle_bitset, std::vector<zmqnet::ByteArray>>;
-
-protected: // members
-
-	// Synchronization implementations store the descendant bitset to determine if / when
-	// to eject messages for aggregation
-	unsigned char const* descendants_buf;
-	size_t descendants_len;
-
-protected: // inherited interface
-	Sync(unsigned char const* descendants_buf_, size_t descendants_len_)
-		: descendants_buf{descendants_buf_}
-		, descendants_len{descendants_len_}
-	{}
-
-public: // interface
-	virtual ~Sync() = default;
-
-	// Return all stored messages and bitset of the source descendants. Resets state.
-	// Called for aggregation when all descendants have reported or exited
-	virtual BitsetContentPair eject() = 0;
-
-	// Return all stored messages and bitset of the source descendants. Does not reset state.
-	// Called in timeout handler for incoming message socket.
-	virtual BitsetContentPair timeout() = 0;
-
-	// Insert new content, reported by the descendants contained in bitset
-	virtual BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len,
-		zmqnet::ByteArray&& content) = 0;
-};
-
-// Immediate: messages are sent as soon as they are received
-class Sync_Immediate : public Sync
-{
-public: // interface
-	Sync_Immediate(unsigned char const* descendants_buf, size_t descendants_len)
-		: Sync{descendants_buf, descendants_len}
-	{}
-
-	// Immediate stores no messages, so it always ejects an empty content array
-	BitsetContentPair eject()	override { return BitsetContentPair{}; }
-	BitsetContentPair timeout() override { return BitsetContentPair{}; }
-
-	// Create and return a content array with one element, the new content
-	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& content) override
-	{
-		auto bitset = lrle_bitset{new_descendants_buf, new_descendants_len};
-		auto contents = std::vector<zmqnet::ByteArray>{};
-		if (content.size() > 0) {
-			contents.emplace_back(std::move(content));
-		}
-		return BitsetContentPair{std::move(bitset), std::move(contents)};
-	}
-};
-
-// WaitForAll: store all messages until one has been received from every descendant
-struct Sync_WaitForAll : public Sync
-{
-private: // members
-	// Reference to exited_descendants bitset updated by containing scope
-	lrle_bitset& exited_descendants;
-	// Track descendants from which a message has been received
-	lrle_bitset reported_descendants;
-
-	// Store all received content until ejected or received from all descentants
-	std::vector<zmqnet::ByteArray> content;
-
-public: // interface
-	Sync_WaitForAll(unsigned char const* descendants_buf, size_t descendants_len, lrle_bitset& exited)
-		: Sync{descendants_buf, descendants_len}
-		, exited_descendants{exited}
-		, reported_descendants{}
-		, content{}
-	{}
-
-	// Eject all stored messages for aggregation
-	BitsetContentPair eject() override
-	{
-		auto bitset = std::move(reported_descendants);
-
-		// exited descendants are considered always accounted for in aggregation
-		bitset |= exited_descendants;
-
-		auto contents = std::move(content);
-
-		reported_descendants.clear();
-		content.clear();
-
-		return BitsetContentPair{std::move(bitset), std::move(contents)};
-	}
-
-	// WaitForAll only ejects messages when one is received from each descendant,
-	// ignore any requests for timeout
-	BitsetContentPair timeout() override { return BitsetContentPair{}; }
-
-	// Store the provided message, eject for aggregation if it was received from the last descendant
-	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& new_content) override
-	{
-		// Add content to in-progress result list
-		if (new_content.size() > 0) {
-			content.emplace_back(std::move(new_content));
-		}
-
-		// Add to reported descendants
-		reported_descendants.or_eq_buf(new_descendants_buf, new_descendants_len);
-
-		// exited descendants are considered always accounted for in aggregation
-		reported_descendants |= exited_descendants;
-
-		// Return for aggregation if all descendants have reported
-		if (reported_descendants.eq_buf(descendants_buf, descendants_len)) {
-			return eject();
-		}
-
-		return BitsetContentPair{};
-	}
-};
-
-// Timeout: store all messages until one has been received from every descendant, or until
-// `timeout` method is called (triggered by socket read timeout at the aggregation level)
-class Sync_Timeout : public Sync
-{
-	// Reported descendants may contain timed out descendants
-	lrle_bitset reported_descendants;
-	// Current descendants are those reported since the last timeout or full aggregation
-	lrle_bitset current_descendants;
-	// Both must be tracked for the case where half of the descendants time out, then the other
-	// half is received. Overall, messages have been received from all descendants, but the first
-	// half timed out and were ejected for aggregation.
-
-	// Reference to exited_descendants bitset updated by containing scope
-	lrle_bitset& exited_descendants;
-
-	std::vector<zmqnet::ByteArray> content;
-
-public: // interface
-	Sync_Timeout(unsigned char const* descendants_buf, size_t descendants_len, lrle_bitset& exited)
-		: Sync{descendants_buf, descendants_len}
-		, reported_descendants{}
-		, current_descendants{}
-		, exited_descendants{exited}
-		, content{}
-	{}
-
-	// Eject all stored messages for aggregation, clear all descendants
-	BitsetContentPair eject() override
-	{
-		auto bitset = std::move(current_descendants);
-		auto contents = std::move(content);
-
-		// exited descendants are considered always accounted for in aggregation
-		bitset |= exited_descendants;
-
-		reported_descendants.clear();
-		current_descendants.clear();
-		content.clear();
-
-		return BitsetContentPair{std::move(bitset), std::move(contents)};
-	}
-
-	// Eject all stored messages for aggregation, but keep track of timed-out descendants
-	BitsetContentPair timeout() override
-	{
-		auto bitset = std::move(current_descendants);
-		auto contents = std::move(content);
-
-		// exited descendants are considered always accounted for in aggregation
-		bitset |= exited_descendants;
-
-		current_descendants.clear();
-		content.clear();
-
-		return BitsetContentPair{std::move(bitset), std::move(contents)};
-	}
-
-	// Store the provided message, eject for aggregation if it was received from the last descendant
-	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& new_content) override
-	{
-		// Add content to in-progress result list
-		if (new_content.size() > 0) {
-			content.emplace_back(std::move(new_content));
-		}
-
-		// Add to reported and current descendants
-		current_descendants.or_eq_buf(new_descendants_buf, new_descendants_len);
-		current_descendants |= exited_descendants;
-		reported_descendants.or_eq_buf(new_descendants_buf, new_descendants_len);
-		reported_descendants |= exited_descendants;
-
-		// Return for aggregation if all descendants have reported
-		if (reported_descendants.eq_buf(descendants_buf, descendants_len)) {
-			return eject();
-		}
-
-		return BitsetContentPair{};
-	}
-};
-
-// TimeoutAfterLast: Timeout after the last message was received
-class Sync_TimeoutAfterLast : public Sync_Timeout
-{
-private: // members
-	int grace_ms;
-	int timeout_at;
-
-public: // interface
-	Sync_TimeoutAfterLast(unsigned char const* descendants_buf, size_t descendants_len, lrle_bitset& exited, int grace_ms_)
-		: Sync_Timeout{descendants_buf, descendants_len, exited}
-		, grace_ms{grace_ms_}
-		, timeout_at{-1}
-	{}
-
-	BitsetContentPair timeout() override
-	{
-		if ((0 < timeout_at) && (timeout_at < get_milliseconds())) {
-			timeout_at = -1;
-			return Sync_Timeout::timeout();
-		}
-
-		return BitsetContentPair{};
-
-	}
-
-	BitsetContentPair update(unsigned char const* new_descendants_buf, size_t new_descendants_len, zmqnet::ByteArray&& new_content) override
-	{
-		auto new_content_size = new_content.size();
-		auto result = Sync_Timeout::update(new_descendants_buf, new_descendants_len, std::move(new_content));
-
-		// Start applying timeout if not all messages received
-		if ((new_content_size > 0) && result.second.empty()) {
-			timeout_at = get_milliseconds() + grace_ms;
-		}
-
-		return result;
-	}
-};
-
-} // anonymous namespace
-
 // Receive messages from upstream.control, intercept communicator commands,
 // and forward the rest to endpts::main_loop
 static zmq::socket_t upstream_source(zmq::context_t& ctx, zmq::socket_t&& input_socket, Descendants& descendants)
@@ -768,7 +784,7 @@ static zmq::socket_t upstream_source(zmq::context_t& ctx, zmq::socket_t&& input_
 // Process result messages; aggregate and send to local result socket
 static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 	zmqnet::Stream const& stream, std::string filterPath, std::string filterFunctionName,
-	lrle_bitset const& descendants_bitset, zmqnet::StreamSync const& streamSync)
+	lrle_bitset const& descendants_bitset, std::unique_ptr<Sync>&& synchronizer)
 {
 	int rc = -1;
 
@@ -779,6 +795,9 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 			stream.communicatorId, stream.id, taskEndpoint.c_str());
 		task_socket.bind(taskEndpoint);
 	}
+
+	// Run synchronizer-specific socket setup
+	synchronizer->init_socket(task_socket);
 
 	// Open result socket to send this stream's output to upstream proxy task
 	log("commnode %02x %d: connecting to task result %s\n",
@@ -822,40 +841,6 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 		});
 
 		net::send_MessageBuilder(result_socket, stream.communicatorId, builder);
-	}
-
-	auto exited_descendants = lrle_bitset{};
-
-	// Select synchronization implementation
-	auto synchronizer = std::unique_ptr<Sync>{};
-	{ auto const descendants_buf = descendants_bitset.compressed.data();
-		auto const descendants_len = descendants_bitset.compressed.size();
-
-		// Immediate processing
-		if (std::get_if<zmqnet::sync::Immediate>(&streamSync)) {
-			synchronizer = std::make_unique<Sync_Immediate>(descendants_buf, descendants_len);
-
-		// Wait for all descendants reporting
-		} else if (std::get_if<zmqnet::sync::WaitForAll>(&streamSync)) {
-			synchronizer = std::make_unique<Sync_WaitForAll>(descendants_buf, descendants_len, exited_descendants);
-
-		// Aggregate when all reported, or timeout hit
-		} else if (auto const timeout = std::get_if<zmqnet::sync::Timeout>(&streamSync)) {
-			synchronizer = std::make_unique<Sync_Timeout>(descendants_buf, descendants_len, exited_descendants);
-
-			// Apply timeout to socket
-			task_socket.set(zmq::sockopt::rcvtimeo, timeout->ms);
-
-		// Aggregate when all reported, or timeout hit after first message
-		} else if (auto const timeoutAfterLast = std::get_if<zmqnet::sync::TimeoutAfterLast>(&streamSync)) {
-			synchronizer = std::make_unique<Sync_TimeoutAfterLast>(descendants_buf, descendants_len, exited_descendants, timeoutAfterLast->grace);
-
-			// Apply timeout to socket
-			task_socket.set(zmq::sockopt::rcvtimeo, timeoutAfterLast->grace);
-
-		} else {
-			assert(false);
-		}
 	}
 
 	// Filter synchronization, aggregate and send results when all children have reported
@@ -905,7 +890,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 				// Add to exited descendants
 				{ auto const just_exited = response.getExit().getNodes().asBytes();
 					auto const just_exited_descendants = descendants_bitset.and_buf(just_exited.begin(), just_exited.size());
-					exited_descendants |= just_exited_descendants;
+					synchronizer->update_exited(just_exited_descendants);
 
 					// The removal of the child node might make synchronizer ready to send
 					auto [bitset, content] = synchronizer->update(
@@ -921,7 +906,7 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 				}
 
 				// Aggregate when all children have reported a result, or all descendants exit
-				if (exited_descendants == descendants_bitset) {
+				if (synchronizer->all_descendants_exited()) {
 					auto [bitset, content] = synchronizer->eject();
 					aggregate_and_send(std::move(bitset), std::move(content));
 
@@ -950,9 +935,6 @@ static int stream_aggregator(zmq::context_t& ctx, std::string resultEndpoint,
 
 		// Socket hit timeout, send any timed-out synchronizer contents
 		} else {
-			assert(std::get_if<zmqnet::sync::Timeout>(&streamSync)
-			    || std::get_if<zmqnet::sync::TimeoutAfterLast>(&streamSync));
-
 			log("commnode %02x %d: hit timeout, calling synch timeout\n",
 				stream.communicatorId, stream.id);
 
@@ -1649,33 +1631,49 @@ int main(int argc, char* const argv[])
 				stream.id, stream.communicatorId);
 			log("got filter: %s::%s\n", std::string{filterLibraryName}.c_str(), std::string{filterFunctionName}.c_str());
 
-			// Reconstitute stream sync setting
-			auto streamSync = zmqnet::StreamSync{};
-			if (newStreamCommand.getSync().isImmediate()) {
-				streamSync = zmqnet::sync::Immediate{};
-			} else if (newStreamCommand.getSync().isWaitForAll()) {
-				streamSync = zmqnet::sync::WaitForAll{};
-			} else if (newStreamCommand.getSync().isTimeout()) {
-				streamSync = zmqnet::sync::Timeout{ .ms = newStreamCommand.getSync().getTimeout() };
-			} else if (newStreamCommand.getSync().isTimeoutAfterLast()) {
-				streamSync = zmqnet::sync::TimeoutAfterLast { .grace = newStreamCommand.getSync().getTimeoutAfterLast() };
-			} else {
-				assert(false);
+			auto& descendants_bitset = descendants.at(stream.communicatorId);
+
+			// Select synchronization implementation
+			auto synchronizer = std::unique_ptr<Sync>{};
+			{ auto const descendants_buf = descendants_bitset.compressed.data();
+				auto const descendants_len = descendants_bitset.compressed.size();
+
+				// Immediate processing
+				if (newStreamCommand.getSync().isImmediate()) {
+					synchronizer = std::make_unique<Sync_Immediate>(descendants_buf, descendants_len);
+
+				// Wait for all descendants reporting
+				} else if (newStreamCommand.getSync().isWaitForAll()) {
+					synchronizer = std::make_unique<Sync_WaitForAll>(descendants_buf, descendants_len);
+
+				// Aggregate when all reported, or timeout hit
+				} else if (newStreamCommand.getSync().isTimeout()) {
+					synchronizer = std::make_unique<Sync_Timeout>(descendants_buf, descendants_len,
+						newStreamCommand.getSync().getTimeout());
+
+				// Aggregate when all reported, or timeout hit after first message
+				} else if (newStreamCommand.getSync().isTimeoutAfterLast()) {
+					synchronizer = std::make_unique<Sync_TimeoutAfterLast>(descendants_buf, descendants_len,
+						newStreamCommand.getSync().getTimeoutAfterLast());
+
+				} else {
+					throw std::runtime_error("Unhandled sync type");
+				}
 			}
 
 			// Create new stream task worker
 			streamAggregatorTasks.emplace_back(
 				[](zmq::context_t& ctx, std::string resultEndpoint,
 					zmqnet::Stream stream, std::string filterPath, std::string filterFunctionName,
-					lrle_bitset descendants_bitset, zmqnet::StreamSync streamSync) {
+					lrle_bitset descendants_bitset, std::unique_ptr<Sync>&& synchronizer) {
 
 					(void)workers::stream_aggregator(ctx, std::move(resultEndpoint),
 						stream, std::move(filterPath), std::move(filterFunctionName),
-						std::move(descendants_bitset), std::move(streamSync));
+						std::move(descendants_bitset), std::move(synchronizer));
 
 				}, std::ref(ctx), workers::endpts::upstream_sink,
 					stream, filterBasePath + "/" + std::string{filterLibraryName}, std::string{filterFunctionName},
-					descendants.at(stream.communicatorId), streamSync);
+					descendants_bitset, std::move(synchronizer));
 
 			// Relay to children
 			net::send_MessageReader(downstream.control_socket, std::move(reader));

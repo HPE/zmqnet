@@ -422,32 +422,120 @@ void zmqnet::AsyncFrontend::registerStreamCallback(Stream::Id const& streamId, z
 		}, std::ref(m_ctx), stream, std::move(callbackFunc)));
 }
 
-zmqnet::Stream zmqnet::AsyncFrontend::registerStream(Communicator const& communicator, Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
-	zmqnet::StreamSync const& streamSync)
+template <typename SB>
+static void set_stream_command(SB& sb, zmqnet::sync::Immediate const&)
+{
+	sb.setImmediate();
+}
+
+template <typename SB>
+static void set_stream_command(SB& sb, zmqnet::sync::WaitForAll const&)
+{
+	sb.setWaitForAll();
+}
+
+template <typename SB>
+static void set_stream_command(SB& sb, zmqnet::sync::Timeout const& timeout)
+{
+	sb.setTimeout(timeout.ms);
+}
+
+template <typename SB>
+static void set_stream_command(SB& sb, zmqnet::sync::TimeoutAfterLast const& timeoutAfterLast)
+{
+	sb.setTimeoutAfterLast(timeoutAfterLast.grace);
+}
+
+template <typename CallbackProcessors, typename BlockingRegistrations, typename SyncOption>
+static auto register_stream(CallbackProcessors& callbackProcessors, BlockingRegistrations& blocking_registration,
+	zmq::socket_t& control_socket,
+	zmqnet::Communicator const& communicator,
+	zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName,
+	std::string const& filterFunctionName, SyncOption const& syncOption)
 {
 	// Ensure stream callback registered
-	if (m_callbackProcessors.find(streamId) == m_callbackProcessors.end()) {
+	if (callbackProcessors.find(streamId) == callbackProcessors.end()) {
 		throw std::runtime_error("asynchronous callback not registered for stream ID " + std::to_string(streamId));
 	}
 
 	// Lock blocking registration flag shared with distributor task
 	log("starting stream %d registration\n", streamId);
-	auto registration_lock = m_blocking_registration->acquire_lock();
+	auto registration_lock = blocking_registration->acquire_lock();
 
 	// Set registration flag
-	assert(m_blocking_registration->get(registration_lock) == false);
-	m_blocking_registration->set(registration_lock, true);
+	assert(blocking_registration->get(registration_lock) == false);
+	blocking_registration->set(registration_lock, true);
+
+	// Create stream create command message
+	auto builder = capnp::MallocMessageBuilder{};
+	auto streamCommand = builder.initRoot<NetworkCommand>().initStream();
+	streamCommand.setStreamId(streamId);
+	streamCommand.setFilterLibraryName(filterLibraryName);
+	streamCommand.setFilterFunctionName(filterFunctionName);
+
+	// Set synchronization type
+	auto sb = streamCommand.initSync();
+	set_stream_command(sb, syncOption);
 
 	// Send filter create command
-	auto const result = createStream(communicator, streamId, filterLibraryName, filterFunctionName, streamSync);
+	log("registering stream %d filter %s function %s with comm id %d\n", streamId, filterLibraryName.c_str(), filterFunctionName.c_str(), communicator.id);
+	net::send_MessageBuilder(control_socket, communicator.id, builder);
 
 	// Wait for distributor to clear registration flag (registration flag is unlocked during wait)
 	log("waiting for stream %d registration to complete\n", streamId);
-	m_blocking_registration->unlock_and_wait_until(std::move(registration_lock), false);
+	blocking_registration->unlock_and_wait_until(std::move(registration_lock), false);
 	log("stream %d registration completed\n", streamId);
 
 	// Return new stream handle
-	return result;
+	return zmqnet::Stream { .communicatorId = communicator.id, .id = streamId };
+}
+
+zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Communicator const& communicator,
+		zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName,
+		std::string const& filterFunctionName, zmqnet::sync::Immediate const& immediate)
+{
+	return register_stream(m_callbackProcessors, m_blocking_registration, m_controlSocket,
+		communicator, streamId, filterLibraryName, filterFunctionName, immediate);
+}
+
+zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Communicator const& communicator,
+		zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName,
+		std::string const& filterFunctionName, zmqnet::sync::WaitForAll const& waitForAll)
+{
+	return register_stream(m_callbackProcessors, m_blocking_registration, m_controlSocket,
+		communicator, streamId, filterLibraryName, filterFunctionName, waitForAll);
+}
+
+zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Communicator const& communicator,
+		zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName,
+		std::string const& filterFunctionName, zmqnet::sync::Timeout const& timeout)
+{
+	return register_stream(m_callbackProcessors, m_blocking_registration, m_controlSocket,
+		communicator, streamId, filterLibraryName, filterFunctionName, timeout);
+}
+
+zmqnet::Stream zmqnet::AsyncFrontend::registerStream(zmqnet::Communicator const& communicator,
+		zmqnet::Stream::Id const& streamId, std::string const& filterLibraryName,
+		std::string const& filterFunctionName, zmqnet::sync::TimeoutAfterLast const& timeoutAfterLast)
+{
+	return register_stream(m_callbackProcessors, m_blocking_registration, m_controlSocket,
+		communicator, streamId, filterLibraryName, filterFunctionName, timeoutAfterLast);
+}
+
+zmqnet::Stream zmqnet::AsyncFrontend::registerStream(Communicator const& communicator,
+	Stream::Id const& streamId, std::string const& filterLibraryName, std::string const& filterFunctionName,
+	zmqnet::StreamSync const& streamSync)
+{
+	// Get synchronization type
+	if (auto immediate = std::get_if<sync::Immediate>(&streamSync)) {
+		return registerStream(communicator, streamId, filterLibraryName, filterFunctionName, *immediate);
+	} else if (auto wait = std::get_if<sync::WaitForAll>(&streamSync)) {
+		return registerStream(communicator, streamId, filterLibraryName, filterFunctionName, *wait);
+	} else if (auto timeout = std::get_if<sync::Timeout>(&streamSync)) {
+		return registerStream(communicator, streamId, filterLibraryName, filterFunctionName, *timeout);
+	} else {
+		throw std::logic_error("Invalid variant value in (deprecated) zmqnet::AsyncFrontend::registerStream: " + std::to_string(streamSync.index()));
+	}
 }
 
 void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, char const* command_buffer, size_t command_len)
@@ -469,18 +557,6 @@ void zmqnet::AsyncFrontend::sendCommand(zmqnet::Stream const& stream, std::strin
 zmqnet::Communicator zmqnet::AsyncFrontend::createCommunicator(const RankSet& ranks) {
 	// forward to generic impl in zmqnet::Frontend
 	return Frontend::createCommunicator(m_controlSocket, ranks);
-}
-
-zmqnet::Stream zmqnet::AsyncFrontend::createStream(
-	Communicator const& communicator, Stream::Id const& streamId,
-	std::string const& filterLibraryName, std::string const& filterFunctionName,
-	zmqnet::StreamSync const& streamSync)
-{
-	// forward to generic impl in zmqnet::Frontend
-	return Frontend::createStream(
-		m_controlSocket, communicator, streamId,
-		filterLibraryName, filterFunctionName, streamSync
-	);
 }
 
 void zmqnet::AsyncFrontend::sendExit() {

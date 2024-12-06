@@ -158,7 +158,8 @@ struct TimeoutAfterLast
 
 } // sync
 
-using StreamSync = std::variant<sync::Immediate, sync::WaitForAll, sync::Timeout, sync::TimeoutAfterLast>;
+// Deprecated: adding new options to the variant breaks API. Usage will report a deprecation warning.
+using StreamSync = std::variant<sync::Immediate, sync::WaitForAll, sync::Timeout>;
 
 // Events that a callback can be hooked to
 enum class Event : size_t {
@@ -242,10 +243,6 @@ protected: // derived class interface
 	// Derived classes specialize these low-level network operations
 	Communicator createCommunicator(zmq::socket_t& sender, NodeSet const& nodes);
 	Communicator createCommunicator(zmq::socket_t& sender, const RankSet &ranks);
-	static Stream createStream(zmq::socket_t& sender,
-		Communicator const& communicator, Stream::Id const& streamId,
-		std::string const& filterLibraryName, std::string const& filterFunctionName,
-		zmqnet::StreamSync const& streamSync);
 
 	static void sendCommand(
 		zmq::socket_t& sender, Stream const& stream, char const* command_buffer, size_t command_len);
@@ -409,7 +406,20 @@ public: // interface
 	// Provide a filter library and filter function name.
 	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
 		std::string const& filterLibraryName, std::string const& filterFunctionName,
-		StreamSync const& streamSync);
+		sync::Immediate const& immediate);
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		sync::WaitForAll const& waitForAll);
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		sync::Timeout const& timeout);
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		sync::TimeoutAfterLast const& timeoutAfterLast);
+	[[deprecated("Use registerStream variants instead")]]
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		zmqnet::StreamSync const& streamSync);
 
 	// Once a Stream is created, send commands by providing a buffer of command data.
 	// Results from the Backend instances are aggregated according to the filter function
@@ -454,9 +464,7 @@ private:
 
 	// specializations of generic methods in detail::Frontend
 	Communicator createCommunicator(const RankSet& ranks);
-	Stream createStream(Communicator const& communicator, Stream::Id const& streamId,
-		std::string const& filterLibraryName, std::string const& filterFunctionName,
-		zmqnet::StreamSync const& streamSync);
+
 	void sendExit();
 };
 
@@ -488,9 +496,7 @@ private: // members
 
 	// specializations of generic methods in detail::Frontend
 	Communicator createCommunicator(const RankSet& ranks);
-	Stream createStream(Communicator const& communicator, Stream::Id const& streamId,
-		std::string const& filterLibraryName, std::string const& filterFunctionName,
-		zmqnet::StreamSync const& streamSync);
+
 	void sendExit();
 
 public: // interface
@@ -516,6 +522,19 @@ public: // interface
 
 	// Create a new stream in the provided communicator. Stream IDs are determined by the user.
 	// Provide a filter library and filter function name.
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		sync::Immediate const& immediate);
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		sync::WaitForAll const& waitForAll);
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		sync::Timeout const& timeout);
+	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
+		std::string const& filterLibraryName, std::string const& filterFunctionName,
+		sync::TimeoutAfterLast const& timeoutAfterLast);
+	[[deprecated("Use registerStream variants instead")]]
 	Stream registerStream(Communicator const& communicator, Stream::Id const& streamId,
 		std::string const& filterLibraryName, std::string const& filterFunctionName,
 		zmqnet::StreamSync const& streamSync);
