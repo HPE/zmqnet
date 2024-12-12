@@ -184,7 +184,7 @@ public:
 		} else if constexpr (e == Event::LeafExit) {
 			m_uponLeafExit = fn;
 		} else {
-			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
+			static_assert(UserCallbacks::alwaysFalse<Event>, "Invalid event");
 		}
 	};
 
@@ -197,7 +197,7 @@ public:
 			if (m_uponLeafExit)
 				m_uponLeafExit(std::forward<Args>(args)...);
 		} else {
-			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
+			static_assert(UserCallbacks::alwaysFalse<Event>, "Invalid event");
 		}
 	}
 
@@ -208,7 +208,7 @@ public:
 		} else if constexpr (e == Event::LeafExit) {
 			m_uponLeafExit = nullptr;
 		} else {
-			static_assert(UserCallbacks::alwaysFalse<e>, "Invalid event");
+			static_assert(UserCallbacks::alwaysFalse<Event>, "Invalid event");
 		}
 	}
 private:
