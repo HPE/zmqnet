@@ -3,7 +3,7 @@
 
 major="1"
 minor="3"
-revision="0"
+revision="1"
 
 # Jenkins will override this
 build_number=""
