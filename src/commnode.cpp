@@ -1471,6 +1471,8 @@ int main(int argc, char* const argv[])
 					*pid_arg_ptr = (char*)pidString.c_str();
 				}
 
+				unblockAllSignals();
+
 				// Exec leaf binary
 				execvp(leafPath.c_str(), complete_leaf_argv);
 				perror("execvp");
