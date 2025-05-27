@@ -55,10 +55,6 @@
 %global cti_pkgversion_min %(%{_sourcedir}/get_package_data --ctiversionmin)
 %global cti_pkgversion_max %(%{_sourcedir}/get_package_data --ctiversionmax)
 
-# cdst-support version
-%global cdst_support_pkgversion_min %(%{_sourcedir}/get_package_data --cdstversionmin)
-%global cdst_support_pkgversion_max %(%{_sourcedir}/get_package_data --cdstversionmax)
-
 # Disable debug package
 %global debug_package %{nil}
 
@@ -132,7 +128,7 @@ License:    HPE Proprietary
 Vendor:     Hewlett Packard Enterprise Development LP
 Group:      Development/Tools/Debuggers
 Provides:   %{cray_name} = %{pkgversion}
-Requires:   set_default_3, cray-cdst-support >= %{cdst_support_pkgversion_min}, cray-cdst-support < %{cdst_support_pkgversion_max}, cray-cti >= %{cti_pkgversion_min}, cray-cti < %{cti_pkgversion_max}
+Requires:   set_default_3, cray-cti >= %{cti_pkgversion_min}, cray-cti < %{cti_pkgversion_max}
 Source0:    %{module_template_name}
 Source1:    %{devel_module_template_name}
 Source4:    %{release_notes_file}

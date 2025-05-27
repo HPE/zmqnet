@@ -16,9 +16,6 @@ source ./external/cdst_build_library/build_lib
 setup_modules
 
 # Load dependencies to encode required versions
-module load cray-cdst-support
-check_exit_status
-
 module load cray-cti-devel
 check_exit_status
 

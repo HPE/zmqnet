@@ -19,9 +19,6 @@ fi
 
 setup_modules
 
-module load cray-cdst-support
-check_exit_status
-
 module load cray-cti-devel
 check_exit_status
 
