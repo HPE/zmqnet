@@ -1,0 +1,12 @@
+[wrap-git]
+directory = capnproto
+url = https://github.com/capnproto/capnproto.git
+revision = 0c9fabb2da55733d7c52d4318d05e24e2bffacaa
+depth = 1
+patch_directory = capnproto
+diff_files = capnproto/hpe.patch
+
+[provide]
+capnp = capnp_dep
+capnp-rpc = capnp_rpc_dep
+kj = kj_dep

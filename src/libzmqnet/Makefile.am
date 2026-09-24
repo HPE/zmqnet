@@ -4,7 +4,7 @@ SRC = $(top_srcdir)/src
 AM_CPPFLAGS = -I$(SRC) -I$(top_srcdir)/include -I$(prefix)/include
 
 NetworkSchema.capnp.c++: NetworkSchema.capnp
-	PATH=$(prefix)/support/bin:$(PATH) capnp compile -oc++ NetworkSchema.capnp
+	PATH=$(prefix)/support/bin:$(prefix)/bin:$(PATH) capnp compile -oc++ NetworkSchema.capnp
 
 BUILT_SOURCES = NetworkSchema.capnp.c++
 

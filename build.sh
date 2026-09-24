@@ -1,5 +1,6 @@
 #!/bin/bash
-
+# This file is part of the the HPE build pipeline that is required to stay
+# in the top level directory.
 set -e
 
 export PRODUCT=${PRODUCT:-pe-base}
@@ -8,6 +9,13 @@ export LOCAL_BUILD="yes"
 
 echo -e -n "Running as: "
 id
+
+unhead_git() {
+    if ! git symbolic-ref -q HEAD >/dev/null; then
+	echo "building in detached head - creating temporary branch"
+	git switch -c check-build
+    fi
+}
 
 setup_env() {
   if [[ -z ${VIRTUAL_ENV} ]] && [[ ! -d dstlibvenv ]]; then
@@ -35,6 +43,7 @@ build() {
   set -x
   # Note BUILD_METADATA will be available inside the container since BUILD_METADATA is include in the env_vars file
   export BUILD_METADATA=$(dst-common get-build-metadata)
+
   export DEFAULT_BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
 
   #   LOCAL_BUILD is either "yes" or empty
@@ -72,6 +81,7 @@ EOF
 }
 
 main() {
+  unhead_git
   setup_env
   build 
 }

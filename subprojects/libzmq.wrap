@@ -1,0 +1,12 @@
+[wrap-git]
+directory = libzmq
+url = https://github.com/zeromq/libzmq.git
+revision = v4.3.5
+depth = 1
+patch_directory = libzmq
+diff_files = libzmq/hpe.patch
+
+[provide]
+libzmq = libzmq_dep
+
+

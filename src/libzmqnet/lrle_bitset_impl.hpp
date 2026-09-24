@@ -10,7 +10,7 @@
 
 // For a description of the LRLE bitset implementation, see
 // https://connect.us.cray.com/confluence/display/DTOOLS/Rank+Bitset+Representations#RankBitsetRepresentations-2.LimitedRunLengthEncoding
-#include "lrle_bitset.h"
+#include "lrle/lrle_bitset.h"
 
 struct lrle_bitset
 {

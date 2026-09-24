@@ -1,0 +1,19 @@
+diff --git a/c++/src/kj/array.h b/c++/src/kj/array.h
+index ff6e7cc8..2048da2a 100644
+--- a/c++/src/kj/array.h
++++ b/c++/src/kj/array.h
+@@ -219,6 +219,14 @@ public:
+     size_ = 0;
+     return result;
+   }
++  inline Array<PropagateConst<T, byte>> forceReleaseAsBytes() {
++    // like releaseAsBytes, but does no checking that the elements are byte-size.
++    Array<PropagateConst<T, byte>> result(
++        reinterpret_cast<PropagateConst<T, byte>*>(ptr), size_ * sizeof(T), *disposer);
++    ptr = nullptr;
++    size_ = 0;
++    return result;
++  }
+ 
+   inline bool operator==(decltype(nullptr)) const { return size_ == 0; }
+   inline bool operator!=(decltype(nullptr)) const { return size_ != 0; }

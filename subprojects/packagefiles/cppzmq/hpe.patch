@@ -1,0 +1,16 @@
+diff --git a/libzmq-pkg-config/FindZeroMQ.cmake b/libzmq-pkg-config/FindZeroMQ.cmake
+index 1b84c95..2540f7a 100644
+--- a/libzmq-pkg-config/FindZeroMQ.cmake
++++ b/libzmq-pkg-config/FindZeroMQ.cmake
+@@ -3,9 +3,9 @@ find_package(PkgConfig)
+ pkg_check_modules(PC_LIBZMQ QUIET libzmq)
+ 
+ set(ZeroMQ_VERSION ${PC_LIBZMQ_VERSION})
+-find_library(ZeroMQ_LIBRARY NAMES libzmq.so libzmq.dylib libzmq.dll
++find_library(ZeroMQ_LIBRARY NAMES libzmqnet_libzmq.so libzmq.so libzmq.dylib libzmq.dll
+              PATHS ${PC_LIBZMQ_LIBDIR} ${PC_LIBZMQ_LIBRARY_DIRS})
+-find_library(ZeroMQ_STATIC_LIBRARY NAMES libzmq-static.a libzmq.a libzmq.dll.a
++find_library(ZeroMQ_STATIC_LIBRARY NAMES libzmqnet_libzmq.a libzmq-static.a libzmq.a libzmq.dll.a
+              PATHS ${PC_LIBZMQ_LIBDIR} ${PC_LIBZMQ_LIBRARY_DIRS})
+ 
+ if(ZeroMQ_LIBRARY OR ZeroMQ_STATIC_LIBRARY)

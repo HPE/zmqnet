@@ -1,40 +1,25 @@
 [submodule "external/cdst_build_library"]
-	path = external/cdst_build_library
+	path = hpe/external/cdst_build_library
 	url = git@github.hpe.com:hpcde/cdst-cdst-build-library.git
-	branch = master
-[submodule "external/lrle_bitset"]
-	path = external/lrle_bitset
-	url = git@github.hpe.com:hpcde/cdst-lrle-bitset.git
 	branch = master
 [submodule "tests/cdst-test"]
 	path = tests/function/cdst-test
 	url = git@github.hpe.com:hpcde/cdst-cdst-test.git
 	branch = master
 [submodule "rpmbuild/SOURCES/set_default"]
-	path = rpmbuild/SOURCES/set_default
+	path = hpe/rpmbuild/SOURCES/set_default
 	url = git@github.hpe.com:hpcde/cdeux-set-default.git
 	branch = master
-[submodule "external/capnproto"]
-	path = external/capnproto
-	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-capnproto.git
-	branch = hpe
-[submodule "external/cppzmq"]
-	path = external/cppzmq
-	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-zeromq-cppzmq.git
-	branch = hpe
-[submodule "external/libzmq"]
-	path = external/libzmq
-	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-zeromq-libzmq.git
-	branch = hpe
-[submodule "external/changelog"]
-	path = external/changelog
-	url = git@github.hpe.com:hpcde/devops-changelog.git
-	branch = master
 [submodule "tests/support/googletest"]
-	path = tests/support/googletest
+	path = hpe/external/googletest
 	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-google-googletest.git
 	branch = hpe
-[submodule "external/libsodium"]
-	path = external/libsodium
-	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-jedisct1-libsodium.git
-	branch = hpe
+[submodule "hpe/external/libzmq"]
+	path = hpe/external/libzmq
+	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-zeromq-libzmq.git
+[submodule "hpe/external/cppzmq"]
+	path = hpe/external/cppzmq
+	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-zeromq-cppzmq.git
+[submodule "hpe/external/capnproto"]
+	path = hpe/external/capnproto
+	url = git@github.hpe.com:hpcde/hpc-cdst-mirror-github-capnproto.git

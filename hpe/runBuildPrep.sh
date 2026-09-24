@@ -11,7 +11,9 @@
 # in any form.
 #
 
-source ./external/cdst_build_library/build_lib
+# directory of this script
+hpe="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+source "$hpe/external/cdst_build_library/build_lib"
 
 echo "############################################"
 echo "#          Install dependencies            #"
@@ -21,8 +23,6 @@ target_pm=$(get_pm)
 if [[ "$target_pm" == "$cdst_pm_zypper" ]]; then
     zypper --non-interactive install \
         environment-modules \
-        autoconf \
-        automake \
         libtool \
         binutils \
         gcc \
@@ -30,23 +30,26 @@ if [[ "$target_pm" == "$cdst_pm_zypper" ]]; then
         make \
         cmake \
         libuuid-devel \
+        meson \
         openssl-devel \
         python3-pip \
+        python311 \
         rpm-build \
         libsodium-devel
     check_exit_status
 elif [[ "$target_pm" == "$cdst_pm_yum" ]]; then
     yum --assumeyes install \
         environment-modules \
-        autoconf \
-        automake \
         libtool \
         make \
         cmake \
         libuuid-devel \
+        meson \
         openssl-devel \
+        pandoc \
         python3-pip \
         rpm-build \
+        python3.11 \
         wget \
         libsodium-devel
     check_exit_status
@@ -57,6 +60,19 @@ check_exit_status
 
 install_cti
 check_exit_status
+
+echo "############################################"
+echo "#          Ensuring build system           #"
+echo "############################################"
+
+# meson requires python 3.7 or newer
+python3.11 -m ensurepip --upgrade
+check_exit_status
+
+#python3.11 -m pip install meson ninja --trusted-host https://arti.hpc.amslabs.hpecorp.net \
+#      --extra-index-url https://arti.hpc.amslabs.hpecorp.net:443/artifactory/api/pypi/dst-pip-master-local/simple \
+#      --index-url https://arti.hpc.amslabs.hpecorp.net:443/artifactory/api/pypi/pypi-remote/simple
+#check_exit_status
 
 capture_jenkins_build
 check_exit_status

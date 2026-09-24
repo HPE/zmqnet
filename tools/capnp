@@ -1,0 +1,19 @@
+#!/bin/bash
+# Build-time shim so find_program() can resolve capnp at configure time, before
+# the capnproto subproject has produced the real binary. CAPNP_REAL is injected
+# by the custom_target that invokes this.
+set -euo pipefail
+
+if [[ -n "${CAPNP_REAL:-}" ]]; then
+    if [[ ! -x "$CAPNP_REAL" ]]; then
+        echo "capnp wrapper: $CAPNP_REAL missing or not executable" >&2
+        exit 1
+    fi
+    if [[ -n "${CAPNP_LIBDIR:-}" ]]; then
+        export LD_LIBRARY_PATH="$CAPNP_LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+    export PATH=$(dirname "$CAPNP_REAL"):$PATH
+    exec "$CAPNP_REAL" "$@"
+fi
+
+exec capnp "$@"

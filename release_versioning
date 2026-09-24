@@ -2,12 +2,16 @@
 # Copyright 2023-2024 Hewlett Packard Enterprise Development LP.
 
 major="1"
-minor="3"
-revision="3"
+minor="4"
+revision="0"
 
-# Jenkins will override this
-build_number=""
+if [ -f $(dirname -- "${BASH_SOURCE[0]}")/build_number ]; then
+   source $(dirname -- "${BASH_SOURCE[0]}")/build_number
+fi
 
 # libtool versioning
-current="4"
-age="3"
+current="5"
+age="0"
+
+# Jenkins will override this
+build_number="0"

@@ -13,6 +13,7 @@
 #include <filesystem>
 
 #include <cstdlib>
+#include <dlfcn.h>
 
 #include "lrle_bitset_impl.hpp"
 
@@ -23,6 +24,8 @@
 
 // Internal helpers and classes
 #include "libzmqnet.hpp"
+
+extern "C" std::filesystem::path zmqnet_get_libexec_dir();
 
 // Launch strategies' implementations
 namespace launch
@@ -458,8 +461,8 @@ zmqnet::detail::Frontend::Frontend(int const app_id, long int const session_id, 
 	auto const start_ms = get_milliseconds();
 
 	// Find commnode path
-	auto const commnodePath = get_zmqnet_install_root() / "libexec/commnode";
-	
+	auto const commnodePath = zmqnet_get_libexec_dir() / "commnode";
+
 	log("launching commnode: %s\n", commnodePath.c_str());
 
 	// Fetch node layout from CTI for network topology
@@ -1071,4 +1074,54 @@ void zmqnet::SyncFrontend::forceDisconnect()
 	m_ctx.shutdown();
 
 	log("forced exit completed\n");
+}
+
+// return the full path to the root of the zmqnet installation.
+// if zmqnet::env::INSTALL_DIR is set, returns that path.
+//
+// the function will check that the path it found exists and is a directory. if
+// not, it will fail.
+//
+// throws on failure.
+extern "C" std::filesystem::path zmqnet_get_libexec_dir() {
+	if (auto install_dir_env = std::getenv(zmqnet::env::INSTALL_DIR)) {
+		auto libexec_dir = std::filesystem::path{install_dir_env} / "libexec";
+		if (std::filesystem::is_directory(libexec_dir)) {
+			return libexec_dir;
+		} else {
+			throw std::runtime_error(
+				std::string{"Failed to find zmqnet installation root. "} +
+				zmqnet::env::INSTALL_DIR + " is set to \"" + install_dir_env + "\", " +
+				"but it doesn't contain a libexec directory."
+			);
+		}
+	}
+
+	// dynamically look it up based on the location of libzmqnet.so on disk
+	Dl_info info;
+
+	// reinterpret cast required here because c++ doesn't let you cast function pointers
+	// for fear of you accidentally calling it with the wrong signature later. we're just
+	// giving and address to dladdr though, so it's fine here.
+	if (::dladdr(reinterpret_cast<void*>(zmqnet_get_libexec_dir), &info) && info.dli_fname) {
+		// expecting either prefix/zmqnet/version/lib/libzqnet.so or
+		// prefix/lib/zmqnet/libzmqnet.so
+		// in either case, I can assume libexec is using a parallel structure
+
+		// filesystem doesn't have a good way to replace the last instance of a
+		// component, the prefix probably doesn't have "/lib/" in it, but why leave
+		// a possible bug...
+		auto f = std::string{info.dli_fname};
+		if (auto loc = f.rfind("/lib/"); loc != std::string::npos) {
+			f.replace(loc,4,"/libexec");
+			auto libexec_path = std::filesystem::path{f}.parent_path();
+			if (std::filesystem::is_directory(libexec_path)) {
+				return libexec_path;
+			}
+		}
+		log("failed to find zmqnet installation root from .so: %s\n", info.dli_fname);
+		// let below error inform the user
+	}
+
+	throw std::runtime_error("Failed to find zmqnet installation root. Try `module load cray-zmqnet`.");
 }

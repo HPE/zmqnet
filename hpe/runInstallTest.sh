@@ -11,11 +11,14 @@
 # used, reproduced or disclosed in any form.
 #
 
-top_level=$PWD
+# directory of this script
+hpe="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+top_level="$hpe/.."
 
-source ./external/cdst_build_library/build_lib
+source "$hpe/external/cdst_build_library/build_lib"
 
-source $top_level/release_versioning
+source "$top_level/release_versioning"
+
 zmqnet_version=
 branch_name=$(get_branch_info)
 branch_type=$(echo "$branch_name" | cut -d'/' -f1)
@@ -38,10 +41,10 @@ echo "############################################"
 arch=$(uname -m)
 target_pm=$(get_pm)
 if [[ "$target_pm" == "$cdst_pm_zypper" ]]; then
-  sudo zypper --non-interactive --no-gpg-checks install $PWD/rpmbuild/RPMS/$arch/*.rpm
+  sudo zypper --non-interactive --no-gpg-checks install "$hpe/rpmbuild/RPMS/$arch"/*.rpm
   check_exit_status 
 elif [[ "$target_pm" == "$cdst_pm_yum" ]]; then
-  sudo yum --assumeyes --nogpgcheck install $PWD/rpmbuild/RPMS/$arch/*.rpm
+  sudo yum --assumeyes --nogpgcheck install "$hpe/rpmbuild/RPMS/$arch"/*.rpm
   check_exit_status
 fi
 

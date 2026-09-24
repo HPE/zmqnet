@@ -16,8 +16,8 @@
 %global cray_prefix /opt/cray/pe
 
 %global external_build_dir %{cray_prefix}/%{cray_product}/%{pkgversion}
-%global tests_source_dir   %{_topdir}/../tests/function
-%global src_source_dir     %{_topdir}/../src
+%global tests_source_dir   %{_topdir}/../../tests/function
+%global src_source_dir     %{_topdir}/../../src
 
 # pkconfig template
 %global pkgconfig_template cray-zmqnet.pc.in
@@ -86,7 +86,6 @@
 %global privlibs %{privlibs}|libtbb.*
 %global privlibs %{privlibs}|libstdc++.*
 %global privlibs %{privlibs}|libzmqnet_libzmq.*
-%global privlibs %{privlibs}|libzmqnet_libsodium.*
 %global __requires_exclude ^(%{privlibs})\\.so*
 
 # Dist tags for SuSE need to be manually set
@@ -164,7 +163,7 @@ Test files for Cray zmqnet
 
 %build
 # external build
-%{__sed} 's|<VERSION>|%{pkgversion}|g;s|<RELEASE>|%{version}-%{release}|g;s|<date>\.<REVISION>|%{version}|g;s|<COPYRIGHT>|%{copyright}|g;s|<NAME>|%{cray_name}|g;s|<CRAY_PREFIX>|%{cray_prefix}|g;s|<DIST>|%{dist}.%{_target_cpu}|g;s|<ARCH>|%{_target_cpu}|g;s|<ATTRIBUTIONS_FILE_PATH>|%{cray_prefix}/%{product}/%{pkgversion}/%{attributions_name}|g;s|<cti_version_range>|%{cti_pkgversion_min}, < %{cti_pkgversion_max}|g' %{SOURCE4} > ${RPM_BUILD_DIR}/%{release_notes_file}
+%{__cp} -a %{_topdir}/../../%{release_notes_file} ${RPM_BUILD_DIR}/%{release_notes_file}
 %{__cp} -a %{SOURCE5} ${RPM_BUILD_DIR}/%{copyright_name}
 %{__cp} -a %{SOURCE6} ${RPM_BUILD_DIR}/%{attributions_name}
 
@@ -180,69 +179,64 @@ Test files for Cray zmqnet
 %{__cp} -a ${RPM_BUILD_DIR}/%{attributions_name} ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/%{attributions_name}
 
 # Support binaries
-%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/bin
-%{__cp} -a %{external_build_dir}/support/bin/capnp* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/bin
+%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/bin
+%{__cp} -a %{external_build_dir}/bin/capnp* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/bin
 
 # Libraries
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
-%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libcapnp-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libcapnpc-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libcapnpc.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libcapnp-json-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libcapnp-json.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libcapnp-rpc-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libcapnp-rpc.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libcapnp.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-async-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-async.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-http-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-http.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-test-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-test.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-tls-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libkj-tls.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libLrleBitset.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libzmqnet_libzmq.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
-%{__cp} -a %{external_build_dir}/support/lib/libzmqnet_libsodium.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib
+#%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libcapnp-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libcapnpc-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libcapnpc.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libcapnp-json-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libcapnp-json.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libcapnp-rpc-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libcapnp-rpc.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libcapnp.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-async-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-async.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-http-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-http.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-test-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-test.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-tls-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libkj-tls.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/zmqnet/libzmq.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 %{__cp} -a %{external_build_dir}/lib/libzmqnet.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/libLrleBitset.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 
 # Libraries static
 # pkg-config
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
-%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/capnp-json.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/capnp.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/capnp-rpc.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/kj-async.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/kj-http.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/kj.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/kj-test.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/libLrleBitset.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/libzmq.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/support/lib/pkgconfig/libsodium.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{__cp} -a %{external_build_dir}/lib/pkgconfig/libzmqnet.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/pkgconfig/capnp-json.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/pkgconfig/capnp.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/pkgconfig/capnp-rpc.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/pkgconfig/kj-async.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/pkgconfig/kj-http.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/pkgconfig/kj.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/pkgconfig/kj-test.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/zmqnet/pkgconfig/libzmq.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+
+%{__sed} 's/{default_libarg}/{cpe_libarg}/' %{external_build_dir}/lib/pkgconfig/libzmqnet.pc > ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig/libzmqnet.pc
 
 # Headers
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
-%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/capnp
-%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
-%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/sodium
+%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include/capnp
+%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include/kj
 
 # /include/
 %{__cp} -a %{external_build_dir}/include/zmqnet.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
 %{__cp} -a %{external_build_dir}/include/zmqnet.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
-%{__cp} -a %{external_build_dir}/support/include/capnp/* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/capnp
-%{__cp} -a %{external_build_dir}/support/include/kj/* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/kj
-%{__cp} -a %{external_build_dir}/support/include/lrle_bitset.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
-%{__cp} -a %{external_build_dir}/support/include/sodium/* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include/sodium
-%{__cp} -a %{external_build_dir}/support/include/sodium.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
-%{__cp} -a %{external_build_dir}/support/include/zmq.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
-%{__cp} -a %{external_build_dir}/support/include/zmq.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
-%{__cp} -a %{external_build_dir}/support/include/zmq_addon.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
-%{__cp} -a %{external_build_dir}/support/include/zmq_utils.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/support/include
+%{__cp} -a %{external_build_dir}/include/capnp/* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include/capnp
+%{__cp} -a %{external_build_dir}/include/kj/* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include/kj
+%{__cp} -a %{external_build_dir}/include/lrle_bitset.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
+%{__cp} -a %{external_build_dir}/include/zmq.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
+%{__cp} -a %{external_build_dir}/include/zmq.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
+%{__cp} -a %{external_build_dir}/include/zmq_addon.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
+%{__cp} -a %{external_build_dir}/include/zmq_utils.h ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
 
 # For building tests:
 %{__cp} -a %{src_source_dir}/cti_argv.hpp ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/include
@@ -529,7 +523,7 @@ fi
 %files
 %defattr(755, root, root)
 %dir %{prefix}/%{cray_product}/%{pkgversion}
-%dir %{prefix}/%{cray_product}/%{pkgversion}/support
+%dir %{prefix}/%{cray_product}/%{pkgversion}
 
 # Information files
 %attr(644, root, root) %{prefix}/%{cray_product}/%{pkgversion}/%{release_notes_file}
@@ -538,16 +532,16 @@ fi
 
 # Support binaries
 %defattr(755, root, root)
-%dir %{prefix}/%{cray_product}/%{pkgversion}/support/bin
-%{prefix}/%{cray_product}/%{pkgversion}/support/bin/capnp*
+%dir %{prefix}/%{cray_product}/%{pkgversion}/bin
+%{prefix}/%{cray_product}/%{pkgversion}/bin/capnp*
 
 # Libraries
 %dir %{prefix}/%{cray_product}/%{pkgversion}/lib
-%dir %{prefix}/%{cray_product}/%{pkgversion}/support/lib
+%dir %{prefix}/%{cray_product}/%{pkgversion}/lib
 %{prefix}/%{cray_product}/%{pkgversion}/lib/*.so
 %{prefix}/%{cray_product}/%{pkgversion}/lib/*.so.*
-%{prefix}/%{cray_product}/%{pkgversion}/support/lib/*.so
-%{prefix}/%{cray_product}/%{pkgversion}/support/lib/*.so.*
+%{prefix}/%{cray_product}/%{pkgversion}/lib/*.so
+%{prefix}/%{cray_product}/%{pkgversion}/lib/*.so.*
 
 # libexec binaries
 %dir %{prefix}/%{cray_product}/%{pkgversion}/libexec
@@ -571,14 +565,14 @@ fi
 # pkg-config
 %dir %{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
 %{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig/*
-%dir %{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig
-%{prefix}/%{cray_product}/%{pkgversion}/support/lib/pkgconfig/*
+%dir %{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig/*
 
 # Headers
 %dir %{prefix}/%{cray_product}/%{pkgversion}/include
 %{prefix}/%{cray_product}/%{pkgversion}/include/*
-%dir %{prefix}/%{cray_product}/%{pkgversion}/support/include
-%{prefix}/%{cray_product}/%{pkgversion}/support/include/*
+%dir %{prefix}/%{cray_product}/%{pkgversion}/include
+%{prefix}/%{cray_product}/%{pkgversion}/include/*
 
 # tcl modulefiles
 %{prefix}/modulefiles/%{devel_modulefile_name}/*

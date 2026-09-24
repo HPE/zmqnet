@@ -9,7 +9,6 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <wait.h>
-#include <dlfcn.h>
 
 #include <uuid/uuid.h>
 
@@ -33,7 +32,7 @@
 
 #include <capnp/message.h>
 #include <capnp/serialize-packed.h>
-#include "libzmqnet/NetworkSchema.capnp.h"
+#include "NetworkSchema.capnp.h"
 
 // External interface
 #include "zmqnet.hpp"
@@ -69,46 +68,6 @@ static inline void log(const char* format, ...)
 		vfprintf(stderr, format, argptr);
 		va_end(argptr);
 	}
-}
-
-// return the full path to the root of the zmqnet installation.
-// if zmqnet::env::INSTALL_DIR is set, returns that path.
-//
-// the function will check that the path it found exists and is a directory. if
-// not, it will fail.
-//
-// throws on failure.
-static inline std::filesystem::path get_zmqnet_install_root() {
-	if (auto install_dir = std::getenv(zmqnet::env::INSTALL_DIR)) {
-		if (std::filesystem::exists(install_dir) && std::filesystem::is_directory(install_dir)) {
-			return install_dir;
-		} else {
-			throw std::runtime_error(
-				std::string{"Failed to find zmqnet installation root. "} +
-				zmqnet::env::INSTALL_DIR + " is set to \"" + install_dir + "\", " +
-				"but that's not a directory."
-			);
-		}
-	}
-
-	// dynamically look it up based on the location of libzmqnet.so on disk
-	Dl_info info;
-
-	// reinterpret cast required here because c++ doesn't let you cast function pointers
-	// for fear of you accidentally calling it with the wrong signature later. we're just
-	// giving and address to dladdr though, so it's fine here.
-	if (::dladdr(reinterpret_cast<void*>(get_zmqnet_install_root), &info) && info.dli_fname) {
-		// expecting to get /.../lib/libzmqnet.so back
-		const auto root = std::filesystem::path{info.dli_fname}.parent_path().parent_path();
-		if (std::filesystem::exists(root) && std::filesystem::is_directory(root)) {
-			return root;
-		} else {
-			log("failed to find zmqnet installation root from .so: %s\n", root.c_str());
-			// let below error inform the user
-		}
-	}
-
-	throw std::runtime_error("Failed to find zmqnet installation root. Try `module load cray-zmqnet`.");
 }
 
 static inline std::string response_type_to_string(NetworkResponse::Which type) {

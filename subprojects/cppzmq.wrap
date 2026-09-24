@@ -1,0 +1,7 @@
+[wrap-git]
+directory = cppzmq
+url = https://github.com/zeromq/cppzmq.git
+revision = v4.7.0
+depth = 1
+method = cmake
+diff_files = cppzmq/hpe.patch
