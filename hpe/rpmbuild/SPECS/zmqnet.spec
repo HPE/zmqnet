@@ -85,7 +85,7 @@
 %global privlibs %{privlibs}|libtbbmalloc*
 %global privlibs %{privlibs}|libtbb.*
 %global privlibs %{privlibs}|libstdc++.*
-%global privlibs %{privlibs}|libzmqnet_libzmq.*
+%global privlibs %{privlibs}|libzmq.*
 %global __requires_exclude ^(%{privlibs})\\.so*
 
 # Dist tags for SuSE need to be manually set
@@ -184,6 +184,7 @@ Test files for Cray zmqnet
 
 # Libraries
 %{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/zmqnet
 #%{__install} -d ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 %{__cp} -a %{external_build_dir}/lib/libcapnp-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 %{__cp} -a %{external_build_dir}/lib/libcapnpc-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
@@ -203,7 +204,7 @@ Test files for Cray zmqnet
 %{__cp} -a %{external_build_dir}/lib/libkj-test.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 %{__cp} -a %{external_build_dir}/lib/libkj-tls-0.8-dev.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 %{__cp} -a %{external_build_dir}/lib/libkj-tls.so ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
-%{__cp} -a %{external_build_dir}/lib/zmqnet/libzmq.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
+%{__cp} -a %{external_build_dir}/lib/zmqnet/libzmq.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/zmqnet
 %{__cp} -a %{external_build_dir}/lib/libzmqnet.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 %{__cp} -a %{external_build_dir}/lib/libLrleBitset.so* ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib
 
@@ -524,7 +525,6 @@ fi
 %files
 %defattr(755, root, root)
 %dir %{prefix}/%{cray_product}/%{pkgversion}
-%dir %{prefix}/%{cray_product}/%{pkgversion}
 
 # Information files
 %attr(644, root, root) %{prefix}/%{cray_product}/%{pkgversion}/%{release_notes_file}
@@ -538,11 +538,11 @@ fi
 
 # Libraries
 %dir %{prefix}/%{cray_product}/%{pkgversion}/lib
-%dir %{prefix}/%{cray_product}/%{pkgversion}/lib
+%dir %{prefix}/%{cray_product}/%{pkgversion}/lib/zmqnet
 %{prefix}/%{cray_product}/%{pkgversion}/lib/*.so
 %{prefix}/%{cray_product}/%{pkgversion}/lib/*.so.*
-%{prefix}/%{cray_product}/%{pkgversion}/lib/*.so
-%{prefix}/%{cray_product}/%{pkgversion}/lib/*.so.*
+%{prefix}/%{cray_product}/%{pkgversion}/lib/zmqnet/*.so
+%{prefix}/%{cray_product}/%{pkgversion}/lib/zmqnet/*.so.*
 
 # libexec binaries
 %dir %{prefix}/%{cray_product}/%{pkgversion}/libexec
@@ -566,12 +566,8 @@ fi
 # pkg-config
 %dir %{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
 %{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig/*
-%dir %{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
-%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig/*
 
 # Headers
-%dir %{prefix}/%{cray_product}/%{pkgversion}/include
-%{prefix}/%{cray_product}/%{pkgversion}/include/*
 %dir %{prefix}/%{cray_product}/%{pkgversion}/include
 %{prefix}/%{cray_product}/%{pkgversion}/include/*
 
