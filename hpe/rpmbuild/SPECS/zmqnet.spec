@@ -218,6 +218,7 @@ Test files for Cray zmqnet
 %{__cp} -a %{external_build_dir}/lib/pkgconfig/kj-http.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
 %{__cp} -a %{external_build_dir}/lib/pkgconfig/kj.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
 %{__cp} -a %{external_build_dir}/lib/pkgconfig/kj-test.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
+%{__cp} -a %{external_build_dir}/lib/pkgconfig/libLrleBitset.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
 %{__cp} -a %{external_build_dir}/lib/zmqnet/pkgconfig/libzmq.pc ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig
 
 %{__sed} 's/{default_libarg}/{cpe_libarg}/' %{external_build_dir}/lib/pkgconfig/libzmqnet.pc > ${RPM_BUILD_ROOT}/%{prefix}/%{cray_product}/%{pkgversion}/lib/pkgconfig/libzmqnet.pc
