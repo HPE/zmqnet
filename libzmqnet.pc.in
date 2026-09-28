@@ -6,7 +6,7 @@ libdir=@libdir@
 includedir=@includedir@
 supportdir=${prefix}/support
 
-cpe_libarg=-L${libdir} -L${supportdir}/lib 
+cpe_libarg=-L${libdir} -L${libdir}/zmqnet
 default_libarg=-L${libdir}
 
 
@@ -15,4 +15,4 @@ Description: libzmqnet
 Version: @PACKAGE_VERSION@
 Libs: ${default_libarg} -lzmqnet -lzmq -lkj -lcapnp -lLrleBitset -pthread
 Libs.private: -lsupc++
-Cflags: -I${includedir} -I${supportdir}/include
+Cflags: -I${includedir}
