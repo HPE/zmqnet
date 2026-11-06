@@ -78,7 +78,7 @@ CC=$(which gcc) CXX=$(which g++) \
     -Doptimization=2 \
     -Db_ndebug=true \
     $reconfigure \
-    ./build --force-fallback-for=libzmq,cppzmq
+    ./build --force-fallback-for=cppzmq
 
 if [ -z "$reconfigure" ]; then
    meson compile --verbose -C build
@@ -89,5 +89,4 @@ fi
 echo "############################################"
 echo "#              Done with build             #"
 echo "############################################"
-
 
