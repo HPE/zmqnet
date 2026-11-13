@@ -69,11 +69,29 @@ enable_encryption = true
 ########################################
 ### Dependencies                     ###
 ########################################
-libzmq_dep = dependency('libzmq', fallback : ['libzmq', 'libzmq_dep'], required: true)
+libzmq_dep = dependency('libzmq',
+  method: 'pkg-config',
+  fallback: ['libzmq', 'libzmq_dep'],
+  required: true,
+)
 
-capnproto_proj = subproject('capnproto')
-capnp_dep = capnproto_proj.get_variable('capnp_dep')
-capnp_build_stamp = capnproto_proj.get_variable('capnp_build_stamp')
+capnp_dep = dependency('capnp',
+  method: 'pkg-config',
+  fallback: ['capnproto', 'capnp_dep'],
+  required: true,
+)
+capnp_build_deps = []
+if capnp_dep.type_name() == 'internal'
+  capnproto_proj = subproject('capnproto')
+  capnp_build_deps = [capnproto_proj.get_variable('capnp_build_stamp')]
+  capnp_real = capnp_dep.get_variable('capnp')
+  capnp_libdir = capnp_dep.get_variable('capnp_libdir')
+else
+  # Use the compiler from the same installation as the library, not from PATH.
+  capnp_bindir = capnp_dep.get_variable(pkgconfig: 'exec_prefix') / 'bin'
+  capnp_real = find_program(capnp_bindir / 'capnp').full_path()
+  capnp_libdir = capnp_dep.get_variable(pkgconfig: 'libdir')
+endif
 
 common_tools_fe_dep = dependency('common_tools_fe')
 common_tools_be_dep = dependency('common_tools_be')
@@ -85,10 +103,8 @@ threads_dep = dependency('threads')
 #cppzmq_proj = subproject('cppzmq')
 #cppzmq_dep = cppzmq_proj.get_variable('cppzmq_dep')
 
-# resolves at configure time; forwards to the subproject's capnp at build time
+# The wrapper also handles the staged compiler and libraries in fallback builds.
 capnp_prog = find_program('tools/capnp')
-capnp_real = capnp_dep.get_variable('capnp')
-capnp_libdir = capnp_dep.get_variable('capnp_libdir')
 
 ########################################
 ### config.h                         ###
@@ -183,7 +199,7 @@ network_schema = custom_target('NetworkSchema.capnp',
     '@INPUT@',
   ],
   env: {'CAPNP_REAL': capnp_real, 'CAPNP_LIBDIR': capnp_libdir},
-  depends: [capnp_build_stamp],
+  depends: capnp_build_deps,
 )
 
 zmqnet_lib = library('zmqnet',

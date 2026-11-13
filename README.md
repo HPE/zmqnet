@@ -56,6 +56,72 @@ meson install -C build
 
 sequence.
 
+### Using libzmq and Cap'n Proto from Spack
+
+The libzmq and Cap'n Proto (`capnp`) dependencies are discovered through
+pkg-config. Activate a Spack environment with them installed and included in
+its view before configuring Meson. When Cap'n Proto comes from pkg-config, the
+`capnp` schema compiler is taken from the same installation. Check that the
+environment exposes them with:
+
+```bash
+spack env activate tools
+pkg-config --modversion libzmq capnp
+pkg-config --variable=prefix libzmq capnp
+```
+
+zmqnet needs the bundled Cap'n Proto commit (it uses
+`capnp::UnalignedFlatArrayMessageReader`, and dependents use the HPE
+`kj::Array::forceReleaseAsBytes()` patch), so the Spack recipe pins
+`capnproto@=0.8-dev`.
+
+For an existing build configured by the bootstrap script, clear its saved
+libzmq forced fallback while leaving cppzmq unchanged. `--clearcache` drops
+dependency lookups cached by earlier configurations:
+
+```bash
+meson setup ./build --reconfigure --clearcache --wrap-mode=nofallback \
+  --force-fallback-for=cppzmq --buildtype=debugoptimized \
+  -Dprefix=/lus/scratch/jvogt/spack-tools/ -Dlibdir=lib/zmqnet
+```
+
+`force_fallback_for` persists across reconfiguration and overrides
+`--wrap-mode=nofallback` for the listed dependencies. The installation prefix
+does not select the dependency prefix; pkg-config's search path does.
+
+Outside Spack, the default wrap mode still builds the bundled libzmq and
+capnproto subprojects if pkg-config cannot find installed copies. When switching back from the
+command above, use `--wrap-mode=default` to allow that fallback again.
+Other subprojects are unchanged.
+
+### Using Cap'n Proto from Spack
+
+Cap'n Proto is also discovered through pkg-config, with a bundled subproject
+fallback when no installation is found and the wrap mode allows it. In an
+activated Spack environment, check:
+
+```bash
+pkg-config --modversion capnp
+pkg-config --variable=exec_prefix capnp
+```
+
+The schema compiler (`bin/capnp`) and its C++ plugin (`bin/capnpc-c++`) must be
+installed alongside the library. The build selects the compiler from that
+installation rather than an unrelated compiler on `PATH`. Use the patched
+Cap'n Proto package from the tools Spack repository to retain the
+`kj::Array<T>::forceReleaseAsBytes()` API needed by downstream packages.
+The zmqnet recipe pins `capnproto@0.8-dev` to the bundled commit
+`0c9fabb2da55733d7c52d4318d05e24e2bffacaa`: newer releases such as 0.10.2
+also lack `capnp::UnalignedFlatArrayMessageReader`, which zmqnet uses.
+After replacing a dependency version in an existing build, add `--clearcache`
+to the reconfigure command above to discard cached dependency paths (Meson
+1.3 or newer).
+
+The reconfigure command above uses installed libzmq and Cap'n Proto. For a
+standalone build, the default wrap mode continues to support both bundled
+fallbacks; use `--wrap-mode=default` when reconfiguring a build that previously
+used `nofallback`.
+
 ## Open sourcing notes
 
 This version continues is still set up to build with HPE pipelines.   For outside builds,
@@ -65,5 +131,3 @@ these files can be ignored:
 * the hpe directory
 * .github/workflows/build_pipeline.yaml
 * top level files container_def.yaml, build.sh, rpmBuild.sh, preBuild.sh, postBuild.sh
-
-
