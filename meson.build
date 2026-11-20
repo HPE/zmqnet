@@ -166,17 +166,15 @@ pkgconfig.generate(lrle_bitset_lib,
 ### subprojects/cppzmq               ###
 ########################################
 
-cmake = import('cmake')
-opts = cmake.subproject_options()
-opts.set_install(true)
-opts.add_cmake_defines({
-  'CPPZMQ_BUILD_TESTS': false,
-  'ENABLE_DRAFTS': true,
-  'CMAKE_PREFIX_PATH': libzmq_dep.get_variable('prefix', default_value: ''),
-})
-
-cppzmq_proj = cmake.subproject('cppzmq', options: opts)
-raw_cppzmq_dep = cppzmq_proj.dependency('cppzmq')
+# Prefer an external cppzmq (e.g. provided by Spack); fall back to the
+# header-only subproject (subprojects/packagefiles/cppzmq) otherwise or when
+# forced (bootstrap.sh passes --force-fallback-for=cppzmq). The subproject
+# links against libzmq_dep and installs the bundled headers.
+raw_cppzmq_dep = dependency('cppzmq',
+  method: 'pkg-config',
+  fallback: ['cppzmq', 'cppzmq_dep'],
+  required: true,
+)
 
 # Wrap the dependency to export -DZMQ_BUILD_DRAFT_API to all consumers
 cppzmq_dep = declare_dependency(
@@ -184,8 +182,6 @@ cppzmq_dep = declare_dependency(
   dependencies: [raw_cppzmq_dep],
 )
 meson.override_dependency('cppzmq', cppzmq_dep)
-
-meson.add_install_script('tools/install-cppzmq-headers.sh')
 
 ########################################
 ### src/libzmqnet: libzmqnet         ###
@@ -279,10 +275,20 @@ configure_file(
 ########################################
 ### tests/unit                       ###
 ########################################
-cmake = import('cmake')
-googletest_subproject = cmake.subproject('googletest')
-gtest_dep = googletest_subproject.dependency('gtest')
-gmock_dep = googletest_subproject.dependency('gmock')
+# Prefer an external googletest (e.g. provided by Spack); fall back to
+# building the CMake subproject when no external installation is found or
+# when the fallback is forced. allow_fallback: false keeps these probes from
+# implicitly configuring the wrap subproject under --force-fallback-for.
+googletest_forced = get_option('wrap_mode') == 'forcefallback' \
+  or get_option('force_fallback_for').contains('googletest')
+gtest_dep = dependency('gtest', method: 'pkg-config', required: false, allow_fallback: false)
+gmock_dep = dependency('gmock', method: 'pkg-config', required: false, allow_fallback: false)
+if googletest_forced or not gtest_dep.found() or not gmock_dep.found()
+  cmake = import('cmake')
+  googletest_subproject = cmake.subproject('googletest')
+  gtest_dep = googletest_subproject.dependency('gtest')
+  gmock_dep = googletest_subproject.dependency('gmock')
+endif
 googletest_dep = [gtest_dep, gmock_dep]
 
 #gtest_root = 'tests/support/googletest/googletest'
