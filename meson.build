@@ -167,14 +167,34 @@ pkgconfig.generate(lrle_bitset_lib,
 ########################################
 
 # Prefer an external cppzmq (e.g. provided by Spack); fall back to the
-# header-only subproject (subprojects/packagefiles/cppzmq) otherwise or when
-# forced (bootstrap.sh passes --force-fallback-for=cppzmq). The subproject
-# links against libzmq_dep and installs the bundled headers.
+# CMake subproject otherwise or when forced by bootstrap.sh.
+cppzmq_forced = get_option('wrap_mode') == 'forcefallback' \
+  or get_option('force_fallback_for').contains('cppzmq')
 raw_cppzmq_dep = dependency('cppzmq',
   method: 'pkg-config',
-  fallback: ['cppzmq', 'cppzmq_dep'],
-  required: true,
+  required: false,
+  allow_fallback: false,
 )
+if not raw_cppzmq_dep.found() and get_option('wrap_mode') == 'nofallback' and not cppzmq_forced
+  error('cppzmq not found and fallback dependencies are disabled')
+endif
+if cppzmq_forced or not raw_cppzmq_dep.found()
+  cmake = import('cmake')
+  cppzmq_options = cmake.subproject_options()
+  if libzmq_dep.type_name() == 'internal'
+    cppzmq_options.add_cmake_defines({
+      'CMAKE_PREFIX_PATH': libzmq_dep.get_variable('prefix'),
+    })
+  endif
+  cppzmq_options.add_cmake_defines({'CPPZMQ_BUILD_TESTS': false})
+  cppzmq_subproject = cmake.subproject('cppzmq', options: cppzmq_options)
+  raw_cppzmq_dep = cppzmq_subproject.dependency('cppzmq')
+  meson.add_install_script(
+    'tools/install-cppzmq.sh',
+    meson.current_source_dir() / 'subprojects/cppzmq',
+    get_option('includedir'),
+  )
+endif
 
 # Wrap the dependency to export -DZMQ_BUILD_DRAFT_API to all consumers
 cppzmq_dep = declare_dependency(

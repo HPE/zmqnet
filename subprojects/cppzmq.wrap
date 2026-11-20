@@ -3,7 +3,4 @@ directory = cppzmq
 url = https://github.com/zeromq/cppzmq.git
 revision = v4.7.0
 depth = 1
-patch_directory = cppzmq
-
-[provide]
-cppzmq = cppzmq_dep
+method = cmake

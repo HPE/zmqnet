@@ -92,7 +92,8 @@ does not select the dependency prefix; pkg-config's search path does.
 Outside Spack, the default wrap mode still builds the bundled libzmq and
 capnproto subprojects if pkg-config cannot find installed copies. When switching back from the
 command above, use `--wrap-mode=default` to allow that fallback again.
-Other subprojects are unchanged.
+When the bundled libzmq is used, its private installation is passed to the
+cppzmq CMake fallback automatically. Other subprojects are unchanged.
 
 ### Using Cap'n Proto from Spack
 
