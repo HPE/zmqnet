@@ -79,6 +79,34 @@ using ByteArray = kj::Array<kj::byte>;
 // Extract bytes with .begin() and size with .size()
 using ByteArrayPtr = kj::ArrayPtr<kj::byte const>;
 
+// Wrapper class that can accept a kj::Array<capnp::word>
+// and produce a ByteArrayPtr.  This works around
+// kj not providing a releaseAsBytes for data types
+// whose size isn't 1.	
+class ByteArrayHolder {
+private:
+	class ArrayV {
+	public:
+		virtual ByteArrayPtr asPtr() = 0;
+		virtual ~ArrayV() = default;
+	};
+	template<class T>
+	class ArrayWrap : public ArrayV {
+	public:
+		ArrayWrap(T&& wrapped) : m_wrapped(std::move(wrapped)) {}
+		virtual ByteArrayPtr asPtr() override { return m_wrapped.asBytes(); }
+	private:
+		T m_wrapped;
+	};
+
+	std::unique_ptr<ArrayV> m_array;
+		
+public:
+	template<class T>
+	ByteArrayHolder(T&& array) : m_array(new ArrayWrap<T>(std::move(array))) {}
+	ByteArrayPtr asPtr() { return m_array->asPtr(); }
+};
+
 // Filters are passed an array of ByteArrays as inputs, and return a ByteArray as a result
 // If no output is desired, return an empty zmqnet::ByteArray{}
 using FilterType = zmqnet::ByteArray(std::vector<zmqnet::ByteArray> const&);
@@ -330,7 +358,7 @@ class CallbackProcessorManager {
 	// specifically in the order given, before actually spawning a new thread.
 private:
 	// same as AsyncBackend::CallbackFunc
-	using CallbackFunc = std::function<ByteArray(Stream::Id const&, ByteArray)>;
+	using CallbackFunc = std::function<ByteArrayHolder(Stream::Id const&, ByteArrayPtr)>;
 
 public:
 	CallbackProcessorManager(zmq::context_t &ctx, const std::string &collectorEndpoint, 
@@ -647,11 +675,12 @@ public: // types
 
 	// Command callbacks take a pair of Stream ID and ByteArray, where the Stream ID corresponds
 	// to the stream on which the incoming command is received, and the ByteArray is the raw
-	// contents of the command.
+	// contents of the command.   The byte array argument's lifetime only matches the
+	// length of the call, create a hearArray if it needs to be persisted.
 	// The callback result is a new ByteArray that is then sent as a message to the parent node.
 	// If the result array is empty, then no message is sent. This can be accomplished by returning
 	// a default-constructed zmqnet::ByteArray{}
-	using CallbackFunc = std::function<ByteArray(Stream::Id const&, ByteArray)>;
+	using CallbackFunc = std::function<ByteArrayHolder(Stream::Id const&, ByteArrayPtr)>;
 
 private: // members
 	zmq::context_t m_ctx;
@@ -698,7 +727,7 @@ public: // interface
 	// The data is filtered through the registered filter functions and
 	// passed to the client side callback defined in
 	// 'AsyncFrontend::registerStreamCallback'.
-	void sendResult(const Stream::Id &streamId, zmqnet::ByteArray &&result);
+	void sendResult(const Stream::Id &streamId, zmqnet::ByteArrayPtr result);
 
 	// Blocks and waits for an incoming exit message to be received.
 	void waitForExit();

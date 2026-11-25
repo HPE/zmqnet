@@ -364,7 +364,7 @@ static void callback_processor(zmq::context_t& ctx, std::string resultEndpoint, 
 	// Wait for stream create acknowledgement and acknowledge to proxy
 	log("backend %d %d: waiting for stream create ack\n", node_id, stream.id);
 	{ auto reader = net::recv_MessageReader(task_socket);
-		auto command = reader.getRoot<NetworkCommand>();
+		[[maybe_unused]] auto command = reader.getRoot<NetworkCommand>();
 		assert(command.isStream() && (command.getStream().getStreamId() == stream.id));
 	}
 
@@ -427,7 +427,8 @@ static void callback_processor(zmq::context_t& ctx, std::string resultEndpoint, 
 		assert(command.getUser().getStreamId() == stream.id);
 
 		// Run user-provided callback. TODO: pass ArrayPtr instead of new heap array
-		auto result = callbackFunc(stream.id, kj::heapArray(command.getUser().getContent().asBytes()));
+		auto resultHolder = callbackFunc(stream.id, command.getUser().getContent().asBytes());
+		auto result = resultHolder.asPtr();
 
 		// Create outgoing result message
 		if (result.size() > 0) {
@@ -436,7 +437,7 @@ static void callback_processor(zmq::context_t& ctx, std::string resultEndpoint, 
 			auto userResponse = response.initUser();
 			userResponse.setStreamId(stream.id);
 			auto const result_size = result.size();
-			userResponse.setContent(std::move(result));
+			userResponse.setContent(result);
 
 			// Set node bitset
 			userResponse.setNodes(kj::ArrayPtr<kj::byte const>
@@ -680,7 +681,7 @@ void zmqnet::AsyncBackend::notifyReady()
 			m_node_bitset, std::ref(m_callbackProcManager));
 }
 
-void zmqnet::AsyncBackend::sendResult(const Stream::Id &streamId, zmqnet::ByteArray &&result) 
+void zmqnet::AsyncBackend::sendResult(const Stream::Id &streamId, zmqnet::ByteArrayPtr result) 
 {
 	// ensure streamId is valid
 	if (!m_callbackProcManager.streamIsActive(streamId)) {
